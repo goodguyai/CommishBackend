@@ -7,6 +7,7 @@ import { SidebarNav } from "@/components/ui/sidebar-nav";
 import Dashboard from "@/pages/dashboard";
 import Leagues from "@/pages/leagues";
 import DiscordSetup from "@/pages/discord-setup";
+import Help from "@/pages/help";
 import NotFound from "@/pages/not-found";
 import { Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -70,6 +71,8 @@ function Router() {
         <Route path="/" component={Dashboard} />
         <Route path="/leagues" component={Leagues} />
         <Route path="/discord-setup" component={DiscordSetup} />
+        <Route path="/help" component={Help} />
+        <Route path="/settings" component={DiscordSetup} />
         {/* Add other routes as they're implemented */}
         <Route component={NotFound} />
       </Switch>

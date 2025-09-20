@@ -1,19 +1,15 @@
 import { cn } from "@/lib/utils";
 import { Link, useLocation } from "wouter";
-import { Crown, Home, Users, Book, Calendar, Bed, Bot, BarChart3, Settings, HelpCircle } from "lucide-react";
+import { Crown, Home, Users, Bot, Settings, HelpCircle } from "lucide-react";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: Home },
   { name: "Leagues", href: "/leagues", icon: Users },
-  { name: "Rules & Constitution", href: "/rules", icon: Book },
-  { name: "Deadlines", href: "/deadlines", icon: Calendar },
-  { name: "Sleeper Integration", href: "/sleeper", icon: Bed },
-  { name: "AI Assistant", href: "/ai", icon: Bot },
-  { name: "Analytics", href: "/analytics", icon: BarChart3 },
+  { name: "Discord Setup", href: "/discord-setup", icon: Bot },
 ];
 
 const secondaryNavigation = [
-  { name: "Settings", href: "/settings", icon: Settings },
+  { name: "Settings", href: "/discord-setup", icon: Settings },
   { name: "Help", href: "/help", icon: HelpCircle },
 ];
 
@@ -73,7 +69,7 @@ export function SidebarNav() {
                             ? "bg-secondary text-secondary-foreground"
                             : "text-muted-foreground hover:text-foreground hover:bg-secondary"
                         )}
-                        data-testid={`nav-link-${item.name.toLowerCase()}`}
+                        data-testid={`nav-link-${item.name.toLowerCase().replace(/\s+/g, '-')}`}
                       >
                         <item.icon className="w-4 h-4" />
                         {item.name}
