@@ -1,0 +1,131 @@
+MASTER BLUEPRINT — THE COMMISH (backend-first on Replit)
+
+0) What we’re shipping in the first pass
+	•	Server (Node/TS) on Replit Reserved VM:
+	•	Discord Interactions endpoint (slash commands, components) with Ed25519 verification and “respond within 3 seconds / defer then follow up” behavior.  ￼
+	•	Install to Discord flow: OAuth2 (scopes: bot, applications.commands) with preselected server (guild_id) and disabled server switch for near one‑click UX. (“disable_guild_select” is widely supported though not in the main doc set; we’ll use it.)  ￼
+	•	Welcome + Channel Select (Discord component type 8) to set the “home channel.”  ￼
+	•	Sleeper sync (read‑only): league, rosters, matchups (public endpoints, no OAuth), cached in DB.  ￼
+	•	Rules/Constitution brain (RAG):
+	•	Store originals + normalized Constitution YAML/JSON.
+	•	Embed rule sections into pgvector (Supabase Postgres).  ￼
+	•	DeepSeek LLM: chat completions via OpenAI‑compatible API (/chat/completions), with function/tool calling supported on deepseek-chat.  ￼
+	•	Jobs: weekly digest + light sync (use Node cron in the VM; you can later move to Replit Scheduled Deployments if you want externalized crons).  ￼
+
+Why Replit Reserved VM first? Always‑on HTTPS endpoint, predictable runtime, perfect for bots & APIs that must stay online. (Replit docs explicitly call out chat app bots as a primary use case.)  ￼
+
+⸻
+
+1) Architecture (modular by design)
+
+Services (single VM to start; can split later):
+	•	/api (Fastify): health, OAuth helpers, Discord interactions, Sleeper fetch, RAG answerer.
+	•	/worker (same process or side thread): digest scheduler, periodic sync.
+	•	/packages (shared libraries): llm/, sleeper/, constitution/, events/, db/.
+
+Event-driven & feature‑flagged
+	•	Emit events: INSTALL_COMPLETED, RULES_UPDATED, SLEEPER_SYNCED, DIGEST_DUE.
+	•	Feature flags per league: { qa: true, deadlines: true, digest: true, trade_helper: false }.
+
+Providers (hot‑swappable)
+	•	LLMProvider (default DeepSeek; adapters for OpenAI/Gemini later).  ￼
+	•	EmbedProvider (choose provider later; storage is pgvector).
+	•	ChatProvider (Discord now; Slack/Telegram later via provider interface).
+	•	LeagueProvider (Sleeper now; others later).
+
+⸻
+
+2) Core flows (grounded in platform rules)
+
+Install THE COMMISH to Discord
+	1.	User clicks Install in your dashboard.
+	2.	(Recommended) They’ve already done a “Login with Discord” so you know their servers; you pass guild_id and add disable_guild_select=true → Discord page is just “Authorize”. (We never handle passwords; OAuth2 is mandatory.)  ￼
+	3.	Bot joins; you send Welcome with Channel Select (type 8) so they choose the home channel.  ￼
+
+Slash commands (no hard intents)
+	•	/rules <question> → defer (≤3s), RAG, follow‑up with citations.
+	•	/deadlines → immediate (ephemeral) or defer and follow‑up (ephemeral flag 64).  ￼
+	•	/scoring, /help, /config (commish only), /reindex.
+
+Interactions contract (musts)
+	•	Verify X‑Signature-Ed25519 + X‑Signature-Timestamp on every request; reject if invalid.
+	•	Initial response in <3s or use defer (token valid 15 minutes for follow‑ups).  ￼
+
+⸻
+
+3) Data model (v0 overview)
+	•	accounts — owner email, auth linkage (Supabase or your own auth).
+	•	leagues — name, platform, sleeper_league_id, guild_id, channel_id, timezone, feature_flags jsonb, model_prefs jsonb.
+	•	members — (league_id, discord_user_id, role ENUM[COMMISH, MANAGER]).
+	•	documents — (league_id, type ENUM[ORIGINAL, NORMALIZED], url, version).
+	•	rules — (league_id, version, section_id, rule_key, text, citations[], tags[]).
+	•	embeddings — (rule_id, vector) pgvector.  ￼
+	•	facts — (league_id, key, value, source ENUM[SLEEPER, RULE, MANUAL]).
+	•	deadlines — (league_id, type, iso_time, source ENUM[RULE, MANUAL, DERIVED]).
+	•	events — (league_id, type, payload, created_at).
+
+⸻
+
+4) External dependencies (locked & vetted)
+	•	Discord: OAuth2 with guild_id (official); disable_guild_select is commonly supported by SDKs/implementations even if lightly documented in the portal (we’ll use it). Ed25519 verification; 3s response/defer; ephemeral flag 64.  ￼
+	•	Sleeper: Public, read‑only endpoints (league, rosters, matchups).  ￼
+	•	Supabase/pgvector: First‑class pgvector extension for embeddings.  ￼
+	•	DeepSeek: OpenAI‑compatible (/chat/completions), function calling on deepseek-chat; current pricing page shows cache‑hit/miss & output costs (keep a fallback adapter available).  ￼
+	•	Replit: Reserved VM Deployments → always‑on bots/APIs; optional Scheduled Deployments if you want externalized cron.  ￼
+
+⸻
+
+REPLIT OPENING GUIDE (zero‑to‑running)
+
+This is your setup & first run. After you do this, ask me for “Piece 1: Repo scaffold & Interactions handshake” and I’ll drop in the exact file tree and code for the minimal working server.
+
+A) Accounts & keys checklist (do this once)
+	1.	Supabase
+	•	Create a project; copy Connection string (Postgres URL).
+	•	In SQL Editor: create extension if not exists vector; (enables pgvector).  ￼
+	2.	Discord Developer Portal
+	•	Create Application → Bot → copy Bot Token.
+	•	Copy Public Key (for Ed25519 verification).
+	•	Note Client ID and Client Secret.
+	•	You’ll set Interactions Endpoint URL after your Replit VM is deployed (we need a stable HTTPS URL).
+	•	(Optional for smoother UX) Add a User OAuth flow with identify & guilds to list their servers.
+	•	Install URL will include: scopes bot applications.commands + guild_id and disable_guild_select=true for near one‑click.  ￼
+	3.	DeepSeek
+	•	Create API key.
+	•	Base URL: https://api.deepseek.com (OpenAI‑compatible).  ￼
+
+B) Replit project & deployment
+	1.	Create Repl → Node.js (TypeScript).
+	2.	Install deps (we’ll script this in the scaffold, but for awareness):
+	•	fastify, tweetnacl (Ed25519), zod, dotenv, undici, openai (SDK with baseURL override for DeepSeek).  ￼
+	3.	Reserved VM Deployment
+	•	In Deployments → Reserved VM, pick small size, expose port 3000, get your stable .repl.co or *.replit.app URL. This gives you an always‑on HTTPS endpoint for Discord interactions.  ￼
+	4.	Secrets (Environment variables)
+	•	DISCORD_PUBLIC_KEY → from portal
+	•	DISCORD_BOT_TOKEN
+	•	DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET
+	•	DEEPSEEK_API_KEY
+	•	SUPABASE_POSTGRES_URL (or split into host/db/user/pass)
+	•	APP_BASE_URL (your Replit URL)
+
+C) Point Discord to your Replit endpoint
+	•	In the Discord app’s Interactions section, set:
+Interactions Endpoint URL → https://<your-replit-domain>/api/discord/interactions
+	•	Save. Discord will immediately PING; our server must PONG (type: 1) within 3s and with a valid signature check. (We’ll give you this exact code in Piece 1.)  ￼
+
+D) Command registration
+	•	For fast iteration, register guild commands (appear instantly) during dev; switch to global later.
+	•	You can register commands by calling Discord’s REST PUT /applications/{app_id}/guilds/{guild_id}/commands with your bot token; we’ll include a small script in Piece 2.
+
+E) Minimal data bootstrapping
+	•	Create one League row in Postgres (we’ll give you a migration).
+	•	Paste a Sleeper League ID to test /deadlines and /rules.
+
+⸻
+
+QUALITY & OPS (baked in from day one)
+	•	Security: signature verification for every interaction (Ed25519), minimal scopes/permissions, no password flows.  ￼
+	•	Reliability: respond under 3s (or defer), then compute and follow‑up within the 15‑minute interaction token window.  ￼
+	•	LLM cost control: DeepSeek default; per‑league max tokens; structured prompts; retrieval‑first to reduce generations. (Pricing: current docs show cache hit/miss and output tiers.)  ￼
+	•	Observability: structured logs (request id, league id, command, latency), error tracking, token spend metrics per league.
+	•	Future‑proofing: event bus + provider interfaces; add Slack/Telegram later by dropping new ChatProvider implementations—no core rewrites.
