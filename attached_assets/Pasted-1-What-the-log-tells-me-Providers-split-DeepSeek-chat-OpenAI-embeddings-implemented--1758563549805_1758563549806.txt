@@ -1,0 +1,100 @@
+1) What the log tells me
+	•	✅ Providers split: DeepSeek (chat) + OpenAI (embeddings) implemented.
+	•	✅ Bot permissions corrected to 84992.
+	•	✅ Interactions verify now uses raw body (good).
+	•	✅ /config has subcommands; Channel Select saves channelId.
+	•	⚠️ Health check says DB “connected” while real queries fail. It’s misleading.
+	•	⚠️ DB not wired: Supabase DATABASE_URL not valid; pgvector not guaranteed; embeddings table may not be vector(1536).
+	•	⚠️ Slash commands: handler supports subcommands but registration JSON likely not updated to match, so Discord will send a different payload than the handler expects.
+	•	⚠️ Digest endpoint is okay structurally, but fails because it queries the DB (expected until DATABASE_URL fixed).
+	•	⚠️ RAG still tries OpenAI embeddings -> 429/quota in tests. Fine, but we should cache + dedupe and fail soft.
+
+⸻
+
+2) Small adjustments to apply now
+	1.	Environment sanity check at boot
+Validate EMBED_DIM matches the schema (1536), OPENAI_API_KEY present when EMBEDDINGS_PROVIDER=openai, and that DISCORD_PUBLIC_KEY is non‑empty. Fail fast with readable errors.
+	2.	Health check should do a real query
+Return DB “connected” only if SELECT 1 succeeds. Otherwise mark "status":"degraded" and include an issues: ["db"] array.
+	3.	Slash command registration
+Ensure /config is registered with subcommands (timezone, digest, feature) and option shapes that match the handler. Add a simple guild registration script and a dev API route to call it.
+	4.	Migrations for pgvector
+Ensure create extension vector; is run, and embeddings.embedding is vector(1536), not JSON/Text. Confirm cosine/inner_product index. (This fixes retrieval speed/quality.)
+	5.	Embedding cache/dedupe
+Compute a content hash per chunk; if the hash exists, reuse stored embedding. This avoids re‑charging during reindex.
+	6.	Digest test hook
+Keep the manual POST /api/digest/run?leagueId=... route, but guard it: 403 unless you pass a temporary admin secret in headers (e.g., X-Admin-Key).
+
+⸻
+
+3) Copy‑paste this to the Replit Agent (exact next tasks)
+
+Task batch: DB wiring, command registration, health hardening, RAG storage
+
+A. Env validation at startup
+	•	Create server/services/env.ts using Zod to validate all env vars. Fail fast with clear messages.
+	•	Required: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, LLM_MODEL, EMBEDDINGS_PROVIDER, OPENAI_API_KEY (if provider=openai), EMBED_MODEL, EMBED_DIM=1536, DATABASE_URL, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, DISCORD_PUBLIC_KEY, DISCORD_BOT_TOKEN, APP_BASE_URL.
+	•	Import this once at server boot.
+
+B. Database + migrations (Drizzle)
+	•	Add a migration that ensures create extension if not exists vector;.
+	•	Ensure table embeddings.embedding is vector(1536) (not text/JSON).
+	•	Add an index for similarity search (pick one):
+	•	create index on embeddings using ivfflat (embedding vector_cosine_ops) with (lists = 100);
+	•	Run migrations on boot or provide an npm run migrate script.
+
+C. Health check accuracy
+	•	In GET /api/health, perform a quick SELECT 1. If it throws, return { status:"degraded", services:{ db:"error", ... }, issues:["db"] }. Only mark "connected" when the query succeeds.
+	•	Add a field embeddings: { provider, model, dim } for visibility.
+
+D. Slash command registration
+	•	Create server/scripts/registerCommands.ts that registers guild commands during dev:
+	•	/rules (string option question, required)
+	•	/deadlines (no options)
+	•	/scoring (string option term, required)
+	•	/config with subcommands:
+	•	timezone → string option tz (e.g., America/Los_Angeles)
+	•	digest → string option day (Mon..Sun), string option time (HH:mm 24h)
+	•	feature → string option name (qa|deadlines|digest|trade_helper), boolean option enabled
+	•	/reindex (optional string option version)
+	•	Add dev route POST /api/discord/register-commands?guildId=<id> that calls the script.
+	•	Ensure the JSON schema exactly matches the handler’s expectations for /config.
+
+E. Interactions verify remains raw
+	•	Confirm the route uses express.raw({ type: 'application/json' }). Verify signature with timestamp + rawBody. Parse JSON after verification. Keep rejecting if headers missing.
+
+F. RAG: caching + dedupe
+	•	In server/services/rag.ts, before calling embeddings API:
+	•	Compute a SHA‑256 hash of each chunk; if an embedding row exists for that hash, reuse it.
+	•	On 429 or network error, return a structured error { code:"embeddings_unavailable" } and make the /search endpoint answer: “I can’t index/search right now; try again shortly.” (No crashes.)
+
+G. Digest manual trigger guard
+	•	For POST /api/digest/run, require header X-Admin-Key to match ADMIN_KEY env. If missing, return 403.
+	•	When DB connected, fetch league, load deadlines from deadlines table and facts, compose a simple message, and post using the stored channelId.
+
+H. Output
+	•	After changes, print a validation block with:
+	•	curl for /api/health (expected "status":"degraded" until DB fixed)
+	•	curl for /api/discord/auth-url?redirectUri=<APP_BASE_URL>/discord-callback
+	•	curl for /api/discord/bot-install-url?guildId=<GUILD_ID>&redirectUri=<APP_BASE_URL>/discord-callback (permissions should be 84992)
+	•	curl for /api/discord/register-commands?guildId=<GUILD_ID>
+	•	curl -X POST /api/digest/run?leagueId=<LEAGUE_ID> with -H "X-Admin-Key: $ADMIN_KEY"
+	•	Confirm the handler logs show /config <subcommand> payloads arriving in the expected shape.
+
+⸻
+
+Secrets checklist for you (Replit → Secrets)
+	•	DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/postgres?sslmode=require
+	•	DEEPSEEK_API_KEY=...
+	•	DEEPSEEK_BASE_URL=https://api.deepseek.com
+	•	LLM_MODEL=deepseek-chat
+	•	EMBEDDINGS_PROVIDER=openai
+	•	OPENAI_API_KEY=...
+	•	EMBED_MODEL=text-embedding-3-small
+	•	EMBED_DIM=1536
+	•	DISCORD_CLIENT_ID=...
+	•	DISCORD_CLIENT_SECRET=...
+	•	DISCORD_PUBLIC_KEY=...
+	•	DISCORD_BOT_TOKEN=...
+	•	APP_BASE_URL=https://<your-replit-domain>
+	•	ADMIN_KEY=<random-strong-string>

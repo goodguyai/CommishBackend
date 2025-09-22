@@ -86,6 +86,10 @@ export interface IStorage {
     embeddingsCount: number;
     lastUpdated: Date | null;
   }>;
+
+  // Migration methods
+  runRawSQL(query: string): Promise<any>;
+  ensurePgVectorExtension(): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -441,6 +445,15 @@ export class DatabaseStorage implements IStorage {
       lastUpdated: result.last_updated ? new Date(result.last_updated) : null,
     };
   }
+
+  // Migration methods implementation
+  async runRawSQL(query: string): Promise<any> {
+    return this.db.execute(sql.raw(query));
+  }
+
+  async ensurePgVectorExtension(): Promise<void> {
+    await this.db.execute(sql`CREATE EXTENSION IF NOT EXISTS vector`);
+  }
 }
 
 // Keep the existing MemStorage for backward compatibility
@@ -670,6 +683,16 @@ export class MemStorage implements IStorage {
       embeddingsCount: 0,
       lastUpdated: null,
     };
+  }
+
+  // Migration methods implementation (no-op for in-memory storage)
+  async runRawSQL(query: string): Promise<any> {
+    console.log("MemStorage: Ignoring SQL query:", query);
+    return { rowCount: 0 };
+  }
+
+  async ensurePgVectorExtension(): Promise<void> {
+    console.log("MemStorage: pgvector extension not needed for in-memory storage");
   }
 }
 

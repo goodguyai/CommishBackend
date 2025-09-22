@@ -1,5 +1,18 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, jsonb, integer, real, pgEnum, uuid, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, jsonb, integer, real, pgEnum, uuid, boolean, customType } from "drizzle-orm/pg-core";
+
+// Custom vector type for pgvector extension
+const vector = (dimension: number = 1536) => customType<{ data: number[]; driverData: string }>({
+  dataType() {
+    return `vector(${dimension})`;
+  },
+  toDriver(value: number[]): string {
+    return JSON.stringify(value);
+  },
+  fromDriver(value: string): number[] {
+    return JSON.parse(value);
+  },
+});
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -79,11 +92,14 @@ export const rules = pgTable("rules", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Enable pgvector extension
+// Embeddings table with pgvector support
 export const embeddings = pgTable("embeddings", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   ruleId: uuid("rule_id").references(() => rules.id).notNull(),
-  vector: text("vector"), // Store as JSON string for now, will use pgvector extension later
+  contentHash: text("content_hash").notNull().unique(), // SHA-256 hash for deduplication
+  embedding: vector(1536)("embedding").notNull(), // pgvector column
+  provider: text("provider").notNull().default("openai"), // Track embedding provider
+  model: text("model").notNull().default("text-embedding-3-small"), // Track model used
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -197,6 +213,14 @@ export const insertEventSchema = createInsertSchema(events).pick({
   latency: true,
 });
 
+export const insertEmbeddingSchema = createInsertSchema(embeddings).pick({
+  ruleId: true,
+  contentHash: true,
+  embedding: true,
+  provider: true,
+  model: true,
+});
+
 // Types
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
@@ -214,6 +238,8 @@ export type Deadline = typeof deadlines.$inferSelect;
 export type InsertDeadline = z.infer<typeof insertDeadlineSchema>;
 export type Event = typeof events.$inferSelect;
 export type InsertEvent = z.infer<typeof insertEventSchema>;
+export type Embedding = typeof embeddings.$inferSelect;
+export type InsertEmbedding = z.infer<typeof insertEmbeddingSchema>;
 export type DiscordInteraction = typeof discordInteractions.$inferSelect;
 
 // Keep legacy user schema for compatibility
