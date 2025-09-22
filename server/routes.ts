@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import express from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
 import { storage } from "./storage";
@@ -109,8 +110,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Discord interactions endpoint
-  app.post("/api/discord/interactions", async (req, res) => {
+  // Discord interactions endpoint - use raw body for signature verification
+  app.post("/api/discord/interactions", express.raw({ type: 'application/json' }), async (req, res) => {
     const requestId = generateRequestId();
     const startTime = Date.now();
     
@@ -123,13 +124,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ error: "Missing required headers" });
       }
 
-      const body = JSON.stringify(req.body);
+      const body = req.body.toString('utf8');
       
       if (!verifyDiscordSignature(signature, timestamp, body, publicKey)) {
         return res.status(401).json({ error: "Invalid signature" });
       }
 
-      const interaction = req.body;
+      const interaction = JSON.parse(body);
       
       // Handle PING
       if (interaction.type === 1) {
@@ -232,7 +233,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const latency = Date.now() - startTime;
       console.error(`Interaction failed after ${latency}ms:`, error);
       
-      eventBus.emitError(error.message, { requestId, latency });
+      eventBus.emitError(error instanceof Error ? error.message : String(error), { requestId, latency });
       
       res.status(500).json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -277,7 +278,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Schedule jobs for this league
       if (league) {
-        scheduler.scheduleWeeklyDigest(leagueId, league.timezone);
+        scheduler.scheduleWeeklyDigest(leagueId, league.timezone || 'America/New_York');
         scheduler.scheduleSyncJob(leagueId);
       }
 
@@ -392,6 +393,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to get RAG stats:", error);
       res.status(500).json({ error: "Failed to get stats" });
+    }
+  });
+
+  // Manual digest trigger for testing
+  app.post("/api/digest/run", async (req, res) => {
+    try {
+      const { leagueId } = req.query;
+      
+      if (!leagueId) {
+        return res.status(400).json({ error: "leagueId is required" });
+      }
+
+      const league = await storage.getLeague(leagueId as string);
+      if (!league) {
+        return res.status(404).json({ error: "League not found" });
+      }
+
+      // TODO: Implement digest generation logic
+      const digestContent = {
+        leagueId: league.id,
+        leagueName: league.name,
+        timestamp: new Date().toISOString(),
+        sections: [
+          {
+            title: "Weekly Matchups",
+            content: "This week's matchups and scores would be displayed here.",
+          },
+          {
+            title: "Waiver Wire Activity", 
+            content: "Recent waiver wire pickups and drops would be shown here.",
+          },
+          {
+            title: "Trade Activity",
+            content: "Recent trades and pending trade offers would be listed here.",
+          },
+        ],
+      };
+
+      // Log the digest generation
+      console.log(`Manual digest generated for league ${league.id}`);
+
+      res.json({
+        message: "Digest generated successfully",
+        leagueId: league.id,
+        digest: digestContent,
+        note: "This is a test digest. Full implementation requires Sleeper data integration.",
+      });
+    } catch (error) {
+      console.error("Failed to generate digest:", error);
+      res.status(500).json({ error: "Failed to generate digest" });
     }
   });
 
@@ -622,40 +673,137 @@ async function handleHelpCommand(interaction: any) {
 }
 
 async function handleConfigCommand(interaction: any, league: any, requestId: string) {
-  const setting = interaction.data?.options?.[0]?.value;
+  const subcommand = interaction.data?.options?.[0]?.name;
+  const value = interaction.data?.options?.[0]?.options?.[0]?.value;
   
-  const embed = {
-    title: "⚙️ Configuration",
-    description: `Current configuration for **${league.name}**`,
-    color: 0x8B5CF6,
-    fields: [
-      {
-        name: "🏠 Home Channel",
-        value: league.channelId ? `<#${league.channelId}>` : "Not set",
-        inline: true,
+  // If no subcommand, show current configuration
+  if (!subcommand) {
+    const embed = {
+      title: "⚙️ Configuration",
+      description: `Current configuration for **${league.name}**`,
+      color: 0x8B5CF6,
+      fields: [
+        {
+          name: "🏠 Home Channel",
+          value: league.channelId ? `<#${league.channelId}>` : "Not set",
+          inline: true,
+        },
+        {
+          name: "🌍 Timezone",
+          value: league.timezone || "America/New_York",
+          inline: true,
+        },
+        {
+          name: "🚀 Features",
+          value: Object.entries(league.featureFlags || {})
+            .map(([key, enabled]) => `${enabled ? '✅' : '❌'} ${key}`)
+            .join('\n') || "Default features",
+          inline: false,
+        },
+        {
+          name: "📅 Digest Schedule",
+          value: `${league.digestDay || 'Tuesday'} at ${league.digestTime || '09:00'}`,
+          inline: true,
+        },
+      ],
+      footer: {
+        text: "Use /config timezone, /config digest, or /config feature to change settings",
       },
-      {
-        name: "🌍 Timezone",
-        value: league.timezone || "America/New_York",
-        inline: true,
-      },
-      {
-        name: "🚀 Features",
-        value: Object.entries(league.featureFlags || {})
-          .map(([key, enabled]) => `${enabled ? '✅' : '❌'} ${key}`)
-          .join('\n') || "Default features",
-        inline: false,
-      },
-    ],
-  };
+    };
 
-  return {
-    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-    data: {
-      embeds: [embed],
-      flags: 64,
-    },
-  };
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        embeds: [embed],
+        flags: 64,
+      },
+    };
+  }
+
+  // Handle subcommands
+  try {
+    let updateData: any = {};
+    let responseMessage = "";
+
+    switch (subcommand) {
+      case "timezone":
+        if (!value) {
+          return {
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: {
+              content: "❌ Please specify a timezone (e.g., America/New_York, Europe/London)",
+              flags: 64,
+            },
+          };
+        }
+        updateData.timezone = value;
+        responseMessage = `✅ Timezone updated to **${value}**`;
+        break;
+
+      case "digest":
+        const day = interaction.data?.options?.[0]?.options?.find((opt: any) => opt.name === "day")?.value;
+        const time = interaction.data?.options?.[0]?.options?.find((opt: any) => opt.name === "time")?.value;
+        
+        if (day) updateData.digestDay = day;
+        if (time) updateData.digestTime = time;
+        
+        responseMessage = `✅ Digest schedule updated: **${day || league.digestDay || 'Tuesday'}** at **${time || league.digestTime || '09:00'}**`;
+        break;
+
+      case "feature":
+        const featureName = interaction.data?.options?.[0]?.options?.find((opt: any) => opt.name === "name")?.value;
+        const enabled = interaction.data?.options?.[0]?.options?.find((opt: any) => opt.name === "enabled")?.value;
+        
+        if (!featureName) {
+          return {
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: {
+              content: "❌ Please specify a feature name (rules_queries, deadlines, scoring, digests)",
+              flags: 64,
+            },
+          };
+        }
+
+        const currentFlags = league.featureFlags || {};
+        currentFlags[featureName] = enabled !== false; // Default to true unless explicitly false
+        updateData.featureFlags = currentFlags;
+        
+        responseMessage = `✅ Feature **${featureName}** ${enabled !== false ? 'enabled' : 'disabled'}`;
+        break;
+
+      default:
+        return {
+          type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+          data: {
+            content: "❌ Unknown config option. Use: timezone, digest, or feature",
+            flags: 64,
+          },
+        };
+    }
+
+    // Update the league in storage
+    await storage.updateLeague(league.id, updateData);
+    
+    // Log the configuration change
+    console.log(`Config updated for league ${league.id}: ${subcommand}`, updateData);
+
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: responseMessage,
+        flags: 64,
+      },
+    };
+  } catch (error) {
+    console.error("Config command failed:", error);
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Failed to update configuration. Please try again.",
+        flags: 64,
+      },
+    };
+  }
 }
 
 async function handleReindexCommand(interaction: any, league: any, requestId: string) {

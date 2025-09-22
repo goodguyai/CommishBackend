@@ -15,13 +15,16 @@ export interface EmbeddingResult {
 
 export class RAGService {
   private embeddingClient: OpenAI;
-  private readonly embeddingModel = "text-embedding-ada-002";
+  private readonly embeddingModel: string;
+  private readonly embeddingDimensions: number;
 
   constructor(private storage: IStorage) {
-    // Use OpenAI for embeddings (can be swapped later)
+    // Use OpenAI for embeddings with proper env vars
     this.embeddingClient = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY || process.env.EMBEDDING_API_KEY || "default_key",
+      apiKey: process.env.OPENAI_API_KEY || "default_key",
     });
+    this.embeddingModel = process.env.EMBED_MODEL || "text-embedding-3-small";
+    this.embeddingDimensions = parseInt(process.env.EMBED_DIM || "1536");
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
@@ -29,6 +32,7 @@ export class RAGService {
       const response = await this.embeddingClient.embeddings.create({
         model: this.embeddingModel,
         input: text.trim(),
+        dimensions: this.embeddingDimensions,
       });
 
       return response.data[0].embedding;

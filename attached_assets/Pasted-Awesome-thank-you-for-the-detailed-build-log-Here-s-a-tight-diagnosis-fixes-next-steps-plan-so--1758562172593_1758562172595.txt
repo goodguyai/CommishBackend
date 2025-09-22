@@ -1,0 +1,203 @@
+Awesome—thank you for the detailed build log. Here’s a tight diagnosis → fixes → next steps plan so THE COMMISH moves from “runs locally” to “working, testable bot on your Replit VM.”
+
+⸻
+
+🔧 Quick diagnosis from your log
+	1.	Secrets confusion: runtime is trying to use OPENAI_API_KEY for DeepSeek.
+	2.	DB not connected: DATABASE_URL host/port/SSL not correct.
+	3.	RAG 429s: embeddings call hits OpenAI quota; indexing/search fail accordingly.
+	4.	Discord flow URLs look right but you haven’t set real Discord credentials yet (client_id empty).
+	5.	Interactions endpoint rejects unsigned requests correctly—good.
+	6.	UI routing fixed; league create still 500s because DB isn’t connected.
+	7.	Sleeper integration behaves correctly (404 for invalid league IDs).
+	8.	Drizzle schema was patched once; ensure pgvector dimension matches the embedding model.
+
+⸻
+
+✅ Adjustments to make now (one-time)
+
+1) Separate model providers clearly
+
+Use DeepSeek for chat and OpenAI for embeddings (cheapest stable route). Do NOT reuse one env var.
+
+Add/rename env vars
+
+DEEPSEEK_API_KEY=...
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
+
+EMBEDDINGS_PROVIDER=openai
+OPENAI_API_KEY=...
+EMBED_MODEL=text-embedding-3-small
+EMBED_DIM=1536
+
+This stops the “OPENAI key used for DeepSeek” bug and fixes RAG dimensions.
+
+2) Fix Postgres connection (Supabase)
+
+In Supabase Connect → Connection string, copy the Session connection (port 5432), not just the Transaction Pooler. Use SSL.
+
+DATABASE_URL=postgresql://<user>:<password>@<host>:5432/postgres?sslmode=require
+
+3) Enable pgvector (once)
+
+In Supabase SQL editor:
+
+create extension if not exists vector;
+
+4) Confirm embeddings table dimension = 1536
+
+If you’re using Drizzle, ensure the migration matches:
+
+// example
+export const embeddings = pgTable('embeddings', {
+  id: serial('id').primaryKey(),
+  leagueId: varchar('league_id', { length: 64 }).notNull(),
+  ruleId: varchar('rule_id', { length: 64 }),
+  version: varchar('version', { length: 32 }).notNull(),
+  content: text('content').notNull(),
+  embedding: vector('embedding', { dimensions: 1536 }) // <-- match EMBED_DIM
+});
+
+5) Discord credentials & permissions
+
+Add these secrets:
+
+DISCORD_CLIENT_ID=...
+DISCORD_CLIENT_SECRET=...
+DISCORD_PUBLIC_KEY=...   # used for Ed25519 verify
+DISCORD_BOT_TOKEN=...
+APP_BASE_URL=https://<your-replit-domain>
+
+Use minimal permissions in the bot invite (no admin):
+View Channels (1024) + Send Messages (2048) + Read Message History (65536) + Embed Links (16384) → 84992 total.
+
+6) Raw body verification (Express)
+
+Your verify code must hash the raw request body:
+	•	In Express, ensure the interactions route uses express.raw({ type: 'application/json' }) and you read req.body as a Buffer (or keep your existing workaround if it’s already using raw text).
+	•	Keep rejecting anything missing X‑Signature-Ed25519 and X‑Signature-Timestamp.
+
+7) Slash command set
+
+Confirm you have handlers for:
+	•	/rules (defer + follow‑up with citations)
+	•	/deadlines (fast response or defer)
+	•	/scoring
+	•	/help
+	•	/config (commish only, ephemeral): set timezone, digest day/time, home channel, feature flags
+	•	/reindex (commish only, ephemeral)
+
+8) Welcome + Channel Select
+
+On successful install, send a message with Channel Select (type 8) and persist the chosen channel. Your handler for component interactions (type 3) should save channel_id → leagues.channel_id.
+
+⸻
+
+▶️ Step‑by‑step next actions (copy/paste friendly)
+
+Step 1 — Add/verify Replit secrets
+
+Add all of these in Replit → Secrets:
+
+DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/postgres?sslmode=require
+
+DEEPSEEK_API_KEY=...
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
+
+OPENAI_API_KEY=...
+EMBEDDINGS_PROVIDER=openai
+EMBED_MODEL=text-embedding-3-small
+EMBED_DIM=1536
+
+DISCORD_CLIENT_ID=...
+DISCORD_CLIENT_SECRET=...
+DISCORD_PUBLIC_KEY=...
+DISCORD_BOT_TOKEN=...
+
+APP_BASE_URL=https://<your-replit-domain>
+
+Step 2 — Run DB migration (Drizzle)
+
+If the project includes a migration script, run it; if not, run the SQL to ensure vector + tables exist. After migration, restart the app.
+
+Step 3 — Point Discord to your Interactions URL
+
+In the Discord Developer Portal → Interactions Endpoint URL:
+
+https://<your-replit-domain>/api/discord/interactions
+
+Save; you should see Ping received / Pong returned in your logs.
+
+Step 4 — Generate OAuth URLs (verify with real IDs)
+	•	User OAuth (list guilds): GET /api/discord/auth-url?redirectUri=<APP_BASE_URL>/discord-callback
+	•	Bot install:
+GET /api/discord/bot-install-url?guildId=<GUILD_ID>&redirectUri=<APP_BASE_URL>/discord-callback
+
+Confirm the bot install URL includes:
+	•	scope=bot%20applications.commands
+	•	permissions=84992
+	•	guild_id=<your guild>
+	•	disable_guild_select=true
+
+Step 5 — Register slash commands (guild dev)
+
+Run your project’s command registration script (or REST call) for a test guild. Then in that guild, you should see /rules, /deadlines, etc.
+
+Step 6 — Create a test league (now DB should work)
+
+In the UI, create a league and paste a real Sleeper League ID. Check DB row appears in leagues.
+
+Step 7 — Index a sample constitution (RAG)
+
+POST:
+
+POST /api/rag/index/<leagueId>
+Content-Type: application/json
+{
+  "content": "Bylaws v1 ... (paste a short sample)",
+  "version": "2025.1",
+  "type": "constitution"
+}
+
+Verify an embeddings row gets created and rules/documents tables update accordingly.
+
+Step 8 — Ask a rule via Discord
+
+In your server’s chosen channel:
+	•	/rules What is IR eligibility?
+Expect: initial defer (3‑sec rule), then a follow‑up message with the answer and a citation like “Bylaws v2025.1 §3.2”.
+
+Step 9 — Test deadlines
+	•	/deadlines should list computed deadlines using the league timezone you set in /config.
+	•	If timezone not set yet: /config timezone America/Los_Angeles (ephemeral).
+
+Step 10 — Weekly digest scheduler
+
+If you’re using node‑cron in the Replit VM, verify the cron expression and that it posts in the saved channel_id. For dev, add a manual trigger (POST /api/digest/run?leagueId=...) to test.
+
+⸻
+
+🧭 What to tell the Replit Agent to do next (exact text)
+
+Please implement these updates:
+	1.	Switch to DeepSeek for chat and OpenAI for embeddings with separate env vars: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL=https://api.deepseek.com, LLM_MODEL=deepseek-chat, EMBEDDINGS_PROVIDER=openai, OPENAI_API_KEY, EMBED_MODEL=text-embedding-3-small, EMBED_DIM=1536. Ensure the RAG uses EMBED_DIM everywhere.
+	2.	Update the bot install URL to use permissions = 84992 (View Channels, Send Messages, Read History, Embed Links).
+	3.	Confirm the interactions verify uses the raw request body (Express raw middleware) for Ed25519 validation.
+	4.	If not present, add /config command handlers (ephemeral) for timezone, digest schedule, and feature flags; persist to DB.
+	5.	Ensure Channel Select (type 8) flow saves the selected channel to leagues.channel_id.
+	6.	Add a small manual digest trigger route (POST /api/digest/run?leagueId=...) for testing.
+	7.	Re-run migrations and test: health, auth-url, bot-install-url, league create, RAG index/search, Sleeper fetch.
+	8.	Output a checklist of curl commands to validate each step.
+
+⸻
+
+🎯 After this round works
+
+Choose from the proposed tasks:
+	•	Ensure complete app functionality (good next pick)
+	•	Advanced rule citation & versioning (adds polish to your differentiator)
+	•	Admin dashboard: token caps + feature flags (lets you control cost + features per league)
+
+If you want, I’ll provide the curl pack for steps 4–8 and a .env template you can paste straight into Replit Secrets.

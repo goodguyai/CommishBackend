@@ -107,7 +107,7 @@ export class DiscordService {
     const params = new URLSearchParams({
       client_id: this.clientId,
       scope: "bot applications.commands",
-      permissions: "274878024768", // View Channels, Send Messages, Read History, Embed Links
+      permissions: "84992", // View Channels (1024) + Send Messages (2048) + Read History (65536) + Embed Links (16384)
       guild_id: guildId,
       disable_guild_select: "true",
       redirect_uri: redirectUri,
