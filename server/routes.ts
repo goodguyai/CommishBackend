@@ -26,19 +26,65 @@ eventBus.on("sync_due", async (data) => {
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Health check
+  // Health check with real database connectivity test
   app.get("/api/health", async (req, res) => {
+    const startTime = Date.now();
+    const issues: string[] = [];
+    
+    // Test DeepSeek service
     const deepSeekHealthy = await deepSeekService.healthCheck();
+    if (!deepSeekHealthy) issues.push("deepseek");
+    
+    // Test database connectivity with real query
+    let databaseStatus = "connected";
+    let databaseLatency = 0;
+    try {
+      const dbStart = Date.now();
+      await storage.runRawSQL("SELECT 1");
+      databaseLatency = Date.now() - dbStart;
+    } catch (error) {
+      databaseStatus = "error";
+      issues.push("database");
+      console.error("Database health check failed:", error);
+    }
+
+    // Test OpenAI embeddings availability (basic check)
+    let embeddingsStatus = "available";
+    try {
+      if (!process.env.OPENAI_API_KEY) {
+        embeddingsStatus = "not_configured";
+        issues.push("embeddings");
+      }
+    } catch (error) {
+      embeddingsStatus = "error";
+      issues.push("embeddings");
+    }
+
+    // Determine overall status
+    const status = issues.length === 0 ? "ok" : "degraded";
+    const totalLatency = Date.now() - startTime;
     
     res.json({
-      status: "ok",
+      status,
       timestamp: new Date().toISOString(),
+      latency: totalLatency,
       services: {
-        database: "connected",
+        database: databaseStatus,
         deepseek: deepSeekHealthy ? "healthy" : "error",
         discord: "configured",
-        sleeper: "available"
-      }
+        sleeper: "available",
+        embeddings: embeddingsStatus
+      },
+      embeddings: {
+        provider: process.env.EMBEDDINGS_PROVIDER || "openai",
+        model: process.env.EMBED_MODEL || "text-embedding-3-small", 
+        dimension: parseInt(process.env.EMBED_DIM || "1536")
+      },
+      performance: {
+        database_latency: databaseLatency,
+        total_latency: totalLatency
+      },
+      ...(issues.length > 0 && { issues })
     });
   });
 

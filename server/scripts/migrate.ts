@@ -58,4 +58,7 @@ async function runMigration() {
   }
 }
 
-runMigration();
+// Manual execution only - run with: tsx server/scripts/migrate.ts
+if (require.main === module) {
+  runMigration();
+}

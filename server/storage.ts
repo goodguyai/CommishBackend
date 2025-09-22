@@ -54,7 +54,7 @@ export interface IStorage {
   clearLeagueRules(leagueId: string): Promise<void>;
 
   // Embedding methods
-  createEmbedding(ruleId: string, vector: number[]): Promise<string>;
+  createEmbedding(ruleId: string, contentHash: string, vector: number[], provider?: string, model?: string): Promise<string>;
   searchSimilarEmbeddings(leagueId: string, queryVector: number[], limit: number, threshold: number): Promise<EmbeddingResult[]>;
 
   // Fact methods
@@ -271,13 +271,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Embedding methods
-  async createEmbedding(ruleId: string, vector: number[]): Promise<string> {
+  async createEmbedding(ruleId: string, contentHash: string, vector: number[], provider: string = "openai", model: string = "text-embedding-3-small"): Promise<string> {
     const embeddings = await this.db.execute(sql`
-      INSERT INTO ${schema.embeddings} (rule_id, vector)
-      VALUES (${ruleId}, ${JSON.stringify(vector)})
+      INSERT INTO ${schema.embeddings} (rule_id, content_hash, embedding, provider, model)
+      VALUES (${ruleId}, ${contentHash}, ${sql.raw(`'[${vector.join(',')}]'::vector`)}, ${provider}, ${model})
+      ON CONFLICT (content_hash) DO NOTHING
       RETURNING id
     `);
-    return (embeddings as any)[0].id;
+    return (embeddings as unknown as any[])[0]?.id || "cached";
   }
 
   async searchSimilarEmbeddings(
@@ -289,7 +290,7 @@ export class DatabaseStorage implements IStorage {
     const results = await this.db.execute(sql`
       SELECT 
         e.rule_id,
-        1 - (e.vector <=> ${JSON.stringify(queryVector)}) as similarity,
+        1 - (e.embedding <=> ${sql.raw(`'[${queryVector.join(',')}]'::vector`)}) as similarity,
         r.text,
         r.rule_key,
         r.citations,
@@ -297,12 +298,12 @@ export class DatabaseStorage implements IStorage {
       FROM ${schema.embeddings} e
       JOIN ${schema.rules} r ON e.rule_id = r.id
       WHERE r.league_id = ${leagueId}
-        AND 1 - (e.vector <=> ${JSON.stringify(queryVector)}) > ${threshold}
-      ORDER BY e.vector <=> ${JSON.stringify(queryVector)}
+        AND 1 - (e.embedding <=> ${sql.raw(`'[${queryVector.join(',')}]'::vector`)}) > ${threshold}
+      ORDER BY e.embedding <=> ${sql.raw(`'[${queryVector.join(',')}]'::vector`)}
       LIMIT ${limit}
     `);
 
-    return (results as any[]).map(row => ({
+    return (results as unknown as any[]).map(row => ({
       ruleId: row.rule_id,
       similarity: row.similarity,
       rule: {
@@ -389,13 +390,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getRecentEvents(leagueId?: string, limit: number = 50): Promise<Event[]> {
-    let query = this.db.select().from(schema.events);
-    
     if (leagueId) {
-      query = query.where(eq(schema.events.leagueId, leagueId));
+      return this.db.select().from(schema.events)
+        .where(eq(schema.events.leagueId, leagueId))
+        .orderBy(desc(schema.events.createdAt))
+        .limit(limit);
     }
     
-    return query.orderBy(desc(schema.events.createdAt)).limit(limit);
+    return this.db.select().from(schema.events)
+      .orderBy(desc(schema.events.createdAt))
+      .limit(limit);
   }
 
   // Discord interaction methods
@@ -499,7 +503,12 @@ export class MemStorage implements IStorage {
   }
   async createAccount(account: InsertAccount): Promise<string> {
     const id = this.generateId();
-    const newAccount: Account = { ...account, id, createdAt: new Date() };
+    const newAccount: Account = { 
+      ...account, 
+      id, 
+      createdAt: new Date(),
+      discordUserId: account.discordUserId ?? null
+    };
     this.accounts.set(id, newAccount);
     return id;
   }
@@ -523,7 +532,19 @@ export class MemStorage implements IStorage {
   }
   async createLeague(league: InsertLeague): Promise<string> {
     const id = this.generateId();
-    const newLeague: League = { ...league, id, createdAt: new Date(), updatedAt: new Date() };
+    const newLeague: League = { 
+      ...league, 
+      id, 
+      createdAt: new Date(), 
+      updatedAt: new Date(),
+      platform: league.platform ?? "sleeper",
+      sleeperLeagueId: league.sleeperLeagueId ?? null,
+      guildId: league.guildId ?? null,
+      channelId: league.channelId ?? null,
+      timezone: league.timezone ?? null,
+      featureFlags: league.featureFlags ?? { qa: true, deadlines: true, digest: true, trade_helper: false },
+      modelPrefs: league.modelPrefs ?? { maxTokens: 1000, provider: "deepseek" }
+    };
     this.leagues.set(id, newLeague);
     return id;
   }
@@ -563,7 +584,13 @@ export class MemStorage implements IStorage {
   }
   async createDocument(document: InsertDocument): Promise<string> {
     const id = this.generateId();
-    const newDocument: Document = { ...document, id, createdAt: new Date() };
+    const newDocument: Document = { 
+      ...document, 
+      id, 
+      createdAt: new Date(),
+      url: document.url ?? null,
+      content: document.content ?? null
+    };
     this.documents.set(id, newDocument);
     return id;
   }
@@ -579,7 +606,13 @@ export class MemStorage implements IStorage {
   }
   async createRule(rule: InsertRule): Promise<string> {
     const id = this.generateId();
-    const newRule: Rule = { ...rule, id, createdAt: new Date() };
+    const newRule: Rule = { 
+      ...rule, 
+      id, 
+      createdAt: new Date(),
+      citations: rule.citations ?? [],
+      tags: rule.tags ?? []
+    };
     this.rules.set(id, newRule);
     return id;
   }
@@ -594,7 +627,7 @@ export class MemStorage implements IStorage {
     ruleIds.forEach(id => this.rules.delete(id));
   }
 
-  async createEmbedding(ruleId: string, vector: number[]): Promise<string> { return this.generateId(); }
+  async createEmbedding(ruleId: string, contentHash: string, vector: number[], provider?: string, model?: string): Promise<string> { return this.generateId(); }
   async searchSimilarEmbeddings(leagueId: string, queryVector: number[], limit: number, threshold: number): Promise<EmbeddingResult[]> {
     return [];
   }
@@ -631,7 +664,13 @@ export class MemStorage implements IStorage {
   }
   async createDeadline(deadline: InsertDeadline): Promise<string> {
     const id = this.generateId();
-    const newDeadline: Deadline = { ...deadline, id, createdAt: new Date() };
+    const newDeadline: Deadline = { 
+      ...deadline, 
+      id, 
+      createdAt: new Date(),
+      description: deadline.description ?? null,
+      completed: deadline.completed ?? null
+    };
     this.deadlines.set(id, newDeadline);
     return id;
   }
@@ -647,7 +686,15 @@ export class MemStorage implements IStorage {
 
   async createEvent(event: InsertEvent): Promise<string> {
     const id = this.generateId();
-    const newEvent: Event = { ...event, id, createdAt: new Date() };
+    const newEvent: Event = { 
+      ...event, 
+      id, 
+      createdAt: new Date(),
+      leagueId: event.leagueId ?? null,
+      payload: event.payload ?? {},
+      requestId: event.requestId ?? null,
+      latency: event.latency ?? null
+    };
     this.events.set(id, newEvent);
     return id;
   }
