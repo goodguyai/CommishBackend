@@ -3,6 +3,7 @@ import express from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
 import { storage } from "./storage";
+import { env } from "./services/env";
 import { verifyDiscordSignature, generateRequestId } from "./lib/crypto";
 import { discordService, InteractionResponseType, ComponentType } from "./services/discord";
 import { sleeperService } from "./services/sleeper";
@@ -26,6 +27,58 @@ eventBus.on("sync_due", async (data) => {
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Dev: Register Discord commands (requires admin key)
+  app.post("/api/dev/register-commands", async (req, res) => {
+    // Admin authentication
+    const adminKey = req.headers["x-admin-key"];
+    if (!env.ADMIN_KEY || adminKey !== env.ADMIN_KEY) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      const { guildId } = req.body;
+      const commands = discordService.getSlashCommands();
+      
+      if (guildId) {
+        await discordService.registerGuildCommands(guildId, commands);
+        res.json({ 
+          success: true, 
+          message: `Registered ${commands.length} commands for guild ${guildId}`,
+          commands: commands.map(cmd => cmd.name),
+        });
+      } else {
+        // Global registration
+        const response = await fetch(
+          `https://discord.com/api/v10/applications/${process.env.DISCORD_CLIENT_ID}/commands`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(commands),
+          }
+        );
+
+        if (!response.ok) {
+          const error = await response.text();
+          throw new Error(`Discord API error: ${response.statusText} - ${error}`);
+        }
+
+        res.json({ 
+          success: true, 
+          message: `Registered ${commands.length} global commands (takes up to 1 hour to propagate)`,
+          commands: commands.map(cmd => cmd.name),
+        });
+      }
+    } catch (error) {
+      console.error("Command registration failed:", error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   // Health check with real database connectivity test
   app.get("/api/health", async (req, res) => {
     const startTime = Date.now();

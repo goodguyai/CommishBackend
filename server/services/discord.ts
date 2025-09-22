@@ -281,14 +281,69 @@ export class DiscordService {
         description: "Configure bot settings (Commissioner only)",
         options: [
           {
-            name: "setting",
-            description: "Setting to configure",
-            type: 3, // STRING
-            required: true,
-            choices: [
-              { name: "channel", value: "channel" },
-              { name: "features", value: "features" },
-              { name: "permissions", value: "permissions" },
+            name: "timezone",
+            description: "Set the league timezone",
+            type: 1, // SUB_COMMAND
+            options: [
+              {
+                name: "timezone",
+                description: "Timezone (e.g., America/New_York)",
+                type: 3, // STRING
+                required: true,
+              },
+            ],
+          },
+          {
+            name: "digest",
+            description: "Configure weekly digest schedule",
+            type: 1, // SUB_COMMAND
+            options: [
+              {
+                name: "day",
+                description: "Day of the week",
+                type: 3, // STRING
+                required: false,
+                choices: [
+                  { name: "Monday", value: "Monday" },
+                  { name: "Tuesday", value: "Tuesday" },
+                  { name: "Wednesday", value: "Wednesday" },
+                  { name: "Thursday", value: "Thursday" },
+                  { name: "Friday", value: "Friday" },
+                  { name: "Saturday", value: "Saturday" },
+                  { name: "Sunday", value: "Sunday" },
+                ],
+              },
+              {
+                name: "time",
+                description: "Time in HH:MM format (24-hour)",
+                type: 3, // STRING
+                required: false,
+              },
+            ],
+          },
+          {
+            name: "feature",
+            description: "Enable or disable bot features",
+            type: 1, // SUB_COMMAND
+            options: [
+              {
+                name: "name",
+                description: "Feature to toggle",
+                type: 3, // STRING
+                required: true,
+                choices: [
+                  { name: "RAG Q&A", value: "rag_qa" },
+                  { name: "Weekly Digest", value: "weekly_digest" },
+                  { name: "Deadline Reminders", value: "deadline_reminders" },
+                  { name: "Scoring Updates", value: "scoring_updates" },
+                ],
+              },
+              {
+                name: "enabled",
+                description: "Enable or disable the feature",
+                type: 5, // BOOLEAN
+                required: true,
+              },
             ],
           },
         ],
