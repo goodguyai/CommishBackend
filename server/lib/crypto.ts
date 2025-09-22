@@ -1,4 +1,5 @@
 import nacl from "tweetnacl";
+import { createHash } from "crypto";
 
 export function verifyDiscordSignature(
   signature: string,
@@ -23,4 +24,12 @@ export function verifyDiscordSignature(
 
 export function generateRequestId(): string {
   return `req_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+}
+
+export function generateContentHash(content: string, model?: string, dimensions?: number): string {
+  const normalizedContent = content.trim().replace(/\r\n/g, '\n');
+  const hashInput = model && dimensions 
+    ? `${model}:${dimensions}:${normalizedContent}`
+    : normalizedContent;
+  return createHash('sha256').update(hashInput).digest('hex');
 }

@@ -55,6 +55,7 @@ export interface IStorage {
 
   // Embedding methods
   createEmbedding(ruleId: string, contentHash: string, vector: number[], provider?: string, model?: string): Promise<string>;
+  getEmbeddingByContentHash(contentHash: string): Promise<{ id: string; embedding: number[] } | null>;
   searchSimilarEmbeddings(leagueId: string, queryVector: number[], limit: number, threshold: number): Promise<EmbeddingResult[]>;
 
   // Fact methods
@@ -271,14 +272,47 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Embedding methods
+  async getEmbeddingByContentHash(contentHash: string): Promise<{ id: string; embedding: number[] } | null> {
+    const results = await this.db.execute(sql`
+      SELECT id, embedding FROM ${schema.embeddings} WHERE content_hash = ${contentHash} LIMIT 1
+    `);
+    const row = (results as unknown as any[])[0];
+    if (!row) return null;
+    
+    // Parse embedding with robust type handling
+    let embedding: number[];
+    if (Array.isArray(row.embedding)) {
+      embedding = row.embedding;
+    } else if (typeof row.embedding === 'string') {
+      try {
+        // Try JSON parse first
+        embedding = JSON.parse(row.embedding);
+      } catch {
+        // Fallback to manual parsing for pgvector string format
+        const embeddingStr = row.embedding.replace(/[\[\]]/g, '');
+        embedding = embeddingStr.split(',').map((n: string) => parseFloat(n.trim()));
+      }
+    } else {
+      console.warn('Unknown embedding format, treating as cache miss');
+      return null;
+    }
+    
+    // Validate embedding and treat zero vectors as cache miss
+    if (!embedding || embedding.length === 0 || embedding.every(val => val === 0)) {
+      console.warn('Invalid or zero embedding found, treating as cache miss');
+      return null;
+    }
+    
+    return { id: row.id, embedding };
+  }
+
   async createEmbedding(ruleId: string, contentHash: string, vector: number[], provider: string = "openai", model: string = "text-embedding-3-small"): Promise<string> {
     const embeddings = await this.db.execute(sql`
       INSERT INTO ${schema.embeddings} (rule_id, content_hash, embedding, provider, model)
       VALUES (${ruleId}, ${contentHash}, ${sql.raw(`'[${vector.join(',')}]'::vector`)}, ${provider}, ${model})
-      ON CONFLICT (content_hash) DO NOTHING
       RETURNING id
     `);
-    return (embeddings as unknown as any[])[0]?.id || "cached";
+    return (embeddings as unknown as any[])[0]?.id;
   }
 
   async searchSimilarEmbeddings(
@@ -627,6 +661,7 @@ export class MemStorage implements IStorage {
     ruleIds.forEach(id => this.rules.delete(id));
   }
 
+  async getEmbeddingByContentHash(contentHash: string): Promise<{ id: string; embedding: number[] } | null> { return null; }
   async createEmbedding(ruleId: string, contentHash: string, vector: number[], provider?: string, model?: string): Promise<string> { return this.generateId(); }
   async searchSimilarEmbeddings(leagueId: string, queryVector: number[], limit: number, threshold: number): Promise<EmbeddingResult[]> {
     return [];

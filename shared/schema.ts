@@ -96,7 +96,7 @@ export const rules = pgTable("rules", {
 export const embeddings = pgTable("embeddings", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   ruleId: uuid("rule_id").references(() => rules.id).notNull(),
-  contentHash: text("content_hash").notNull().unique(), // SHA-256 hash for deduplication
+  contentHash: text("content_hash").notNull(), // SHA-256 hash for deduplication (allows duplicates)
   embedding: vector(1536)("embedding").notNull(), // pgvector column
   provider: text("provider").notNull().default("openai"), // Track embedding provider
   model: text("model").notNull().default("text-embedding-3-small"), // Track model used

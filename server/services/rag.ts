@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { IStorage } from "../storage";
 import { InsertRule, InsertDocument } from "@shared/schema";
+import { generateContentHash } from "../lib/crypto";
 
 export interface EmbeddingResult {
   ruleId: string;
@@ -38,7 +39,10 @@ export class RAGService {
       return response.data[0].embedding;
     } catch (error) {
       console.error("Failed to generate embedding:", error);
-      throw new Error("Embedding generation failed");
+      
+      // Graceful degradation: return zero vector for failed embeddings
+      console.warn("Using zero vector fallback for embedding generation failure");
+      return new Array(this.embeddingDimensions).fill(0);
     }
   }
 
@@ -69,13 +73,37 @@ export class RAGService {
           // Create rule record
           const ruleId = await this.storage.createRule(rule);
           
-          // Generate and store embedding
-          const embedding = await this.generateEmbedding(rule.text);
-          await this.storage.createEmbedding(ruleId, embedding);
+          // Generate content hash scoped to model for caching
+          const contentHash = generateContentHash(rule.text, this.embeddingModel, this.embeddingDimensions);
+          
+          // Check if embedding already exists (cache lookup)
+          const existingEmbedding = await this.storage.getEmbeddingByContentHash(contentHash);
+          
+          let embedding: number[];
+          if (existingEmbedding) {
+            // Use cached embedding vector, avoid API call
+            console.log(`Using cached embedding for rule ${rule.ruleKey}`);
+            embedding = existingEmbedding.embedding;
+            
+            // Still need to create embedding row for this rule to enable search
+            await this.storage.createEmbedding(ruleId, contentHash, embedding, "openai", this.embeddingModel);
+          } else {
+            // Generate new embedding
+            embedding = await this.generateEmbedding(rule.text);
+            
+            // Only store if embedding generation succeeded (not zero vector)
+            if (!embedding.every(val => val === 0)) {
+              await this.storage.createEmbedding(ruleId, contentHash, embedding, "openai", this.embeddingModel);
+            } else {
+              console.warn(`Skipping embedding storage for rule ${rule.ruleKey} due to API failure`);
+              continue; // Skip indexing this rule
+            }
+          }
           
           indexedCount++;
         } catch (error) {
           console.error(`Failed to index rule ${rule.ruleKey}:`, error);
+          // Continue with next rule instead of failing entire indexing
         }
       }
 
@@ -146,8 +174,14 @@ export class RAGService {
     threshold: number = 0.7
   ): Promise<EmbeddingResult[]> {
     try {
-      // Generate embedding for the query
+      // Generate embedding for the query with graceful fallback
       const queryEmbedding = await this.generateEmbedding(query);
+      
+      // If embedding generation failed (returned zero vector), return empty results
+      if (queryEmbedding.every(val => val === 0)) {
+        console.warn("Query embedding failed, returning empty results");
+        return [];
+      }
       
       // Search for similar embeddings using pgvector
       const results = await this.storage.searchSimilarEmbeddings(
@@ -160,7 +194,9 @@ export class RAGService {
       return results;
     } catch (error) {
       console.error("RAG search failed:", error);
-      throw error;
+      // Graceful degradation: return empty results instead of throwing
+      console.warn("RAG search failed, returning empty results");
+      return [];
     }
   }
 
