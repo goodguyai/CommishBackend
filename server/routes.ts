@@ -9,6 +9,7 @@ import { discordService, InteractionResponseType, ComponentType } from "./servic
 import { sleeperService } from "./services/sleeper";
 import { deepSeekService } from "./services/deepseek";
 import { RAGService } from "./services/rag";
+import { generateDigestContent } from "./services/digest";
 import { EventBus } from "./services/events";
 import { scheduler } from "./lib/scheduler";
 
@@ -497,6 +498,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Manual digest trigger for testing
   app.post("/api/digest/run", async (req, res) => {
+    // Validate X-Admin-Key header
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || adminKey !== env.ADMIN_KEY) {
+      return res.status(401).json({ error: "Unauthorized - valid X-Admin-Key required" });
+    }
+
     try {
       const { leagueId } = req.query;
       
@@ -509,26 +516,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "League not found" });
       }
 
-      // TODO: Implement digest generation logic
-      const digestContent = {
-        leagueId: league.id,
-        leagueName: league.name,
-        timestamp: new Date().toISOString(),
-        sections: [
-          {
-            title: "Weekly Matchups",
-            content: "This week's matchups and scores would be displayed here.",
-          },
-          {
-            title: "Waiver Wire Activity", 
-            content: "Recent waiver wire pickups and drops would be shown here.",
-          },
-          {
-            title: "Trade Activity",
-            content: "Recent trades and pending trade offers would be listed here.",
-          },
-        ],
-      };
+      // Generate real digest using Sleeper data
+      if (!league.sleeperLeagueId) {
+        return res.status(400).json({ error: "League not configured with Sleeper ID" });
+      }
+
+      let digestContent;
+      try {
+        const sleeperData = await sleeperService.syncLeagueData(league.sleeperLeagueId);
+        
+        // Generate digest with real data
+        digestContent = await generateDigestContent(league, sleeperData);
+      } catch (error) {
+        console.warn("Failed to fetch Sleeper data, using fallback digest:", error);
+        digestContent = {
+          leagueId: league.id,
+          leagueName: league.name,
+          timestamp: new Date().toISOString(),
+          sections: [
+            {
+              title: "Digest Generation",
+              content: "Unable to fetch current league data. Please check your Sleeper league configuration.",
+            },
+          ],
+          error: "Sleeper data unavailable",
+        };
+      }
 
       // Log the digest generation
       console.log(`Manual digest generated for league ${league.id}`);
@@ -537,7 +550,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: "Digest generated successfully",
         leagueId: league.id,
         digest: digestContent,
-        note: "This is a test digest. Full implementation requires Sleeper data integration.",
+        note: digestContent.error ? "Digest generated with fallback data due to Sleeper API issues." : "Digest generated with live Sleeper data.",
       });
     } catch (error) {
       console.error("Failed to generate digest:", error);
