@@ -210,14 +210,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Discord interactions endpoint - use raw body for signature verification
-  app.post("/api/discord/interactions", express.raw({ type: 'application/json' }), async (req, res) => {
+  app.post("/api/discord/interactions", express.raw({ type: '*/*' }), async (req, res) => {
     const requestId = generateRequestId();
     const startTime = Date.now();
     
     try {
       const signature = req.headers["x-signature-ed25519"] as string;
       const timestamp = req.headers["x-signature-timestamp"] as string;
-      const publicKey = process.env.DISCORD_PUBLIC_KEY || "";
+      const publicKey = env.DISCORD_PUBLIC_KEY;
 
       if (!signature || !timestamp) {
         return res.status(401).json({ error: "Missing required headers" });

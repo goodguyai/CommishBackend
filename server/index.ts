@@ -4,7 +4,14 @@ import { setupVite, serveStatic, log } from "./vite";
 import { validateEnvironment } from "./services/env";
 
 const app = express();
-app.use(express.json());
+
+// Use conditional JSON parsing to preserve raw body for Discord webhooks
+app.use((req, res, next) => {
+  if (req.path === "/api/discord/interactions") {
+    return next(); // Skip JSON parsing for Discord route
+  }
+  express.json()(req, res, next);
+});
 app.use(express.urlencoded({ extended: false }));
 
 app.use((req, res, next) => {
