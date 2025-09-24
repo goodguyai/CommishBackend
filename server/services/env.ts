@@ -16,7 +16,26 @@ const envSchema = z.object({
   ).optional().default(1536),
   
   // Database Configuration
-  DATABASE_URL: z.string().min(1, "DATABASE_URL is required - PostgreSQL connection string"),
+  DATABASE_URL: z.string().min(1, "DATABASE_URL is required - PostgreSQL connection string")
+    .refine((url) => {
+      try {
+        const parsed = new URL(url);
+        // Validate it's a PostgreSQL connection string
+        if (!parsed.protocol.startsWith('postgres')) {
+          return false;
+        }
+        // Validate Supabase hostname format if it's a Supabase URL
+        if (parsed.hostname.includes('supabase.co')) {
+          const hostPattern = /^(db|aws|gcp)\.[^.]+\.supabase\.co$/;
+          return hostPattern.test(parsed.hostname);
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    }, {
+      message: "DATABASE_URL must be a valid PostgreSQL connection string. For Supabase, use format: postgresql://postgres:password@db.project-ref.supabase.co:5432/postgres?sslmode=require"
+    }),
   
   // Discord Configuration
   DISCORD_CLIENT_ID: z.string().min(1, "DISCORD_CLIENT_ID is required"),
