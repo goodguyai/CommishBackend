@@ -175,6 +175,25 @@ export class SleeperService {
   clearCache(): void {
     this.cache.clear();
   }
+
+  // User discovery methods for setup wizard
+  async getUser(username: string): Promise<{ user_id: string; username: string; display_name: string } | null> {
+    try {
+      return await this.makeRequest<{ user_id: string; username: string; display_name: string }>(`/user/${username}`);
+    } catch (error) {
+      console.error(`Error fetching user ${username}:`, error);
+      return null;
+    }
+  }
+
+  async getUserLeagues(userId: string, season: string): Promise<SleeperLeague[]> {
+    try {
+      return await this.makeRequest<SleeperLeague[]>(`/user/${userId}/leagues/nfl/${season}`);
+    } catch (error) {
+      console.error(`Error fetching leagues for user ${userId}:`, error);
+      return [];
+    }
+  }
 }
 
 export const sleeperService = new SleeperService();

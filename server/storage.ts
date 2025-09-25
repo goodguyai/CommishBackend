@@ -6,7 +6,7 @@ import type {
   User, InsertUser, Account, InsertAccount, League, InsertLeague,
   Member, InsertMember, Document, InsertDocument, Rule, InsertRule,
   Fact, InsertFact, Deadline, InsertDeadline, Event, InsertEvent,
-  DiscordInteraction
+  DiscordInteraction, PendingSetup, InsertPendingSetup
 } from "@shared/schema";
 import { EmbeddingResult } from "./services/rag";
 import { env } from "./services/env";
@@ -88,6 +88,12 @@ export interface IStorage {
     embeddingsCount: number;
     lastUpdated: Date | null;
   }>;
+
+  // Pending setup methods
+  getPendingSetup(sessionId: string): Promise<PendingSetup | undefined>;
+  createPendingSetup(setup: InsertPendingSetup): Promise<string>;
+  updatePendingSetup(sessionId: string, updates: Partial<PendingSetup>): Promise<void>;
+  deletePendingSetup(sessionId: string): Promise<void>;
 
   // Migration methods
   runRawSQL(query: string): Promise<any>;
@@ -484,6 +490,27 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  // Pending setup methods
+  async getPendingSetup(sessionId: string): Promise<PendingSetup | undefined> {
+    const results = await this.db.select().from(schema.pendingSetup).where(eq(schema.pendingSetup.sessionId, sessionId));
+    return results[0];
+  }
+
+  async createPendingSetup(insertSetup: InsertPendingSetup): Promise<string> {
+    const results = await this.db.insert(schema.pendingSetup).values(insertSetup).returning({ id: schema.pendingSetup.id });
+    return results[0].id;
+  }
+
+  async updatePendingSetup(sessionId: string, updates: Partial<PendingSetup>): Promise<void> {
+    await this.db.update(schema.pendingSetup)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schema.pendingSetup.sessionId, sessionId));
+  }
+
+  async deletePendingSetup(sessionId: string): Promise<void> {
+    await this.db.delete(schema.pendingSetup).where(eq(schema.pendingSetup.sessionId, sessionId));
+  }
+
   // Migration methods implementation
   async runRawSQL(query: string): Promise<any> {
     return this.db.execute(sql.raw(query));
@@ -765,6 +792,46 @@ export class MemStorage implements IStorage {
       embeddingsCount: 0,
       lastUpdated: null,
     };
+  }
+
+  // Pending setup methods (in-memory implementation)
+  private pendingSetups = new Map<string, PendingSetup>();
+
+  async getPendingSetup(sessionId: string): Promise<PendingSetup | undefined> {
+    return this.pendingSetups.get(sessionId);
+  }
+
+  async createPendingSetup(insertSetup: InsertPendingSetup): Promise<string> {
+    const id = this.generateId();
+    const newSetup: PendingSetup = {
+      ...insertSetup,
+      id,
+      timezone: insertSetup.timezone || "America/New_York",
+      webUserId: insertSetup.webUserId || null,
+      sessionId: insertSetup.sessionId || null,
+      selectedGuildId: insertSetup.selectedGuildId || null,
+      selectedChannelId: insertSetup.selectedChannelId || null,
+      sleeperUsername: insertSetup.sleeperUsername || null,
+      sleeperSeason: insertSetup.sleeperSeason || null,
+      selectedLeagueId: insertSetup.selectedLeagueId || null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    if (insertSetup.sessionId) {
+      this.pendingSetups.set(insertSetup.sessionId, newSetup);
+    }
+    return id;
+  }
+
+  async updatePendingSetup(sessionId: string, updates: Partial<PendingSetup>): Promise<void> {
+    const existing = this.pendingSetups.get(sessionId);
+    if (existing) {
+      this.pendingSetups.set(sessionId, { ...existing, ...updates, updatedAt: new Date() });
+    }
+  }
+
+  async deletePendingSetup(sessionId: string): Promise<void> {
+    this.pendingSetups.delete(sessionId);
   }
 
   // Migration methods implementation (no-op for in-memory storage)

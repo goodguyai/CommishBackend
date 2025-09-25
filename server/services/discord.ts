@@ -354,6 +354,115 @@ export class DiscordService {
       },
     ];
   }
+
+  // Guild status and management
+  async getGuildStatus(guildId: string): Promise<{
+    installed: boolean;
+    channels: { id: string; name: string; type: number }[];
+  }> {
+    try {
+      // Check if bot is in guild by trying to get guild info
+      const response = await fetch(`${this.baseUrl}/guilds/${guildId}`, {
+        headers: {
+          Authorization: `Bot ${this.botToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        return { installed: false, channels: [] };
+      }
+
+      // Get channels if bot is present
+      const channelsResponse = await fetch(`${this.baseUrl}/guilds/${guildId}/channels`, {
+        headers: {
+          Authorization: `Bot ${this.botToken}`,
+        },
+      });
+
+      if (!channelsResponse.ok) {
+        return { installed: true, channels: [] };
+      }
+
+      const channels = await channelsResponse.json();
+      
+      // Filter to text channels only (type 0)
+      const textChannels = channels
+        .filter((channel: any) => channel.type === 0)
+        .map((channel: any) => ({
+          id: channel.id,
+          name: channel.name,
+          type: channel.type
+        }));
+
+      return { installed: true, channels: textChannels };
+    } catch (error) {
+      console.error("Error checking guild status:", error);
+      return { installed: false, channels: [] };
+    }
+  }
+
+  // Welcome message with setup info
+  async postWelcomeMessage(channelId: string, data: {
+    leagueId: string;
+    leagueName: string;
+    guildId: string;
+  }): Promise<void> {
+    try {
+      const welcomeMessage = {
+        embeds: [
+          {
+            title: "🏈 THE COMMISH is Ready!",
+            description: `Welcome to **${data.leagueName}**! I'm your AI-powered fantasy football commissioner assistant.`,
+            color: 0x2b2d31,
+            fields: [
+              {
+                name: "🎯 What I can do",
+                value: "• Answer rule questions with `/ask`\n• Track important deadlines\n• Help with scoring disputes\n• Generate weekly league reports",
+                inline: false
+              },
+              {
+                name: "🚀 Get Started",
+                value: "Try `/ask` followed by any question about your league rules or `/help` to see all available commands.",
+                inline: false
+              }
+            ],
+            footer: {
+              text: "THE COMMISH • AI Fantasy Football Assistant"
+            }
+          }
+        ],
+        components: [
+          {
+            type: ComponentType.ACTION_ROW,
+            components: [
+              {
+                type: ComponentType.BUTTON,
+                style: 5, // Link button
+                label: "View Dashboard",
+                url: `${process.env.APP_BASE_URL || 'https://localhost:5000'}/league/${data.leagueId}`
+              }
+            ]
+          }
+        ]
+      };
+
+      const response = await fetch(`${this.baseUrl}/channels/${channelId}/messages`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${this.botToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(welcomeMessage),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to post welcome message: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error("Error posting welcome message:", error);
+      throw error;
+    }
+  }
 }
 
 export const discordService = new DiscordService();
