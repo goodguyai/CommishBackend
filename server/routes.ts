@@ -32,7 +32,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/dev/register-commands", async (req, res) => {
     // Admin authentication
     const adminKey = req.headers["x-admin-key"];
-    if (!env.ADMIN_KEY || adminKey !== env.ADMIN_KEY) {
+    if (!env.app.adminKey || adminKey !== env.app.adminKey) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     try {
@@ -218,7 +218,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const signature = req.headers["x-signature-ed25519"] as string;
       const timestamp = req.headers["x-signature-timestamp"] as string;
-      const publicKey = env.DISCORD_PUBLIC_KEY;
+      const publicKey = env.discord.publicKey;
 
       if (!signature || !timestamp) {
         return res.status(401).json({ error: "Missing required headers" });
@@ -500,7 +500,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/digest/run", async (req, res) => {
     // Validate X-Admin-Key header
     const adminKey = req.headers['x-admin-key'];
-    if (!adminKey || adminKey !== env.ADMIN_KEY) {
+    if (!adminKey || adminKey !== env.app.adminKey) {
       return res.status(401).json({ error: "Unauthorized - valid X-Admin-Key required" });
     }
 
@@ -525,8 +525,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const sleeperData = await sleeperService.syncLeagueData(league.sleeperLeagueId);
         
-        // Generate digest with real data
-        digestContent = await generateDigestContent(league, sleeperData);
+        // Generate digest with real data (provide empty array for matchups if undefined)
+        digestContent = await generateDigestContent(league, {
+          ...sleeperData,
+          matchups: sleeperData.matchups || []
+        });
       } catch (error) {
         console.warn("Failed to fetch Sleeper data, using fallback digest:", error);
         digestContent = {
