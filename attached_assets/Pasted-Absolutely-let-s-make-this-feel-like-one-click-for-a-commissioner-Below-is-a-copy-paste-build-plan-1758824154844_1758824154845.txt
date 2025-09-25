@@ -1,0 +1,178 @@
+Absolutely—let’s make this feel like one-click for a commissioner. Below is a copy-paste “build plan” you can hand to your Replit Agent. It replaces manual curl calls with an in-app onboarding wizard that collects the few things we truly need (Discord server + Sleeper league) and automates the rest.
+
+⸻
+
+THE COMMISH — Onboarding Wizard (Replit build plan)
+
+Goal: A single /setup page that guides a user through:
+(1) Log in with Discord → pick server → click Install → pick home channel
+(2) Find Sleeper leagues (by username) → pick league
+(3) Auto-save config, register slash commands, and post the welcome
+…so the user does no pasting, no curl, and almost zero thinking.
+
+0) Guardrails
+	•	Do not ask for Discord passwords. Use Discord OAuth2 (user) identify+guilds and bot install flows only.
+	•	Hide all admin actions behind server routes (no admin key visible on client).
+	•	Health must stay green (/api/health = ok) before/after onboarding.
+
+⸻
+
+1) Frontend: /setup (Stepper UI)
+
+Create a 3-step wizard:
+
+Step A — “Connect Discord”
+	•	Button: Log in with Discord
+	•	Calls GET /api/discord/user-auth-url?redirectUri=${APP_BASE_URL}/discord-callback
+	•	Redirect user to Discord OAuth (scopes: identify guilds)
+	•	After callback: call GET /api/discord/me and GET /api/discord/my-guilds
+	•	Render their guild list (only those where they have Manage Server).
+	•	When a guild is selected:
+	•	Show Install THE COMMISH button:
+	•	Behind the scenes call GET /api/discord/bot-install-url?guildId=<id>&redirectUri=${APP_BASE_URL}/discord-callback
+	•	Open the URL in a new tab → user clicks Authorize.
+	•	After install returns (user lands back), call GET /api/discord/guild-status?guildId=<id>
+	•	If bot present → show “Set Home Channel” dropdown (channel select is also posted by the bot welcome; we’ll provide both).
+	•	On channel pick: POST /api/setup/discord/set-home-channel { guildId, channelId }
+
+Step B — “Find Sleeper League”
+	•	Two inputs: Sleeper username and Season (default = current season).
+	•	Button: Find my leagues
+	•	Calls: POST /api/setup/sleeper/find { username, season }
+	•	Backend resolves:
+GET /v1/user/<username> → user_id,
+GET /v1/user/<user_id>/leagues/nfl/<season> → list.
+	•	Render league list (name + league_id + avatar).
+	•	On choose: POST /api/setup/sleeper/select { leagueId }
+
+Step C — “Finish”
+	•	Button: Finish setup
+	•	Calls POST /api/setup/finish
+	•	Server will:
+	1.	Create/Upsert a leagues row with { name, platform:'sleeper', sleeper_league_id, timezone (from client), guild_id, channel_id }
+	2.	Register slash commands for that guild (server-side, admin key not exposed)
+	3.	Post Welcome with a Channel Select component (if not already set)
+	4.	Schedule weekly digest default (can be changed in /config later)
+	•	Show “All set!” with quick links: Open Discord, /help, Open dashboard.
+
+⸻
+
+2) Backend: API endpoints to implement
+
+All routes are HTTPS JSON and server-side; do not expose secrets to client. For any “admin” operation, require the current signed-in website user have a session (Supabase auth, optional now), and keep bot/admin secrets only on server.
+
+Discord (User OAuth)
+	•	GET /api/discord/user-auth-url?redirectUri=…
+→ { url }
+	•	GET /api/discord/me
+Read user OAuth token from server session; return Discord user JSON.
+	•	GET /api/discord/my-guilds
+With user OAuth token: GET /users/@me/guilds → return only guilds where the user has MANAGE_GUILD (permission 0x20).
+	•	Callback handler: GET /discord-callback
+Exchange code → store user access_token (short-lived) in server session cookie for subsequent API calls (no secrets to client).
+
+Discord (Bot install & config)
+	•	GET /api/discord/bot-install-url?guildId=<id>&redirectUri=…
+Build OAuth2 bot URL with scopes bot applications.commands, permissions=84992, guild_id, disable_guild_select=true. → { url }
+	•	GET /api/discord/guild-status?guildId=<id>
+With bot token, check if our app is in that guild; return { installed: boolean, channels:[{id,name}] }.
+	•	POST /api/setup/discord/set-home-channel
+Body { guildId, channelId } → persist to a pending setup record (see data model below) and optionally post a “Home channel set” confirmation via bot.
+	•	(server internal) POST /api/discord/register-commands?guildId=<id>
+Do not require admin key from the client. Call internally from /api/setup/finish.
+
+Sleeper (Discovery)
+	•	POST /api/setup/sleeper/find
+Body { username, season }
+→ Resolve:
+
+GET https://api.sleeper.app/v1/user/<username>    -> user_id
+GET https://api.sleeper.app/v1/user/<user_id>/leagues/nfl/<season>
+
+Return a trimmed list: [ { league_id, name, avatar, season } ].
+
+	•	POST /api/setup/sleeper/select
+Body { leagueId } → store leagueId in pending setup.
+
+Finalize & persist
+	•	POST /api/setup/finish
+Server gathers pending setup (guild, channel, leagueId, timezone, current website user) and does:
+	1.	Upsert leagues row
+	2.	Upsert members row for website user: role = COMMISH if first member; else MANAGER
+	3.	Register slash commands for guildId
+	4.	Post Welcome in chosen channelId (if not posted yet)
+	5.	Return { ok:true, leagueId, guildId, channelId }
+
+Setup state (optional helper)
+	•	GET /api/setup/status
+Returns { discord: { user, guilds, selectedGuild, installed }, sleeper: { username, season, leagues, selectedLeague }, channel: selectedChannelId } so the stepper can resume mid-flow.
+
+⸻
+
+3) Data model additions
+
+Add a lightweight pending_setup table, so the wizard can resume if the user refreshes:
+
+create table if not exists public.pending_setup (
+  id           uuid primary key default gen_random_uuid(),
+  web_user_id  uuid,                   -- auth.users.id if you use Supabase auth
+  selected_guild_id text,
+  selected_channel_id text,
+  sleeper_username text,
+  sleeper_season text,
+  selected_league_id text,
+  created_at   timestamptz default now(),
+  updated_at   timestamptz default now()
+);
+
+Or store this per-session in Redis/memory; a table is simpler and persistent.
+
+⸻
+
+4) Implementation notes (important little details)
+	•	Discord OAuth (user): scopes identify guilds. Store access_token in a server session (HttpOnly cookie). Use it only to list guilds.
+	•	Bot OAuth (install): scopes bot applications.commands, permissions 84992. Do not show or require admin key on the client.
+	•	Permissions filter: In /my-guilds, filter to guilds where user has MANAGE_GUILD (bit 0x20).
+	•	Welcome + Channel Select: If you already post a Channel Select component, still offer the dropdown in UI—whichever gets set first wins.
+	•	Slash registration: Call the registrar server-side during /setup/finish, not from the browser.
+	•	Sleeper discovery: No auth needed; username → user_id → leagues. This removes the “paste league ID” friction entirely.
+	•	Timezone: Collect on wizard (default from browser), store on league; use it for deadlines/digests.
+	•	Error surfaces: Show concise inline errors (e.g., “We need Manage Server to install”), with a retry button.
+
+⸻
+
+5) Acceptance criteria (what “done” looks like)
+	•	The /setup stepper works end-to-end with no curl and no copy-pasting by the user.
+	•	After Finish:
+	•	A row exists in leagues with { platform:'sleeper', sleeper_league_id, guild_id, channel_id, timezone }.
+	•	A row exists in members for the current website user (role COMMISH if first).
+	•	Slash commands exist in the selected guild (confirm by typing / in Discord).
+	•	Bot has posted the Welcome (or channel is set in DB).
+	•	/api/health remains "status":"ok".
+	•	If the user reloads /setup mid-flow, the wizard can resume from pending_setup.
+
+⸻
+
+6) Quick tasks list (copy to the Agent)
+	1.	Create /setup page with stepper (Discord → Sleeper → Finish).
+	2.	Implement backend routes:
+	•	GET /api/discord/user-auth-url, GET /discord-callback, GET /api/discord/me, GET /api/discord/my-guilds
+	•	GET /api/discord/bot-install-url, GET /api/discord/guild-status
+	•	POST /api/setup/discord/set-home-channel
+	•	POST /api/setup/sleeper/find, POST /api/setup/sleeper/select
+	•	POST /api/setup/finish, GET /api/setup/status
+	3.	Add pending_setup table (or in-memory store if you prefer) and wire persistence.
+	4.	On finish: upsert leagues, upsert members, register commands server-side, post welcome if needed.
+	5.	Do not show admin key on client; keep all sensitive calls server-only.
+	6.	Add small success screens and “Open Discord”/“Open dashboard” CTAs.
+	7.	Verify: run through the wizard yourself—no manual terminal steps required.
+
+⸻
+
+7) After this ships
+	•	You can switch the hero CTA on your landing page to “Add THE COMMISH to Discord” → link to /setup.
+	•	The wizard handles everything: server selection, bot install, channel, Sleeper league, and command registration.
+
+⸻
+
+If you want, give me your preferred timezone default and whether you want the wizard to auto-schedule the weekly digest (yes/no and day/time). I’ll add those defaults into the /setup/finish behaviour so it’s 100% turnkey.

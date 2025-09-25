@@ -146,6 +146,20 @@ export const discordInteractions = pgTable("discord_interactions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const pendingSetup = pgTable("pending_setup", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  webUserId: uuid("web_user_id"), // Future: link to auth.users.id if we add Supabase auth
+  sessionId: text("session_id"), // Alternative: track by session ID for now
+  selectedGuildId: text("selected_guild_id"),
+  selectedChannelId: text("selected_channel_id"),
+  sleeperUsername: text("sleeper_username"),
+  sleeperSeason: text("sleeper_season"),
+  selectedLeagueId: text("selected_league_id"),
+  timezone: text("timezone").default("America/New_York"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Insert schemas
 export const insertAccountSchema = createInsertSchema(accounts).pick({
   email: true,
@@ -221,6 +235,17 @@ export const insertEmbeddingSchema = createInsertSchema(embeddings).pick({
   model: true,
 });
 
+export const insertPendingSetupSchema = createInsertSchema(pendingSetup).pick({
+  webUserId: true,
+  sessionId: true,
+  selectedGuildId: true,
+  selectedChannelId: true,
+  sleeperUsername: true,
+  sleeperSeason: true,
+  selectedLeagueId: true,
+  timezone: true,
+});
+
 // Types
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
@@ -241,6 +266,8 @@ export type InsertEvent = z.infer<typeof insertEventSchema>;
 export type Embedding = typeof embeddings.$inferSelect;
 export type InsertEmbedding = z.infer<typeof insertEmbeddingSchema>;
 export type DiscordInteraction = typeof discordInteractions.$inferSelect;
+export type PendingSetup = typeof pendingSetup.$inferSelect;
+export type InsertPendingSetup = z.infer<typeof insertPendingSetupSchema>;
 
 // Keep legacy user schema for compatibility
 export const users = pgTable("users", {
