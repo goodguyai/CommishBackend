@@ -62,7 +62,15 @@ let validatedEnv: EnvConfig;
 
 export function validateEnvironment(): EnvConfig {
   try {
-    validatedEnv = envSchema.parse(process.env);
+    // Use Supabase as primary database URL if available, fallback to DATABASE_URL
+    const databaseUrl = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
+    
+    const envWithSupabase = {
+      ...process.env,
+      DATABASE_URL: databaseUrl
+    };
+    
+    validatedEnv = envSchema.parse(envWithSupabase);
     
     // Additional validation for conditional requirements
     if (validatedEnv.EMBEDDINGS_PROVIDER === "openai" && !validatedEnv.OPENAI_API_KEY) {

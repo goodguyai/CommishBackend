@@ -778,7 +778,22 @@ export class MemStorage implements IStorage {
   }
 }
 
-// Use DatabaseStorage if DATABASE_URL is available, otherwise MemStorage
-export const storage = process.env.DATABASE_URL || process.env.SUPABASE_POSTGRES_URL 
-  ? new DatabaseStorage() 
-  : new MemStorage();
+// Initialize storage lazily after environment validation
+let _storage: IStorage | undefined;
+
+export function getStorage(): IStorage {
+  if (!_storage) {
+    const databaseUrl = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
+    _storage = databaseUrl ? new DatabaseStorage() : new MemStorage();
+  }
+  return _storage;
+}
+
+// Create a proxy to delay initialization until first access
+export const storage = new Proxy({} as IStorage, {
+  get(target, prop) {
+    const actualStorage = getStorage();
+    const value = (actualStorage as any)[prop];
+    return typeof value === 'function' ? value.bind(actualStorage) : value;
+  }
+});
