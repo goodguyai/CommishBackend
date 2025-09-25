@@ -1,5 +1,5 @@
-import { drizzle } from "drizzle-orm/neon-http";
-import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import { eq, and, desc, sql, cosineDistance } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import type {
@@ -101,7 +101,9 @@ export class DatabaseStorage implements IStorage {
     if (!databaseUrl) {
       throw new Error("DATABASE_URL is required");
     }
-    const connection = neon(databaseUrl);
+    const connection = postgres(databaseUrl, {
+      ssl: { rejectUnauthorized: false }
+    });
     this.db = drizzle(connection, { schema });
   }
 
