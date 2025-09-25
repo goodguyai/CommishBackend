@@ -13,21 +13,25 @@ import { generateDigestContent } from "./services/digest";
 import { EventBus } from "./services/events";
 import { scheduler } from "./lib/scheduler";
 
-const ragService = new RAGService(storage);
-const eventBus = new EventBus(storage);
-
-// Setup event handlers
-eventBus.on("digest_due", async (data) => {
-  console.log("Weekly digest due for league:", data.leagueId);
-  // TODO: Generate and send digest
-});
-
-eventBus.on("sync_due", async (data) => {
-  console.log("Sync due for league:", data.leagueId);
-  // TODO: Trigger Sleeper sync
-});
+// Module-level variables that will be initialized after env validation
+let ragService: RAGService;
+let eventBus: EventBus;
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Initialize services after environment validation
+  ragService = new RAGService(storage);
+  eventBus = new EventBus(storage);
+
+  // Setup event handlers
+  eventBus.on("digest_due", async (data) => {
+    console.log("Weekly digest due for league:", data.leagueId);
+    // TODO: Generate and send digest
+  });
+
+  eventBus.on("sync_due", async (data) => {
+    console.log("Sync due for league:", data.leagueId);
+    // TODO: Trigger Sleeper sync
+  });
   // Dev: Register Discord commands (requires admin key)
   app.post("/api/dev/register-commands", async (req, res) => {
     // Admin authentication
