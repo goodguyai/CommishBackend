@@ -9,6 +9,7 @@ import type {
   DiscordInteraction
 } from "@shared/schema";
 import { EmbeddingResult } from "./services/rag";
+import { env } from "./services/env";
 
 export interface IStorage {
   // Legacy user methods
@@ -97,10 +98,7 @@ export class DatabaseStorage implements IStorage {
   private db;
 
   constructor() {
-    const databaseUrl = process.env.DATABASE_URL || process.env.SUPABASE_POSTGRES_URL;
-    if (!databaseUrl) {
-      throw new Error("DATABASE_URL is required");
-    }
+    const databaseUrl = env.database.url;
     const connection = postgres(databaseUrl, {
       ssl: { rejectUnauthorized: false }
     });

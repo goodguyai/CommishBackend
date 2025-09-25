@@ -32,7 +32,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/dev/register-commands", async (req, res) => {
     // Admin authentication
     const adminKey = req.headers["x-admin-key"];
-    if (!env.ADMIN_KEY || adminKey !== env.ADMIN_KEY) {
+    if (!env.app.adminKey || adminKey !== env.app.adminKey) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     try {
@@ -49,11 +49,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         // Global registration
         const response = await fetch(
-          `https://discord.com/api/v10/applications/${process.env.DISCORD_CLIENT_ID}/commands`,
+          `https://discord.com/api/v10/applications/${env.discord.clientId}/commands`,
           {
             method: "PUT",
             headers: {
-              Authorization: `Bot ${process.env.DISCORD_BOT_TOKEN}`,
+              Authorization: `Bot ${env.discord.botToken}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify(commands),
@@ -105,7 +105,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Test OpenAI embeddings availability (basic check)
     let embeddingsStatus = "available";
     try {
-      if (!process.env.OPENAI_API_KEY) {
+      if (!env.openai.apiKey) {
         embeddingsStatus = "not_configured";
         issues.push("embeddings");
       }
@@ -130,9 +130,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         embeddings: embeddingsStatus
       },
       embeddings: {
-        provider: process.env.EMBEDDINGS_PROVIDER || "openai",
-        model: process.env.EMBED_MODEL || "text-embedding-3-small", 
-        dimension: parseInt(process.env.EMBED_DIM || "1536")
+        provider: "openai",
+        model: env.openai.embedModel,
+        dimension: env.openai.embedDim
       },
       performance: {
         database_latency: databaseLatency,
@@ -218,7 +218,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const signature = req.headers["x-signature-ed25519"] as string;
       const timestamp = req.headers["x-signature-timestamp"] as string;
-      const publicKey = env.DISCORD_PUBLIC_KEY;
+      const publicKey = env.discord.publicKey;
 
       if (!signature || !timestamp) {
         return res.status(401).json({ error: "Missing required headers" });
@@ -500,7 +500,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/digest/run", async (req, res) => {
     // Validate X-Admin-Key header
     const adminKey = req.headers['x-admin-key'];
-    if (!adminKey || adminKey !== env.ADMIN_KEY) {
+    if (!adminKey || adminKey !== env.app.adminKey) {
       return res.status(401).json({ error: "Unauthorized - valid X-Admin-Key required" });
     }
 
@@ -526,7 +526,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const sleeperData = await sleeperService.syncLeagueData(league.sleeperLeagueId);
         
         // Generate digest with real data
-        digestContent = await generateDigestContent(league, sleeperData);
+        digestContent = await generateDigestContent(league, {
+          ...sleeperData,
+          matchups: sleeperData.matchups || []
+        });
       } catch (error) {
         console.warn("Failed to fetch Sleeper data, using fallback digest:", error);
         digestContent = {
