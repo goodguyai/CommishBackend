@@ -29,12 +29,17 @@ const envSchema = z.object({
           const hostPattern = /^(db|aws|gcp)\.[^.]+\.supabase\.co$/;
           return hostPattern.test(parsed.hostname);
         }
+        // Validate Supabase pooler hostname format
+        if (parsed.hostname.includes('pooler.supabase.com')) {
+          const poolerPattern = /^aws-\d+-[^.]+\.pooler\.supabase\.com$/;
+          return poolerPattern.test(parsed.hostname);
+        }
         return true;
       } catch {
         return false;
       }
     }, {
-      message: "DATABASE_URL must be a valid PostgreSQL connection string. For Supabase, use format: postgresql://postgres:password@db.project-ref.supabase.co:5432/postgres?sslmode=require"
+      message: "DATABASE_URL must be a valid PostgreSQL connection string. For Supabase, use format: postgresql://postgres:password@db.project-ref.supabase.co:6543/postgres?sslmode=require or pooler URL"
     }),
   
   // Discord Configuration
@@ -68,8 +73,11 @@ export function validateEnvironment(): EnvConfig {
     // Safety check: must be Supabase
     if (databaseUrl) {
       const url = new URL(databaseUrl);
-      if (!url.hostname.endsWith('.supabase.co')) {
-        throw new Error(`Safety check: expected Supabase host (*.supabase.co), got ${url.hostname}`);
+      const isSupabaseDirect = url.hostname.endsWith('.supabase.co');
+      const isSupabasePooler = url.hostname.endsWith('.pooler.supabase.com');
+      
+      if (!isSupabaseDirect && !isSupabasePooler) {
+        throw new Error(`Safety check: expected Supabase host (*.supabase.co or *.pooler.supabase.com), got ${url.hostname}`);
       }
       if (!databaseUrl.includes('sslmode=require')) {
         throw new Error('Safety check: DATABASE_URL must include sslmode=require for Supabase');
