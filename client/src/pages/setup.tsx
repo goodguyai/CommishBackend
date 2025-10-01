@@ -6,14 +6,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { ArrowLeft, ArrowRight, Check, CheckCircle, ExternalLink, Hash, Bot, Users, Trophy, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CheckCircle, ExternalLink, Hash, Bot, Users, Trophy, Settings, FileText } from "lucide-react";
 
-type SetupStep = "discord" | "sleeper" | "finish";
+type SetupStep = "discord" | "sleeper" | "constitution" | "finish";
 
 interface DiscordUser {
   id: string;
@@ -63,6 +64,7 @@ export default function Setup() {
   const currentYear = new Date().getFullYear();
   const [sleeperSeason, setSleeperSeason] = useState(currentYear.toString());
   const [availableLeagues, setAvailableLeagues] = useState<SleeperLeague[]>([]);
+  const [constitutionText, setConstitutionText] = useState("");
   const { toast} = useToast();
   
   // Generate season options (current year + 2 previous years)
@@ -107,7 +109,7 @@ export default function Setup() {
       // Auto-advance steps based on completion
       if ((status as SetupStatus).discord.user && (status as SetupStatus).discord.selectedChannel) {
         if ((status as SetupStatus).sleeper.selectedLeague) {
-          setCurrentStep("finish");
+          setCurrentStep("constitution");
         } else {
           setCurrentStep("sleeper");
         }
@@ -227,9 +229,17 @@ export default function Setup() {
         sleeperLeagueId
       });
     },
-    onSuccess: () => {
+    onSuccess: (data, sleeperLeagueId) => {
+      // Update local state immediately so constitution step has league ID
+      setSetupData(prev => ({
+        ...prev,
+        sleeper: {
+          ...prev.sleeper,
+          selectedLeague: sleeperLeagueId
+        }
+      }));
       queryClient.invalidateQueries({ queryKey: ["/api/setup/status"] });
-      setCurrentStep("finish");
+      setCurrentStep("constitution");
       toast({
         title: "League Connected! 🏈",
         description: "Sleeper league linked successfully. Data sync started."
@@ -245,6 +255,49 @@ export default function Setup() {
   });
 
   // Final Setup
+  const uploadConstitutionMutation = useMutation({
+    mutationFn: async () => {
+      if (!constitutionText.trim()) {
+        // Skip if no text provided
+        return { skipped: true };
+      }
+      
+      const leagueId = setupData.sleeper.selectedLeague;
+      if (!leagueId) {
+        throw new Error("No league selected");
+      }
+      
+      return await apiRequest("POST", `/api/rag/index/${leagueId}`, {
+        content: constitutionText,
+        version: "1.0.0",
+        type: "ORIGINAL"
+      });
+    },
+    onSuccess: (data: any) => {
+      if (data.skipped) {
+        toast({
+          title: "Constitution Skipped",
+          description: "You can add your league constitution later from the dashboard."
+        });
+      } else {
+        toast({
+          title: "Constitution Uploaded! 📚",
+          description: `Successfully indexed ${data.rulesIndexed} rules from your constitution.`
+        });
+      }
+      setCurrentStep("finish");
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Upload Failed",
+        description: error.message || "Failed to upload constitution. You can add it later from the dashboard.",
+        variant: "destructive"
+      });
+      // Allow continuing even if upload fails
+      setCurrentStep("finish");
+    }
+  });
+
   const finishSetupMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch("/api/setup/finish", {
@@ -331,7 +384,7 @@ export default function Setup() {
   const guildStatus = guildStatusQuery.data;
   const channelsData = channelsQuery.data;
 
-  const stepOrder: SetupStep[] = ["discord", "sleeper", "finish"];
+  const stepOrder: SetupStep[] = ["discord", "sleeper", "constitution", "finish"];
   const currentStepIndex = stepOrder.indexOf(currentStep);
 
   const renderStepIndicator = () => (
@@ -632,6 +685,80 @@ export default function Setup() {
     </Card>
   );
 
+  const renderConstitutionStep = () => (
+    <Card className="max-w-2xl mx-auto" data-testid="constitution-setup-card">
+      <CardHeader className="text-center">
+        <div className="flex justify-center mb-4">
+          <div className="w-16 h-16 bg-purple-500 rounded-full flex items-center justify-center">
+            <FileText className="w-8 h-8 text-white" />
+          </div>
+        </div>
+        <CardTitle className="text-2xl">League Constitution (Optional)</CardTitle>
+        <CardDescription>
+          Paste your league's constitution or rules document. THE COMMISH will use AI to answer questions about your league rules.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="constitution-text">Constitution Text</Label>
+            <Textarea
+              id="constitution-text"
+              value={constitutionText}
+              onChange={(e) => setConstitutionText(e.target.value)}
+              placeholder="Paste your league constitution here...&#10;&#10;Example:&#10;Section 1: Roster Rules&#10;- Teams must maintain 15 active roster spots&#10;- IR slots are available for injured players&#10;&#10;Section 2: Scoring&#10;- PPR scoring format&#10;- 6 points for passing touchdowns"
+              rows={15}
+              className="font-mono text-sm"
+              data-testid="constitution-textarea"
+            />
+            <p className="text-sm text-muted-foreground">
+              {constitutionText.length} characters
+            </p>
+          </div>
+
+          <Alert>
+            <FileText className="w-4 h-4" />
+            <AlertDescription>
+              THE COMMISH will use AI-powered semantic search to answer questions about your league rules. 
+              You can also add or update your constitution later from the dashboard.
+            </AlertDescription>
+          </Alert>
+        </div>
+
+        <div className="space-y-3">
+          <Button
+            onClick={() => uploadConstitutionMutation.mutate()}
+            disabled={uploadConstitutionMutation.isPending}
+            size="lg"
+            className="w-full"
+            data-testid="upload-constitution-button"
+          >
+            {uploadConstitutionMutation.isPending ? "Uploading..." : constitutionText.trim() ? "Upload Constitution" : "Skip for Now"}
+          </Button>
+          
+          {constitutionText.trim() && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                setConstitutionText("");
+                setCurrentStep("finish");
+                toast({
+                  title: "Constitution Skipped",
+                  description: "You can add your league constitution later from the dashboard."
+                });
+              }}
+              size="lg"
+              className="w-full"
+              data-testid="skip-constitution-button"
+            >
+              Skip for Now
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+
   const renderFinishStep = () => (
     <Card className="max-w-2xl mx-auto" data-testid="finish-setup-card">
       <CardHeader className="text-center">
@@ -698,6 +825,7 @@ export default function Setup() {
       <div className="min-h-[600px]">
         {currentStep === "discord" && renderDiscordStep()}
         {currentStep === "sleeper" && renderSleeperStep()}
+        {currentStep === "constitution" && renderConstitutionStep()}
         {currentStep === "finish" && renderFinishStep()}
       </div>
 
@@ -727,7 +855,8 @@ export default function Setup() {
           disabled={
             currentStepIndex === stepOrder.length - 1 ||
             (currentStep === "discord" && !setupData.discord.selectedChannel) ||
-            (currentStep === "sleeper" && !setupData.sleeper.selectedLeague)
+            (currentStep === "sleeper" && !setupData.sleeper.selectedLeague) ||
+            (currentStep === "constitution" && false) // Constitution is optional, always allow next
           }
           data-testid="next-button"
         >

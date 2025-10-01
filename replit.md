@@ -29,10 +29,28 @@ THE COMMISH is a Discord bot designed for fantasy football leagues, primarily in
   - Displays member info, role (Commissioner/Manager), and Discord linkage
   - Hardened with guards for missing league and user validation
 
+### Reminder System (October 1, 2025)
+- **Scheduler Methods**: Added timezone-aware reminder scheduling with multi-interval support (24h, 1h before deadlines)
+- **Event Handler**: `reminder_due` event sends Discord embeds with per-league feature flag checks
+- **Feature Toggles**: Per-league reminders for lineup lock, waiver, trade deadline (default enabled)
+- **Automatic Scheduling**: Integrated with Sleeper sync - automatically schedules reminders after data sync
+- **Timezone Support**: All reminders respect league.timezone setting
+- **Smart Logic**: Skips reminders less than 1h away, schedules 24h reminder only if deadline is 24+ hours away
+
+### Rules Indexing Enhancements (October 1, 2025)
+- **Setup Wizard Constitution Step**: Added optional constitution upload step between Sleeper connection and final activation
+- **Paste Text Interface**: Users can paste league constitution text directly into a textarea during onboarding
+- **Automatic Indexing**: Constitution text is automatically parsed and indexed using existing RAG system with SHA-256 caching
+- **Version Tracking**: Documents are versioned (starting at "1.0.0") for tracking changes over time
+- **Optional Flow**: Users can skip constitution upload and add it later from dashboard
+- **Character Counter**: Real-time character count display for pasted text
+- **Smart Parsing**: System handles both structured JSON and plain text constitutions with automatic section detection
+
 ### Known Limitations
 - Owner mapping endpoints require schema extension (sleeperOwnerId, sleeperTeamName fields on members table)
 - Scheduler handlers lack retry logic for transient failures (acceptable for MVP)
 - Admin key authentication via browser prompt (acceptable for internal dev tools)
+- **Sleeper Deadline Population**: Sleeper API provides trade_deadline as week numbers; converting to precise timestamps requires NFL schedule mapping (enhancement opportunity for full waiver/trade deadline automation)
 
 ## User Preferences
 
