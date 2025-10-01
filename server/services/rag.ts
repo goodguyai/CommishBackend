@@ -12,6 +12,7 @@ export interface EmbeddingResult {
     citations: any[];
     sectionId: string;
   };
+  passages?: string[]; // Extracted relevant passages from the rule text
 }
 
 export class RAGService {
@@ -167,11 +168,113 @@ export class RAGService {
     return rules;
   }
 
+  /**
+   * Extract relevant passages from rule text based on query terms.
+   * Returns sentences containing query terms with surrounding context.
+   */
+  private extractPassages(text: string, query: string, maxPassages: number = 2): string[] {
+    // Normalize query to individual terms (keep 2+ char terms for abbreviations like QB, IR, TE)
+    const queryTerms = query.toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(term => term.length >= 2); // Keep 2-char terms (QB, IR, etc.)
+    
+    if (queryTerms.length === 0) {
+      // No meaningful terms, return beginning of text
+      return [text.substring(0, 200) + (text.length > 200 ? '...' : '')];
+    }
+
+    // Better sentence splitting that preserves punctuation and handles lists
+    // Split on sentence boundaries but keep the punctuation
+    const sentencePattern = /([^.!?]+[.!?]+)/g;
+    let sentences: string[] = [];
+    let match;
+    
+    while ((match = sentencePattern.exec(text)) !== null) {
+      const sentence = match[1].trim();
+      if (sentence.length > 0) {
+        sentences.push(sentence);
+      }
+    }
+    
+    // Handle remaining text (no ending punctuation)
+    const lastIndex = text.lastIndexOf(sentences[sentences.length - 1] || '');
+    if (lastIndex >= 0) {
+      const remainder = text.substring(lastIndex + (sentences[sentences.length - 1]?.length || 0)).trim();
+      if (remainder.length > 0) {
+        sentences.push(remainder);
+      }
+    }
+    
+    // If no sentences found, treat entire text as one sentence
+    if (sentences.length === 0) {
+      sentences = [text];
+    }
+    
+    // Score each sentence based on query term matches
+    const scoredSentences = sentences.map((sentence, index) => {
+      const lowerSentence = sentence.toLowerCase();
+      let score = 0;
+      
+      // Count matching query terms
+      for (const term of queryTerms) {
+        if (lowerSentence.includes(term)) {
+          score += 2; // Base score for term match
+          // Bonus for multiple occurrences
+          const occurrences = (lowerSentence.match(new RegExp(term, 'g')) || []).length;
+          score += (occurrences - 1) * 0.5;
+        }
+      }
+      
+      return { sentence: sentence.trim(), index, score };
+    }).filter(s => s.score > 0); // Only keep sentences with matches
+
+    // Sort by score descending
+    scoredSentences.sort((a, b) => b.score - a.score);
+
+    // Extract top passages with context
+    const passages: string[] = [];
+    const usedIndices = new Set<number>();
+
+    for (const scored of scoredSentences.slice(0, maxPassages * 2)) { // Check more candidates
+      if (usedIndices.has(scored.index)) continue;
+      
+      // Include surrounding context (1 sentence before and after if available)
+      const contextStart = Math.max(0, scored.index - 1);
+      const contextEnd = Math.min(sentences.length - 1, scored.index + 1);
+      
+      const passageSentences = [];
+      for (let i = contextStart; i <= contextEnd; i++) {
+        if (!usedIndices.has(i)) {
+          passageSentences.push(sentences[i].trim());
+          usedIndices.add(i);
+        }
+      }
+      
+      let passage = passageSentences.join(' '); // Use space instead of '. ' to preserve original punctuation
+      if (passage.length > 300) {
+        passage = passage.substring(0, 297) + '...';
+      }
+      
+      passages.push(passage);
+      
+      if (passages.length >= maxPassages) break;
+    }
+
+    // If no passages found (shouldn't happen but handle gracefully)
+    if (passages.length === 0) {
+      return [text.substring(0, 200) + (text.length > 200 ? '...' : '')];
+    }
+
+    return passages;
+  }
+
   async searchSimilarRules(
     leagueId: string,
     query: string,
     limit: number = 5,
-    threshold: number = 0.7
+    threshold: number = 0.7,
+    includePassages: boolean = true
   ): Promise<EmbeddingResult[]> {
     try {
       // Generate embedding for the query with graceful fallback
@@ -190,6 +293,13 @@ export class RAGService {
         limit,
         threshold
       );
+
+      // Enhance results with passage extraction
+      if (includePassages) {
+        for (const result of results) {
+          result.passages = this.extractPassages(result.rule.text, query);
+        }
+      }
 
       return results;
     } catch (error) {

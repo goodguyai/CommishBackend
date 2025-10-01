@@ -1212,7 +1212,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/rag/search/:leagueId", async (req, res) => {
     try {
       const { leagueId } = req.params;
-      const { query, limit, threshold } = req.body;
+      const { query, limit, threshold, includePassages } = req.body;
       
       if (!query) {
         return res.status(400).json({ error: "query is required" });
@@ -1222,7 +1222,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         leagueId,
         query,
         limit || 5,
-        threshold || 0.7
+        threshold || 0.7,
+        includePassages !== false // Default to true
       );
       
       res.json(results);

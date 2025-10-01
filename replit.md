@@ -46,6 +46,18 @@ THE COMMISH is a Discord bot designed for fantasy football leagues, primarily in
 - **Character Counter**: Real-time character count display for pasted text
 - **Smart Parsing**: System handles both structured JSON and plain text constitutions with automatic section detection
 
+### RAG Semantic Search Improvements (October 1, 2025)
+- **Passage-Scoped Extraction**: New algorithm extracts most relevant passages from rules based on query terms
+  - Sentence-level scoring matching query terms
+  - Context inclusion (surrounding sentences for better understanding)
+  - Smart passage truncation (max 300 chars per passage)
+  - Multiple passage support (up to 2 per rule by default)
+- **Enhanced EmbeddingResult Interface**: Added optional `passages` field containing extracted relevant text snippets
+- **Configurable Top-K**: Already supported via `limit` parameter (default 5), now better documented
+- **Confidence Threshold**: Already supported via `threshold` parameter (default 0.7), applied at vector search level
+- **API Enhancement**: POST /api/rag/search/:leagueId now accepts `includePassages` parameter (defaults to true)
+- **Graceful Fallbacks**: If no query terms match, returns beginning of rule text as fallback passage
+
 ### Known Limitations
 - Owner mapping endpoints require schema extension (sleeperOwnerId, sleeperTeamName fields on members table)
 - Scheduler handlers lack retry logic for transient failures (acceptable for MVP)
