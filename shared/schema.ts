@@ -26,7 +26,12 @@ export const eventTypeEnum = pgEnum("event_type", [
   "RULES_UPDATED", 
   "SLEEPER_SYNCED", 
   "DIGEST_DUE",
+  "DIGEST_SENT",
+  "DIGEST_SKIPPED",
+  "DIGEST_FAILED",
   "COMMAND_EXECUTED",
+  "RULES_INDEX_FAILED",
+  "MISCONFIGURED",
   "ERROR_OCCURRED"
 ]);
 
@@ -47,11 +52,18 @@ export const leagues = pgTable("leagues", {
   guildId: text("guild_id"),
   channelId: text("channel_id"),
   timezone: text("timezone").default("America/New_York"),
+  tone: text("tone").default("neutral"),
   featureFlags: jsonb("feature_flags").default({
     qa: true,
     deadlines: true,
     digest: true,
-    trade_helper: false
+    trade_helper: false,
+    autoMeme: false,
+    reminders: {
+      lineupLock: true,
+      waiver: true,
+      tradeDeadline: true
+    }
   }),
   modelPrefs: jsonb("model_prefs").default({
     maxTokens: 1000,
@@ -66,6 +78,8 @@ export const members = pgTable("members", {
   leagueId: uuid("league_id").references(() => leagues.id).notNull(),
   discordUserId: text("discord_user_id").notNull(),
   role: memberRoleEnum("role").notNull(),
+  sleeperOwnerId: text("sleeper_owner_id"),
+  sleeperTeamName: text("sleeper_team_name"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -160,6 +174,17 @@ export const pendingSetup = pgTable("pending_setup", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const ownerMappings = pgTable("owner_mappings", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  sleeperOwnerId: text("sleeper_owner_id").notNull(),
+  sleeperTeamName: text("sleeper_team_name"),
+  discordUserId: text("discord_user_id").notNull(),
+  discordUsername: text("discord_username"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Insert schemas
 export const insertAccountSchema = createInsertSchema(accounts).pick({
   email: true,
@@ -174,6 +199,7 @@ export const insertLeagueSchema = createInsertSchema(leagues).pick({
   guildId: true,
   channelId: true,
   timezone: true,
+  tone: true,
   featureFlags: true,
   modelPrefs: true,
 });
@@ -182,6 +208,8 @@ export const insertMemberSchema = createInsertSchema(members).pick({
   leagueId: true,
   discordUserId: true,
   role: true,
+  sleeperOwnerId: true,
+  sleeperTeamName: true,
 });
 
 export const insertDocumentSchema = createInsertSchema(documents).pick({
@@ -246,6 +274,14 @@ export const insertPendingSetupSchema = createInsertSchema(pendingSetup).pick({
   timezone: true,
 });
 
+export const insertOwnerMappingSchema = createInsertSchema(ownerMappings).pick({
+  leagueId: true,
+  sleeperOwnerId: true,
+  sleeperTeamName: true,
+  discordUserId: true,
+  discordUsername: true,
+});
+
 // Types
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
@@ -268,6 +304,8 @@ export type InsertEmbedding = z.infer<typeof insertEmbeddingSchema>;
 export type DiscordInteraction = typeof discordInteractions.$inferSelect;
 export type PendingSetup = typeof pendingSetup.$inferSelect;
 export type InsertPendingSetup = z.infer<typeof insertPendingSetupSchema>;
+export type OwnerMapping = typeof ownerMappings.$inferSelect;
+export type InsertOwnerMapping = z.infer<typeof insertOwnerMappingSchema>;
 
 // Keep legacy user schema for compatibility
 export const users = pgTable("users", {

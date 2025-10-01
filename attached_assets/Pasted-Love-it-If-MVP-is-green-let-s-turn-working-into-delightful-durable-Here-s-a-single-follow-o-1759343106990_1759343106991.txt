@@ -1,0 +1,230 @@
+Love it. If MVP is green, let’s turn “working” into “delightful + durable.” Here’s a single follow-on work order you can paste into Replit to push THE COMMISH from v0 → solid Beta. It’s laid out GitHub-style, numbered, with guardrails, step-by-step tasks, and acceptance checks.
+
+⸻
+
+SPRINT PLAN — THE COMMISH Beta Hardening & QoL (Paste into Replit Agent)
+
+Context invariants (do not change):
+	•	Keep APP_BASE_URL=https://thecommish.replit.app (no localhost).
+	•	Keep Supabase as only DB; no Neon/Replit DB; no schema drift beyond explicit migrations.
+	•	Keep env reads via server/services/env.ts only.
+	•	Keep Discord interactions raw-body + Ed25519 verification intact.
+	•	If any guardrail would be violated, STOP and print a one-line alternative.
+
+⸻
+
+1) Finish Setup Wizard polish (happy path + edge cases)
+
+1.1 Resume setup state
+	•	Persist wizard step in pending_setup (or existing session store) with TTL.
+	•	If user returns to /setup, prefill guild/channel, Sleeper username, selected league.
+
+1.2 Discord error UX
+	•	If bot lacks permission to view channels → surface “Grant View Channel” helper + open OAuth URL with needed perms.
+	•	If channel list empty → detect and say “Select a text channel where THE COMMISH can post.”
+
+1.3 Sleeper edge cases
+	•	Handle “username not found”, “no leagues this season”, “private league” gracefully.
+	•	Add quick “Season” dropdown (default current year).
+
+Acceptance
+
+# After partial Step 1, reload /setup → state is persisted
+# Try /api/discord/channels for a guild where bot lacks perms → JSON error {code, message, hint}
+# Try sleeper username that doesn’t exist → friendly UI error, no crash
+
+
+⸻
+
+2) Commissioner Dashboard: Owner Mapping + Status
+
+2.1 Owner mapping UI
+	•	Page: /dashboard → “Owner Mapping” card:
+	•	Left: Sleeper teams (team name, owner display).
+	•	Right: Discord members (guild members the bot can see).
+	•	Drag/drop or select pairings; save via POST /api/owners/map.
+
+2.2 Mention semantics
+	•	Save { sleeperOwnerId -> discordUserId } map per league.
+	•	Expose GET /api/owners?leagueId= returning current mappings.
+
+2.3 Status card
+	•	Show ✓ Discord, ✓ Channel, ✓ Sleeper, ✓ Rules indexed, last sync time.
+	•	Show most recent 5 events from /api/events?leagueId=.
+
+Acceptance
+
+curl -s "$APP_BASE_URL/api/owners?leagueId=<LID>" | jq  # list includes any new mappings
+# In DB, league row shows channelId, sleeperLeagueId present
+
+
+⸻
+
+3) Slash Commands completeness & quality
+
+3.1 Commands
+	•	/rules question:<text> & /scoring question:<text>:
+	•	League-scoped RAG search, cite source title/section if available.
+	•	Fast ACK (defer), then follow-up answer within 3s budget.
+	•	/help:
+	•	List available commands + quick tips.
+	•	/reindex (commish-only):
+	•	Ephemeral “Reindex started”, run indexer on last rules doc.
+	•	/whoami:
+	•	Return mapped team if exists; else helpful next step.
+
+3.2 Personality & tone
+	•	Add per-league setting: tone in DB (neutral/sassy/formal/meme).
+	•	Message wrapper applies tone consistently to bot posts (digest, reminders, /rules answers).
+
+Acceptance
+
+# In Discord, all commands visible and respond
+# /whoami returns mapping when set, helpful prompt when not
+
+
+⸻
+
+4) Weekly Digest + Reminders (MVP reliable)
+
+4.1 Digest generation
+	•	Ensure scheduler runs daily and posts weekly (configurable day/time) to league channel.
+	•	Pull standings/matchups from Sleeper; include:
+	•	Top scorer, closest game, upset alert, waiver highlights (if available).
+	•	Respect Discord embed limits (4096 desc, 6000 total).
+
+4.2 Reminders
+	•	Per-league toggles: lineup lock, waiver, trade deadline.
+	•	Compute times from league timezone; enqueue reminders with jitter + last-run guard.
+
+4.3 Admin test buttons
+	•	On /dashboard:
+	•	“Run Weekly Digest (test)” → POST /api/digest/run?leagueId=... (admin key).
+	•	“Force Sleeper Sync” → POST /api/sleeper/sync?leagueId=....
+
+Acceptance
+
+curl -s -X POST "$APP_BASE_URL/api/digest/run?leagueId=<LID>" -H "X-Admin-Key: $ADMIN_KEY" | jq
+# Embed appears in Discord channel; check tone applied
+
+
+⸻
+
+5) Rules Indexing & RAG hardening
+
+5.1 Upload path
+	•	/setup Step 3: allow paste text (MVP); store in documents with version; index to embeddings (pgvector 1536).
+	•	SHA-256 cache; on duplicate content skip re-embedding.
+
+5.2 Search quality
+	•	Top-k semantic search then passage-scoped answer; always show “Source:  v”.
+	•	“No guessing” policy: if confidence below threshold, answer: “I can’t find this in your rules.”
+
+Acceptance
+
+# POST index → returns {ok:true, chunksIndexed:n}
+# /rules question referencing pasted text → returns relevant answer w/ citation
+
+
+⸻
+
+6) Engagement boosts (fast wins)
+
+6.1 Quick polls
+	•	POST /api/polls (admin key) to create a Discord message with buttons: “Bust of the week?” options auto-filled from top scorers.
+	•	/dashboard → “Create Weekly Poll” (simple form).
+
+6.2 Auto-meme (toggle)
+	•	For blowout > X points, post a congratulatory line with a safe GIF link (no external API; use a static list or disable if not desired).
+	•	Controlled via per-league features.autoMeme flag.
+
+Acceptance
+
+# Toggle autoMeme → true; simulate blowout in digest run; see extra line appended
+# Create poll from dashboard; buttons render in Discord
+
+
+⸻
+
+7) Observability & Errors
+
+7.1 Logging
+	•	All API routes include requestId + duration + outcome in logs.
+	•	External calls (Discord/Sleeper/OpenAI): log provider, ms latency, status code (no secrets).
+
+7.2 Health detail
+	•	/api/health includes issues:[...] when degraded; database latency, provider statuses.
+	•	When embeddings 429/timeout, indexer returns structured error: { error: { code, message, hint } } and creates an events row rules_index_failed.
+
+Acceptance
+
+curl -s $APP_BASE_URL/api/health | jq     # shows clear ‘issues’ if any
+curl -s "$APP_BASE_URL/api/events?limit=5" | jq  # includes index/digest events
+
+
+⸻
+
+8) Data + Migrations (minimal, explicit)
+
+8.1 Schema
+	•	If you need small additions (e.g., leagues.tone, leagues.features JSONB, owner_mappings), create explicit Drizzle migrations; keep pgvector dim=1536; do not move or drop existing core tables.
+
+8.2 Supabase-safe SQL
+	•	No extension changes (pgvector already installed). No dropping public objects. Keep everything under existing schemas.
+
+Acceptance
+
+npm run db:push  # clean
+# Health remains ok; events/owners endpoints still work
+
+
+⸻
+
+9) Final QA script (Agent must run + paste outputs)
+
+# 1) Health
+curl -s $APP_BASE_URL/api/health | jq
+
+# 2) Events head
+curl -s "$APP_BASE_URL/api/events?limit=5" | jq
+
+# 3) Sleeper browse (replace handle)
+curl -s "$APP_BASE_URL/api/sleeper/leagues?username=<YOUR_HANDLE>&season=$(date +%Y)" | jq | head -n 40
+
+# 4) Owners list (after mapping 1 pair in UI)
+curl -s "$APP_BASE_URL/api/owners?leagueId=<LID>" | jq
+
+# 5) Test digest
+curl -s -X POST "$APP_BASE_URL/api/digest/run?leagueId=<LID>" -H "X-Admin-Key: $ADMIN_KEY" | jq
+
+# 6) Index sample rules (if needed)
+curl -s -X POST "$APP_BASE_URL/api/rag/index/<LID>" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"SECTION 1: Draft in August.","contentType":"text/plain","title":"Rules","version":"2025.1"}' | jq
+
+If anything fails, include: failing endpoint, response JSON, last 20 server log lines, and the exact one-step fix you applied.
+
+⸻
+
+10) Deliverable summary (Agent must output)
+	•	What changed (files, endpoints, pages).
+	•	Migrations applied (list + short description).
+	•	New toggles (tone, reminders, autoMeme).
+	•	Acceptance outputs (paste JSON).
+	•	Known gaps (bullets + proposed next actions).
+
+⸻
+
+Notes
+	•	Keep edits additive and scoped; don’t rewrite setup wizard—complete it.
+	•	Keep Discord perms minimal (View Channels, Send Messages, Read History, Embed Links).
+	•	Time-box expensive calls; defer noncritical work with follow-ups.
+
+⸻
+
+After this sprint (optional next)
+	•	ESPN/Yahoo adapters, Dynasty keepers UI, dues tracking (lightweight), commish announcements with approvals, conflict detection in rules.
+
+⸻
+
+That’s the play. Paste that into Replit and let it rip. When it reports back, I’ll give you a quick “go/no-go” verification checklist and we’ll move to Beta invites.
