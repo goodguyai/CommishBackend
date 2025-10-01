@@ -62,7 +62,23 @@ export default function Setup() {
   const [sleeperUsername, setSleeperUsername] = useState("");
   const [sleeperSeason, setSleeperSeason] = useState(new Date().getFullYear().toString());
   const [availableLeagues, setAvailableLeagues] = useState<SleeperLeague[]>([]);
-  const { toast } = useToast();
+  const { toast} = useToast();
+
+  // Check for OAuth errors in URL params
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const error = params.get('error');
+    
+    if (error === 'oauth_failed') {
+      toast({
+        title: "Discord Authentication Failed",
+        description: "We couldn't connect to your Discord account. This may be due to permission issues or a cancelled login. Please try again.",
+        variant: "destructive"
+      });
+      // Clean URL
+      window.history.replaceState({}, '', '/setup');
+    }
+  }, [toast]);
 
   // Load setup status on mount
   const { data: status } = useQuery({
@@ -112,10 +128,25 @@ export default function Setup() {
   const botInstallMutation = useMutation({
     mutationFn: async (guildId: string) => {
       const response = await fetch(`/api/discord/bot-install-url?guildId=${guildId}`);
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to generate install URL');
+      }
       return response.json();
     },
     onSuccess: (data) => {
       window.open(data.url, "_blank");
+      toast({
+        title: "Install THE COMMISH",
+        description: "A new window opened. Please authorize the bot with the required permissions and return here to continue.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Bot Installation Error",
+        description: `Failed to start bot installation: ${error.message}. Please ensure you have administrator permissions in the server.`,
+        variant: "destructive"
+      });
     }
   });
 
@@ -134,6 +165,13 @@ export default function Setup() {
       toast({
         title: "Discord Setup Complete",
         description: "Channel configured! Bot commands registered and welcome message posted. 🎉"
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Channel Configuration Failed",
+        description: `Failed to configure channel: ${error.message}. Please ensure the bot has permission to access this channel.`,
+        variant: "destructive"
       });
     }
   });
@@ -215,20 +253,59 @@ export default function Setup() {
     enabled: !!setupData.discord.user
   });
 
-  const { data: guilds } = useQuery({
+  const guildsQuery = useQuery({
     queryKey: ["/api/discord/my-guilds"],
-    enabled: !!setupData.discord.user
+    enabled: !!setupData.discord.user,
+    retry: 1
   });
 
-  const { data: guildStatus } = useQuery({
+  const guildStatusQuery = useQuery({
     queryKey: ["/api/discord/guild-status", setupData.discord.selectedGuild],
-    enabled: !!setupData.discord.selectedGuild
+    enabled: !!setupData.discord.selectedGuild,
+    retry: 1
   });
 
-  const { data: channelsData } = useQuery({
+  const channelsQuery = useQuery({
     queryKey: ["/api/discord/channels", setupData.discord.selectedGuild],
-    enabled: !!setupData.discord.selectedGuild && !!(guildStatus as any)?.installed
+    enabled: !!setupData.discord.selectedGuild && !!(guildStatusQuery.data as any)?.installed,
+    retry: 1
   });
+
+  // Error handling for Discord API queries (React Query v5 pattern)
+  useEffect(() => {
+    if (guildsQuery.isError) {
+      toast({
+        title: "Failed to Load Servers",
+        description: "Unable to fetch your Discord servers. This may be a permission issue or network problem. Please try reconnecting your Discord account.",
+        variant: "destructive"
+      });
+    }
+  }, [guildsQuery.isError, toast]);
+
+  useEffect(() => {
+    if (guildStatusQuery.isError) {
+      toast({
+        title: "Failed to Check Bot Status",
+        description: "Unable to verify if the bot is installed. Please ensure you have permissions to manage this server and try again.",
+        variant: "destructive"
+      });
+    }
+  }, [guildStatusQuery.isError, toast]);
+
+  useEffect(() => {
+    if (channelsQuery.isError) {
+      toast({
+        title: "Failed to Load Channels",
+        description: "Unable to fetch channels from Discord. This usually means the bot lacks 'View Channels' permission. Please check bot permissions in Server Settings → Roles.",
+        variant: "destructive"
+      });
+    }
+  }, [channelsQuery.isError, toast]);
+
+  // Destructure data for backwards compatibility
+  const guilds = guildsQuery.data;
+  const guildStatus = guildStatusQuery.data;
+  const channelsData = channelsQuery.data;
 
   const stepOrder: SetupStep[] = ["discord", "sleeper", "finish"];
   const currentStepIndex = stepOrder.indexOf(currentStep);
@@ -375,29 +452,45 @@ export default function Setup() {
 
                     <div className="space-y-3">
                       <Label className="text-base font-medium">Choose Home Channel</Label>
-                      <Select 
-                        value={setupData.discord.selectedChannel || ""} 
-                        onValueChange={(channelId) => 
-                          setChannelMutation.mutate({ 
-                            guildId: setupData.discord.selectedGuild!, 
-                            channelId 
-                          })
-                        }
-                      >
-                        <SelectTrigger data-testid="channel-select">
-                          <SelectValue placeholder="Select a channel..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {((channelsData as any)?.channels || []).map((channel: any) => (
-                            <SelectItem key={channel.id} value={channel.id}>
-                              # {channel.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-sm text-muted-foreground">
-                        This is where THE COMMISH will post league updates and respond to commands.
-                      </p>
+                      {((channelsData as any)?.channels || []).length === 0 ? (
+                        <Alert variant="destructive">
+                          <AlertDescription>
+                            No channels available. This usually means the bot doesn't have permission to view channels in this server. Please:
+                            <ol className="list-decimal list-inside mt-2 space-y-1">
+                              <li>Go to Server Settings → Roles</li>
+                              <li>Find "THE COMMISH" role</li>
+                              <li>Enable "View Channels" permission</li>
+                              <li>Refresh this page</li>
+                            </ol>
+                          </AlertDescription>
+                        </Alert>
+                      ) : (
+                        <>
+                          <Select 
+                            value={setupData.discord.selectedChannel || ""} 
+                            onValueChange={(channelId) => 
+                              setChannelMutation.mutate({ 
+                                guildId: setupData.discord.selectedGuild!, 
+                                channelId 
+                              })
+                            }
+                          >
+                            <SelectTrigger data-testid="channel-select">
+                              <SelectValue placeholder="Select a channel..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {((channelsData as any)?.channels || []).map((channel: any) => (
+                                <SelectItem key={channel.id} value={channel.id}>
+                                  # {channel.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-sm text-muted-foreground">
+                            This is where THE COMMISH will post league updates and respond to commands.
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
