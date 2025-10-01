@@ -1,0 +1,72 @@
+You’re good on (1) and (2).
+For (3) the right fix is both a small Supabase change and a tiny Replit/env tweak so the app never falls back again.
+
+Here’s the “do-this-exactly” plan:
+
+What to change in Supabase (once)
+	1.	Use the Transaction Pooler (IPv4-friendly) string
+
+	•	Supabase → your project → Connect (top bar) → Connection string → pick Transaction pooler.
+	•	Copy the full URI (it uses port 6543 and includes sslmode=require). Example:
+
+postgresql://postgres:<PASSWORD>@db.<ref>.supabase.co:6543/postgres?sslmode=require
+
+	•	If you see a banner “Dedicated Pooler is not IPv4 compatible”, that’s fine—we’re explicitly using the Transaction pooler. (If you later move to the Dedicated Pooler, buy the IPv4 add-on or keep using the transaction pooler for the app.)
+
+	2.	(Optional) Verify DB accepts external IPv4
+
+	•	Settings → Database → Settings: leave “Enforce SSL on incoming connections” off (we already have sslmode=require).
+	•	No network restrictions yet. (If you later restrict, add Replit egress ranges.)
+
+What to change in Replit (now)
+	3.	Update secrets (single source of truth)
+
+	•	Set DATABASE_URL to the transaction pooler URI you just copied (port 6543).
+	•	Ensure PGSSLMODE = require.
+	•	Remove if present: PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE (they can silently override DATABASE_URL).
+
+	4.	Prefer IPv4 in Node
+Add a secret:
+
+	•	NODE_OPTIONS = --dns-result-order=ipv4first
+
+	5.	Restart the app and check the startup banner shows:
+
+Database: db.<ref>.supabase.co:6543
+App URL: https://THECOMMISH.replit.app
+
+One paste for the Replit Agent (do this verbatim)
+
+Make the app use Supabase transaction pooler over IPv4 and remove all fallbacks
+	1.	In Publishing → Production app secrets:
+
+	•	Set DATABASE_URL to the Supabase Transaction pooler URI (port 6543, sslmode=require).
+	•	Set PGSSLMODE=require.
+	•	Set NODE_OPTIONS=--dns-result-order=ipv4first.
+	•	Remove PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE if they exist.
+
+	2.	In code:
+
+	•	Ensure server/storage.ts builds the pg Pool only from our env service (env.database.url). No direct process.env.* and no @neondatabase/serverless.
+	•	Add this safety check right after we parse the URL:
+
+const u = new URL(env.database.url);
+if (!u.hostname.endsWith('.supabase.co')) {
+  throw new Error(`Safety check: expected Supabase host, got ${u.hostname}`);
+}
+
+
+	•	Keep ssl: { rejectUnauthorized: false } and keepAlive: true in the Pool options.
+
+	3.	In server/routes.ts healthcheck, make sure storage.runRawSQL('SELECT 1') is used (no hardcoded “connected”).
+	4.	In the startup banner, log the parsed DB host/port and APP_BASE_URL.
+	5.	Restart, then run:
+
+	•	curl -s $APP_BASE_URL/api/health | jq → expect "database":"connected".
+	•	Confirm banner shows db.<ref>.supabase.co:6543.
+
+If you still ever see ENOTFOUND after this
+	•	It usually means the app was accidentally pointed at the Dedicated Pooler without IPv4 add-on. Switch the connection string back to Transaction pooler (port 6543), or purchase the IPv4 add-on for Dedicated Pooler.
+	•	Keep NODE_OPTIONS=--dns-result-order=ipv4first regardless—it future-proofs DNS on Node 18/20.
+
+That’s it—do the Supabase pooler string + the Replit env cleanup, and the flips should stop for good.
