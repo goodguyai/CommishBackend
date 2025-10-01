@@ -309,7 +309,15 @@ export class DiscordService {
       },
       {
         name: "scoring",
-        description: "Display current scoring settings",
+        description: "Display scoring settings or ask scoring questions",
+        options: [
+          {
+            name: "question",
+            description: "Optional: Ask a question about scoring (leave blank for summary)",
+            type: 3, // STRING
+            required: false,
+          },
+        ],
       },
       {
         name: "help",

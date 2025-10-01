@@ -1460,17 +1460,38 @@ async function handleRulesCommand(interaction: any, league: any, requestId: stri
         league.tone
       );
 
+      // Normalize and deduplicate citations
+      const seenCitations = new Set<string>();
+      const normalizedCitations = response.citations
+        .filter((citation: any) => {
+          const key = `${citation.ruleKey}:${citation.section || ''}`;
+          if (seenCitations.has(key)) return false;
+          seenCitations.add(key);
+          return true;
+        })
+        .map((citation: any, index: number) => {
+          const section = citation.section ? ` (${citation.section})` : '';
+          const excerpt = citation.text?.substring(0, 150) || 'No excerpt available';
+          return `${index + 1}. **${citation.ruleKey}**${section}\n   "${excerpt}${citation.text?.length > 150 ? '...' : ''}"`;
+        });
+
+      // Check confidence level
+      const confidence = response.confidence || 1.0;
+      const confidenceWarning = confidence < 0.7 
+        ? '\n\n⚠️ *Low confidence - please verify with your commissioner*' 
+        : '';
+
       const embed = {
         title: "📋 Rules Query Result",
-        description: response.answer,
-        color: 0x5865F2,
-        fields: response.citations.map((citation: any, index: number) => ({
-          name: `Citation ${index + 1}`,
-          value: `**${citation.ruleKey}**: ${citation.text.substring(0, 100)}...`,
+        description: response.answer + confidenceWarning,
+        color: confidence < 0.7 ? 0xFBBF24 : 0x5865F2, // Yellow for low confidence
+        fields: normalizedCitations.length > 0 ? [{
+          name: "📚 Citations",
+          value: normalizedCitations.join('\n\n'),
           inline: false,
-        })),
+        }] : [],
         footer: {
-          text: `Tokens used: ${response.tokensUsed} • Request ID: ${requestId}`,
+          text: `Confidence: ${(confidence * 100).toFixed(0)}% • Tokens: ${response.tokensUsed} • ${requestId}`,
         },
       };
 
@@ -1538,6 +1559,8 @@ async function handleDeadlinesCommand(interaction: any, league: any, requestId: 
 }
 
 async function handleScoringCommand(interaction: any, league: any, requestId: string) {
+  const question = interaction.data?.options?.[0]?.value;
+
   try {
     if (!league.sleeperLeagueId) {
       return {
@@ -1552,24 +1575,107 @@ async function handleScoringCommand(interaction: any, league: any, requestId: st
     const sleeperLeague = await sleeperService.getLeague(league.sleeperLeagueId);
     const scoring = sleeperLeague.scoring_settings;
 
-    const embed = {
-      title: "🏈 Scoring Settings",
-      description: Object.entries(scoring)
-        .filter(([_, value]) => value !== 0)
-        .map(([key, value]) => `**${key.replace(/_/g, ' ').toUpperCase()}**: ${value}`)
-        .join('\n'),
-      color: 0x10B981,
-      footer: {
-        text: `${league.name} • Powered by Sleeper`,
-      },
-    };
+    // If no question, show summary
+    if (!question) {
+      const embed = {
+        title: "🏈 Scoring Settings",
+        description: Object.entries(scoring)
+          .filter(([_, value]) => value !== 0)
+          .map(([key, value]) => `**${key.replace(/_/g, ' ').toUpperCase()}**: ${value}`)
+          .join('\n'),
+        color: 0x10B981,
+        footer: {
+          text: `${league.name} • Powered by Sleeper`,
+        },
+      };
+
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          embeds: [embed],
+          flags: 64,
+        },
+      };
+    }
+
+    // Question provided - use RAG + DeepSeek for answer
+    setTimeout(async () => {
+      try {
+        // Build synthetic corpus from scoring rules + Sleeper settings
+        const scoringText = Object.entries(scoring)
+          .filter(([_, value]) => value !== 0)
+          .map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value} points`)
+          .join('\n');
+
+        const syntheticRules = [
+          {
+            text: `League Scoring Settings (from Sleeper):\n${scoringText}`,
+            citations: [{ source: 'Sleeper API', timestamp: new Date().toISOString() }],
+            ruleKey: 'Sleeper Scoring'
+          }
+        ];
+
+        // Search for relevant rules from constitution
+        const relevantRules = await ragService.searchSimilarRules(league.id, question, 2, 0.5);
+        const allRules = [...syntheticRules, ...relevantRules.map(r => r.rule)];
+
+        const response = await deepSeekService.answerRulesQuery(
+          question,
+          allRules,
+          { leagueName: league.name, scoringSettings: scoring },
+          league.tone
+        );
+
+        // Normalize and deduplicate citations
+        const seenCitations = new Set<string>();
+        const normalizedCitations = response.citations
+          .filter((citation: any) => {
+            const key = `${citation.ruleKey}:${citation.section || ''}`;
+            if (seenCitations.has(key)) return false;
+            seenCitations.add(key);
+            return true;
+          })
+          .map((citation: any, index: number) => {
+            const section = citation.section ? ` (${citation.section})` : '';
+            const excerpt = citation.text?.substring(0, 150) || 'No excerpt available';
+            return `${index + 1}. **${citation.ruleKey}**${section}\n   "${excerpt}${citation.text?.length > 150 ? '...' : ''}"`;
+          });
+
+        const confidence = response.confidence || 1.0;
+        const confidenceWarning = confidence < 0.7 
+          ? '\n\n⚠️ *Low confidence - please verify with your commissioner*' 
+          : '';
+
+        const embed = {
+          title: "🏈 Scoring Query Result",
+          description: response.answer + confidenceWarning,
+          color: confidence < 0.7 ? 0xFBBF24 : 0x10B981,
+          fields: normalizedCitations.length > 0 ? [{
+            name: "📚 Citations",
+            value: normalizedCitations.join('\n\n'),
+            inline: false,
+          }] : [],
+          footer: {
+            text: `Confidence: ${(confidence * 100).toFixed(0)}% • Tokens: ${response.tokensUsed} • ${requestId}`,
+          },
+        };
+
+        await discordService.followUpInteraction(interaction.token, {
+          embeds: [embed],
+          flags: 64,
+        });
+      } catch (error) {
+        console.error("Scoring query failed:", error);
+        await discordService.followUpInteraction(interaction.token, {
+          content: "❌ Failed to process scoring query. Please try again.",
+          flags: 64,
+        });
+      }
+    }, 100);
 
     return {
-      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: {
-        embeds: [embed],
-        flags: 64,
-      },
+      type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { flags: 64 },
     };
   } catch (error) {
     console.error("Scoring command failed:", error);
@@ -1600,8 +1706,8 @@ async function handleHelpCommand(interaction: any) {
         inline: false,
       },
       {
-        name: "🏈 /scoring",
-        value: "Display current scoring settings",
+        name: "🏈 /scoring [question]",
+        value: "Display scoring settings or ask scoring questions with AI",
         inline: false,
       },
       {
