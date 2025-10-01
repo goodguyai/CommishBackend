@@ -1390,6 +1390,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/owners/data - Get all data needed for owner mapping UI
+  app.get("/api/owners/data", async (req, res) => {
+    try {
+      const { leagueId } = req.query;
+      
+      if (!leagueId || typeof leagueId !== 'string') {
+        return res.status(400).json({ error: { code: "MISSING_LEAGUE", message: "League ID required" } });
+      }
+
+      const league = await storage.getLeague(leagueId);
+      if (!league || !league.sleeperLeagueId) {
+        return res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found or not configured" } });
+      }
+
+      // Get Discord members, Sleeper rosters, and existing mappings in parallel
+      const [members, rosters, mappings] = await Promise.all([
+        storage.getLeagueMembers(leagueId),
+        sleeperService.getRosters(league.sleeperLeagueId),
+        storage.getOwnerMappings(leagueId)
+      ]);
+
+      // Format response with all needed data
+      res.json({
+        discordMembers: members.map(m => ({
+          id: m.id,
+          discordUserId: m.discordUserId,
+          discordUsername: m.discordUsername,
+          role: m.role
+        })),
+        sleeperOwners: rosters.map(r => ({
+          ownerId: r.owner_id,
+          teamName: r.metadata?.team_name || `Team ${r.roster_id}`
+        })),
+        mappings: mappings.map(m => ({
+          id: m.id,
+          sleeperOwnerId: m.sleeperOwnerId,
+          discordUserId: m.discordUserId,
+          sleeperTeamName: m.sleeperTeamName,
+          discordUsername: m.discordUsername
+        }))
+      });
+    } catch (error) {
+      console.error("Failed to get owner mapping data:", error);
+      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get owner mapping data" } });
+    }
+  });
+
   // POST /api/owners/map - Map Sleeper owners to Discord users
   app.post("/api/owners/map", async (req, res) => {
     try {

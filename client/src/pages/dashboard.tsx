@@ -7,6 +7,7 @@ import { DiscordStatus } from "@/components/discord-status";
 import { SleeperStatus } from "@/components/sleeper-status";
 import { RAGStatus } from "@/components/rag-status";
 import { ActivityLog } from "@/components/activity-log";
+import { OwnerMapping } from "@/components/owner-mapping";
 import { Users, Book, Calendar, Bot, Terminal, Send, RefreshCw, FileText, PlayCircle, Database } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
@@ -326,6 +327,16 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
+      {/* League Management */}
+      <Card className="mb-8" data-testid="league-management-card">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold text-foreground">League Management</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <LeagueManagementSection />
+        </CardContent>
+      </Card>
+
       {/* Recent Activity */}
       <ActivityLog events={eventsData || []} isLoading={eventsLoading} />
     </div>
@@ -476,6 +487,38 @@ function UtilityButton({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function LeagueManagementSection() {
+  const [leagueId, setLeagueId] = useState("");
+  const [showOwnerMapping, setShowOwnerMapping] = useState(false);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-3">
+        <input
+          type="text"
+          placeholder="Enter League ID"
+          value={leagueId}
+          onChange={(e) => setLeagueId(e.target.value)}
+          className="flex-1 px-3 py-2 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+          data-testid="league-id-input"
+        />
+        <Button
+          onClick={() => setShowOwnerMapping(!!leagueId)}
+          disabled={!leagueId}
+          size="sm"
+          data-testid="load-owner-mapping-button"
+        >
+          Load Owner Mapping
+        </Button>
+      </div>
+
+      {showOwnerMapping && leagueId && (
+        <OwnerMapping leagueId={leagueId} />
+      )}
     </div>
   );
 }
