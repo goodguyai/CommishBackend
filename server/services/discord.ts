@@ -271,7 +271,7 @@ export class DiscordService {
   }
 
   // Post message to channel
-  async postMessage(channelId: string, content: any): Promise<void> {
+  async postMessage(channelId: string, content: any): Promise<string> {
     const url = `${this.baseUrl}/channels/${channelId}/messages`;
     
     const response = await fetch(url, {
@@ -285,6 +285,28 @@ export class DiscordService {
 
     if (!response.ok) {
       throw new Error(`Failed to post message: ${response.statusText}`);
+    }
+
+    const message = await response.json();
+    return message.id;
+  }
+
+  // Add reaction to message
+  async addReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    const encodedEmoji = encodeURIComponent(emoji);
+    const url = `${this.baseUrl}/channels/${channelId}/messages/${messageId}/reactions/${encodedEmoji}/@me`;
+    
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bot ${this.botToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`Failed to add reaction: ${response.statusText}`);
+      // Don't throw - reactions are non-critical
     }
   }
 

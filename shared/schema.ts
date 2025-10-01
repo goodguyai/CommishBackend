@@ -186,6 +186,17 @@ export const ownerMappings = pgTable("owner_mappings", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const polls = pgTable("polls", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  question: text("question").notNull(),
+  options: jsonb("options").notNull(), // Array of strings
+  discordMessageId: text("discord_message_id"),
+  createdBy: text("created_by").notNull(), // Discord user ID
+  expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Insert schemas
 export const insertAccountSchema = createInsertSchema(accounts).pick({
   email: true,
@@ -283,6 +294,14 @@ export const insertOwnerMappingSchema = createInsertSchema(ownerMappings).pick({
   discordUsername: true,
 });
 
+export const insertPollSchema = createInsertSchema(polls).pick({
+  leagueId: true,
+  question: true,
+  options: true,
+  createdBy: true,
+  expiresAt: true,
+});
+
 // Types
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
@@ -307,6 +326,8 @@ export type PendingSetup = typeof pendingSetup.$inferSelect;
 export type InsertPendingSetup = z.infer<typeof insertPendingSetupSchema>;
 export type OwnerMapping = typeof ownerMappings.$inferSelect;
 export type InsertOwnerMapping = z.infer<typeof insertOwnerMappingSchema>;
+export type Poll = typeof polls.$inferSelect;
+export type InsertPoll = z.infer<typeof insertPollSchema>;
 
 // Keep legacy user schema for compatibility
 export const users = pgTable("users", {

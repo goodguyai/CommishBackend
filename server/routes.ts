@@ -1561,6 +1561,135 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/polls/:leagueId - Get polls for a league
+  app.get("/api/polls/:leagueId", async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 12)}`;
+    const startTime = Date.now();
+    try {
+      const { leagueId } = req.params;
+
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
+        await storage.createEvent({
+          type: "ERROR_OCCURRED",
+          leagueId,
+          payload: { error: "League not found", endpoint: "/api/polls/:leagueId" },
+          requestId,
+          latency: Date.now() - startTime,
+        });
+        return;
+      }
+
+      const polls = await storage.getPolls(leagueId);
+      res.json({ polls });
+    } catch (error) {
+      console.error("Failed to get polls:", error);
+      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get polls" } });
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        payload: { error: String(error), endpoint: "/api/polls/:leagueId" },
+        requestId,
+        latency: Date.now() - startTime,
+      });
+    }
+  });
+
+  // POST /api/polls - Create a new poll and post to Discord
+  app.post("/api/polls", async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 12)}`;
+    const startTime = Date.now();
+    try {
+      const { leagueId, question, options, expiresAt, createdBy } = req.body;
+
+      if (!leagueId || !question || !options || !Array.isArray(options) || options.length < 2 || !createdBy) {
+        return res.status(400).json({ 
+          error: { 
+            code: "INVALID_INPUT", 
+            message: "leagueId, question, options (min 2), and createdBy are required" 
+          } 
+        });
+      }
+
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
+        return;
+      }
+
+      if (!league.channelId) {
+        return res.status(400).json({ 
+          error: { code: "NO_CHANNEL", message: "League has no Discord channel configured" } 
+        });
+      }
+
+      // Create the poll in database
+      const pollId = await storage.createPoll({
+        leagueId,
+        question,
+        options,
+        createdBy,
+        expiresAt: expiresAt ? new Date(expiresAt) : null,
+      });
+
+      // Post poll to Discord
+      try {
+        const emojiNumbers = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+        const pollEmbed = {
+          title: `📊 ${question}`,
+          description: options.map((opt: string, idx: number) => `${emojiNumbers[idx]} ${opt}`).join('\n'),
+          color: 0x5865F2,
+          footer: { text: `React with the corresponding number to vote${expiresAt ? ` • Expires ${new Date(expiresAt).toLocaleString()}` : ''}` }
+        };
+
+        const messageId = await discordService.postMessage(league.channelId, {
+          embeds: [pollEmbed]
+        });
+
+        // Add reactions for voting
+        for (let i = 0; i < Math.min(options.length, 10); i++) {
+          await discordService.addReaction(league.channelId, messageId, emojiNumbers[i]);
+        }
+
+        // Update poll with Discord message ID
+        await storage.updatePoll(pollId, { discordMessageId: messageId });
+
+        res.json({ 
+          success: true, 
+          pollId,
+          discordMessageId: messageId,
+          message: "Poll created and posted to Discord" 
+        });
+
+        await storage.createEvent({
+          type: "COMMAND_EXECUTED",
+          leagueId,
+          payload: { command: "poll_created", pollId, question },
+          requestId,
+          latency: Date.now() - startTime,
+        });
+      } catch (discordError) {
+        console.error("Failed to post poll to Discord:", discordError);
+        // Poll created but Discord post failed
+        res.json({ 
+          success: true, 
+          pollId,
+          message: "Poll created but failed to post to Discord",
+          warning: "Discord posting failed"
+        });
+      }
+    } catch (error) {
+      console.error("Failed to create poll:", error);
+      res.status(500).json({ error: { code: "CREATE_FAILED", message: "Failed to create poll" } });
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        payload: { error: String(error), endpoint: "/api/polls" },
+        requestId,
+        latency: Date.now() - startTime,
+      });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

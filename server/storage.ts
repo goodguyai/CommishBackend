@@ -7,7 +7,7 @@ import type {
   Member, InsertMember, Document, InsertDocument, Rule, InsertRule,
   Fact, InsertFact, Deadline, InsertDeadline, Event, InsertEvent,
   DiscordInteraction, PendingSetup, InsertPendingSetup,
-  OwnerMapping, InsertOwnerMapping
+  OwnerMapping, InsertOwnerMapping, Poll, InsertPoll
 } from "@shared/schema";
 import { EmbeddingResult } from "./services/rag";
 import { env } from "./services/env";
@@ -104,6 +104,13 @@ export interface IStorage {
   updateOwnerMapping(leagueId: string, sleeperOwnerId: string, updates: Partial<OwnerMapping>): Promise<void>;
   deleteOwnerMapping(leagueId: string, sleeperOwnerId: string): Promise<void>;
   upsertOwnerMapping(mapping: InsertOwnerMapping): Promise<string>;
+
+  // Poll methods
+  getPolls(leagueId: string): Promise<Poll[]>;
+  getPoll(id: string): Promise<Poll | undefined>;
+  createPoll(poll: InsertPoll): Promise<string>;
+  updatePoll(id: string, updates: Partial<Poll>): Promise<void>;
+  deletePoll(id: string): Promise<void>;
 
   // Migration methods
   runRawSQL(query: string): Promise<any>;
@@ -598,6 +605,29 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  // Poll methods implementation
+  async getPolls(leagueId: string): Promise<Poll[]> {
+    return this.db.select().from(schema.polls).where(eq(schema.polls.leagueId, leagueId)).orderBy(desc(schema.polls.createdAt));
+  }
+
+  async getPoll(id: string): Promise<Poll | undefined> {
+    const results = await this.db.select().from(schema.polls).where(eq(schema.polls.id, id));
+    return results[0];
+  }
+
+  async createPoll(poll: InsertPoll): Promise<string> {
+    const results = await this.db.insert(schema.polls).values(poll).returning({ id: schema.polls.id });
+    return results[0].id;
+  }
+
+  async updatePoll(id: string, updates: Partial<Poll>): Promise<void> {
+    await this.db.update(schema.polls).set(updates).where(eq(schema.polls.id, id));
+  }
+
+  async deletePoll(id: string): Promise<void> {
+    await this.db.delete(schema.polls).where(eq(schema.polls.id, id));
+  }
+
   // Migration methods implementation
   async runRawSQL(query: string): Promise<any> {
     return this.db.execute(sql.raw(query));
@@ -1002,6 +1032,43 @@ export class MemStorage implements IStorage {
     } else {
       return await this.createOwnerMapping(mapping);
     }
+  }
+
+  // Poll methods implementation
+  private polls = new Map<string, Poll>();
+
+  async getPolls(leagueId: string): Promise<Poll[]> {
+    return Array.from(this.polls.values())
+      .filter(poll => poll.leagueId === leagueId)
+      .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
+  }
+
+  async getPoll(id: string): Promise<Poll | undefined> {
+    return this.polls.get(id);
+  }
+
+  async createPoll(poll: InsertPoll): Promise<string> {
+    const id = Math.random().toString(36).substring(7);
+    const newPoll: Poll = {
+      id,
+      ...poll,
+      discordMessageId: null,
+      expiresAt: poll.expiresAt || null,
+      createdAt: new Date(),
+    };
+    this.polls.set(id, newPoll);
+    return id;
+  }
+
+  async updatePoll(id: string, updates: Partial<Poll>): Promise<void> {
+    const existing = this.polls.get(id);
+    if (existing) {
+      Object.assign(existing, updates);
+    }
+  }
+
+  async deletePoll(id: string): Promise<void> {
+    this.polls.delete(id);
   }
 
   // Migration methods implementation (no-op for in-memory storage)

@@ -435,6 +435,19 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      {/* Quick Poll */}
+      <Card className="mb-8" data-testid="quick-poll-card">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold text-foreground flex items-center gap-2">
+            <Users className="w-5 h-5" />
+            Create Quick Poll
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <QuickPollForm />
+        </CardContent>
+      </Card>
+
       {/* Developer Utilities */}
       <Card className="mb-8" data-testid="developer-utilities-card">
         <CardHeader>
@@ -655,6 +668,170 @@ function UtilityButton({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function QuickPollForm() {
+  const { toast } = useToast();
+  const [leagueId, setLeagueId] = useState("");
+  const [question, setQuestion] = useState("");
+  const [options, setOptions] = useState(["", ""]);
+  const [createdBy, setCreatedBy] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("/api/polls", {
+        method: "POST",
+        body: {
+          leagueId,
+          question,
+          options: options.filter(o => o.trim() !== ""),
+          createdBy,
+        },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Poll created!",
+        description: data.message || "Poll posted to Discord successfully",
+      });
+      // Reset form
+      setQuestion("");
+      setOptions(["", ""]);
+      setCreatedBy("");
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to create poll",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const addOption = () => {
+    if (options.length < 10) {
+      setOptions([...options, ""]);
+    }
+  };
+
+  const removeOption = (index: number) => {
+    if (options.length > 2) {
+      setOptions(options.filter((_, i) => i !== index));
+    }
+  };
+
+  const updateOption = (index: number, value: string) => {
+    const newOptions = [...options];
+    newOptions[index] = value;
+    setOptions(newOptions);
+  };
+
+  const canSubmit = 
+    leagueId.trim() !== "" &&
+    question.trim() !== "" &&
+    options.filter(o => o.trim() !== "").length >= 2 &&
+    createdBy.trim() !== "";
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="text-xs font-medium text-muted-foreground mb-1 block">
+            League ID
+          </label>
+          <input
+            type="text"
+            placeholder="Enter league ID"
+            value={leagueId}
+            onChange={(e) => setLeagueId(e.target.value)}
+            className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md"
+            data-testid="input-poll-league-id"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground mb-1 block">
+            Your Discord User ID
+          </label>
+          <input
+            type="text"
+            placeholder="Enter your Discord user ID"
+            value={createdBy}
+            onChange={(e) => setCreatedBy(e.target.value)}
+            className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md"
+            data-testid="input-poll-created-by"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="text-xs font-medium text-muted-foreground mb-1 block">
+          Poll Question
+        </label>
+        <input
+          type="text"
+          placeholder="What do you want to ask?"
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md"
+          data-testid="input-poll-question"
+        />
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-xs font-medium text-muted-foreground">
+            Poll Options (max 10)
+          </label>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={addOption}
+            disabled={options.length >= 10}
+            className="text-xs h-7"
+            data-testid="button-add-option"
+          >
+            + Add Option
+          </Button>
+        </div>
+        <div className="space-y-2">
+          {options.map((option, index) => (
+            <div key={index} className="flex gap-2">
+              <input
+                type="text"
+                placeholder={`Option ${index + 1}`}
+                value={option}
+                onChange={(e) => updateOption(index, e.target.value)}
+                className="flex-1 px-3 py-2 text-sm bg-background border border-border rounded-md"
+                data-testid={`input-poll-option-${index}`}
+              />
+              {options.length > 2 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => removeOption(index)}
+                  className="text-xs h-9"
+                  data-testid={`button-remove-option-${index}`}
+                >
+                  Remove
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <Button
+        onClick={() => mutation.mutate()}
+        disabled={!canSubmit || mutation.isPending}
+        className="w-full"
+        data-testid="button-create-poll"
+      >
+        {mutation.isPending ? "Creating..." : "Create Poll & Post to Discord"}
+      </Button>
     </div>
   );
 }
