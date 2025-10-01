@@ -1456,7 +1456,8 @@ async function handleRulesCommand(interaction: any, league: any, requestId: stri
       const response = await deepSeekService.answerRulesQuery(
         question,
         relevantRules.map(r => r.rule),
-        { leagueName: league.name }
+        { leagueName: league.name },
+        league.tone
       );
 
       const embed = {

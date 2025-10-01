@@ -59,6 +59,18 @@ export class DeepSeekService {
     this.timeout = parseInt(process.env.DEEPSEEK_TIMEOUT_MS || "30000");
   }
 
+  private getToneInstruction(tone?: string): string {
+    const toneMap: Record<string, string> = {
+      professional: "- Use a helpful, authoritative tone. Be formal and professional.",
+      casual: "- Use a friendly, conversational tone. Keep it light and approachable.",
+      funny: "- Use humor and personality. Be entertaining while staying informative. Include sports jokes and playful banter.",
+      savage: "- Use sharp wit and playful trash talk. Be bold and entertaining, but keep answers accurate.",
+      neutral: "- Use a balanced, informative tone. Be clear and straightforward."
+    };
+
+    return toneMap[tone || 'professional'] || toneMap.professional;
+  }
+
   async chatCompletion(
     messages: DeepSeekMessage[],
     functions?: DeepSeekFunction[],
@@ -102,8 +114,12 @@ export class DeepSeekService {
   async answerRulesQuery(
     query: string,
     relevantRules: Array<{ text: string; citations: any[]; ruleKey: string }>,
-    leagueContext?: any
+    leagueContext?: any,
+    tone?: string
   ): Promise<{ answer: string; citations: any[]; tokensUsed: number }> {
+    // Build tone instruction based on league setting
+    const toneInstruction = this.getToneInstruction(tone);
+    
     const systemPrompt = `You are THE COMMISH, an AI assistant for fantasy sports league management. 
 You have access to the league's constitution and rules. Your role is to provide accurate, helpful answers 
 to questions about league rules and policies.
@@ -114,7 +130,7 @@ IMPORTANT GUIDELINES:
 - If you cannot find a relevant rule, clearly state that
 - Never guess or make up information
 - Be concise but thorough
-- Use a helpful, authoritative tone
+${toneInstruction}
 
 Context about this league:
 ${leagueContext ? JSON.stringify(leagueContext, null, 2) : "No additional context provided"}
