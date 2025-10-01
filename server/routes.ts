@@ -86,6 +86,83 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       console.log(`[Scheduler] Digest sent successfully to league ${data.leagueId}`);
+
+      // Auto-meme: Check for blowout games if feature enabled
+      const featureFlags = league.featureFlags as any;
+      if (featureFlags?.autoMeme && sleeperData.matchups && sleeperData.matchups.length > 0) {
+        try {
+          // Group matchups by matchup_id to pair teams
+          const matchupGroups = new Map<number, any[]>();
+          sleeperData.matchups.forEach(m => {
+            if (!matchupGroups.has(m.matchup_id)) {
+              matchupGroups.set(m.matchup_id, []);
+            }
+            matchupGroups.get(m.matchup_id)!.push(m);
+          });
+
+          // Detect blowouts (score difference > 40 points)
+          const BLOWOUT_THRESHOLD = 40;
+          const blowouts = [];
+          
+          for (const [matchupId, teams] of Array.from(matchupGroups.entries())) {
+            if (teams.length === 2) {
+              const team1 = teams[0];
+              const team2 = teams[1];
+              const score1 = team1.points || 0;
+              const score2 = team2.points || 0;
+              const diff = Math.abs(score1 - score2);
+              
+              if (diff >= BLOWOUT_THRESHOLD) {
+                const winner = score1 > score2 ? team1 : team2;
+                const loser = score1 > score2 ? team2 : team1;
+                blowouts.push({
+                  winner: winner.roster_id,
+                  loser: loser.roster_id,
+                  scoreDiff: diff,
+                  winnerScore: Math.max(score1, score2),
+                  loserScore: Math.min(score1, score2),
+                });
+              }
+            }
+          }
+
+          // Post meme for blowouts
+          if (blowouts.length > 0) {
+            const memes = [
+              "💥 BLOWOUT ALERT! Someone needs a wellness check...",
+              "🔥 That wasn't a game, that was a crime scene!",
+              "🚨 Breaking News: Local fantasy team has been reported missing!",
+              "🏃 They didn't just lose, they got chased out of the building!",
+              "📢 PSA: That wasn't fantasy football, that was bullying!",
+              "🎯 They came to play, their opponent came to dominate!",
+              "⚠️ Warning: This beatdown may be unsuitable for younger viewers!"
+            ];
+            
+            for (const blowout of blowouts) {
+              const randomMeme = memes[Math.floor(Math.random() * memes.length)];
+              const embed = {
+                title: "🏈 Blowout Game Detected!",
+                description: `${randomMeme}\n\n**Score Difference:** ${blowout.scoreDiff.toFixed(1)} points\n**Winner:** ${blowout.winnerScore.toFixed(1)} pts\n**Loser:** ${blowout.loserScore.toFixed(1)} pts\n\nBetter luck next week! 🙏`,
+                color: 0xFF6B35,
+                footer: { text: "Auto-Meme powered by THE COMMISH" },
+              };
+              
+              await discordService.postMessage(league.channelId, { embeds: [embed] });
+              
+              await storage.createEvent({
+                type: "COMMAND_EXECUTED",
+                leagueId: league.id,
+                payload: { command: "auto_meme_posted", scoreDiff: blowout.scoreDiff },
+              });
+            }
+            
+            console.log(`[Scheduler] Posted ${blowouts.length} auto-meme(s) for blowout games in league ${data.leagueId}`);
+          }
+        } catch (memeError) {
+          console.error(`[Scheduler] Failed to post auto-meme for league ${data.leagueId}:`, memeError);
+          // Don't fail the entire digest if meme posting fails
+        }
+      }
     } catch (error) {
       console.error(`[Scheduler] Failed to generate/send digest for league ${data.leagueId}:`, error);
       await storage.createEvent({

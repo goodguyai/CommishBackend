@@ -58,11 +58,31 @@ THE COMMISH is a Discord bot designed for fantasy football leagues, primarily in
 - **API Enhancement**: POST /api/rag/search/:leagueId now accepts `includePassages` parameter (defaults to true)
 - **Graceful Fallbacks**: If no query terms match, returns beginning of rule text as fallback passage
 
+### Quick Polls Feature (October 1, 2025)
+- **Database Schema**: polls table with leagueId, question, options (JSONB), discordMessageId, createdBy, expiresAt
+- **API Endpoints**: 
+  - GET /api/polls/:leagueId - Retrieve all polls for a league
+  - POST /api/polls - Create poll and post to Discord with emoji reactions
+- **Discord Integration**: Posts embeds with numbered emoji reactions (1️⃣-🔟) for voting
+- **Dashboard UI**: QuickPollForm component with dynamic options (2-10), validation, toast notifications
+- **Error Handling**: Graceful Discord posting failures, comprehensive validation
+
+### Auto-Meme Feature (October 1, 2025)
+- **Feature Toggle**: leagues.featureFlags.autoMeme (default false)
+- **Blowout Detection**: Analyzes matchup scores during digest generation
+- **Threshold**: Score difference ≥ 40 points triggers meme posting
+- **Meme Library**: Randomized humorous messages about blowout games
+- **Integration**: Runs after weekly digest, posts to Discord channel
+- **Safety**: Non-fatal errors (meme failures don't affect digest)
+- **Event Logging**: Tracks auto_meme_posted events with score differences
+
 ### Known Limitations
 - Owner mapping endpoints require schema extension (sleeperOwnerId, sleeperTeamName fields on members table)
 - Scheduler handlers lack retry logic for transient failures (acceptable for MVP)
 - Admin key authentication via browser prompt (acceptable for internal dev tools)
 - **Sleeper Deadline Population**: Sleeper API provides trade_deadline as week numbers; converting to precise timestamps requires NFL schedule mapping (enhancement opportunity for full waiver/trade deadline automation)
+- **Poll Results**: No vote counting or results retrieval (future enhancement)
+- **Poll Expiry**: No automatic cleanup for expired polls (future enhancement)
 
 ## User Preferences
 
