@@ -106,10 +106,13 @@ export class DatabaseStorage implements IStorage {
   constructor() {
     const databaseUrl = env.database.url;
     
-    // Safety check: ensure we're using Supabase
+    // Safety check: ensure we're using Supabase (direct or pooler)
     const url = new URL(databaseUrl);
-    if (!url.hostname.endsWith('.supabase.co')) {
-      throw new Error(`Safety check: expected Supabase host (*.supabase.co), got ${url.hostname}`);
+    const isSupabaseDirect = url.hostname.endsWith('.supabase.co');
+    const isSupabasePooler = url.hostname.endsWith('.pooler.supabase.com');
+    
+    if (!isSupabaseDirect && !isSupabasePooler) {
+      throw new Error(`Safety check: expected Supabase host (*.supabase.co or *.pooler.supabase.com), got ${url.hostname}`);
     }
     
     const connection = postgres(databaseUrl, {

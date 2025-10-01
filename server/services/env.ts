@@ -24,22 +24,16 @@ const envSchema = z.object({
         if (!parsed.protocol.startsWith('postgres')) {
           return false;
         }
-        // Validate Supabase hostname format if it's a Supabase URL
-        if (parsed.hostname.includes('supabase.co')) {
-          const hostPattern = /^(db|aws|gcp)\.[^.]+\.supabase\.co$/;
-          return hostPattern.test(parsed.hostname);
-        }
-        // Validate Supabase pooler hostname format
-        if (parsed.hostname.includes('pooler.supabase.com')) {
-          const poolerPattern = /^aws-\d+-[^.]+\.pooler\.supabase\.com$/;
-          return poolerPattern.test(parsed.hostname);
+        // Accept any Supabase hostname (direct or pooler)
+        if (parsed.hostname.endsWith('.supabase.co') || parsed.hostname.endsWith('.pooler.supabase.com')) {
+          return true;
         }
         return true;
       } catch {
         return false;
       }
     }, {
-      message: "DATABASE_URL must be a valid PostgreSQL connection string. For Supabase, use format: postgresql://postgres:password@db.project-ref.supabase.co:6543/postgres?sslmode=require or pooler URL"
+      message: "DATABASE_URL must be a valid PostgreSQL connection string"
     }),
   
   // Discord Configuration

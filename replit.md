@@ -18,7 +18,7 @@ The server runs on Node.js with Express, utilizing TypeScript throughout. The ar
 
 - **API Layer**: Express routes handle HTTP requests, Discord OAuth2 flows, and webhook interactions
 - **Service Layer**: Distinct services for Discord interactions, Sleeper API integration, DeepSeek LLM communication, and RAG functionality
-- **Storage Layer**: Drizzle ORM with PostgreSQL (Neon) for data persistence
+- **Storage Layer**: Drizzle ORM with PostgreSQL (Supabase) for data persistence
 - **Event System**: Custom EventBus for handling asynchronous operations and system events
 - **Scheduler**: Node-cron based job scheduling for digest generation and data synchronization
 
@@ -58,8 +58,9 @@ Built-in job scheduler using node-cron:
 ## External Dependencies
 
 ### Database & Storage
-- **Neon Database**: Managed PostgreSQL hosting with pgvector extension
+- **Supabase Database**: Managed PostgreSQL hosting with pgvector extension via Transaction Pooler (IPv4-compatible endpoint)
 - **Drizzle ORM**: Type-safe database operations and migrations
+- **Connection**: Uses Supabase's Supavisor pooler (`aws-0-*.pooler.supabase.com:6543`) for IPv4 compatibility on Replit
 
 ### AI & Language Models
 - **DeepSeek API**: Primary LLM provider for chat completions and function calling
