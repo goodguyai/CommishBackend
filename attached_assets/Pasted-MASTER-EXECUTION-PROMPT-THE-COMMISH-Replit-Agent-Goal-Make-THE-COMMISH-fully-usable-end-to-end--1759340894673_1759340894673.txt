@@ -1,0 +1,248 @@
+MASTER EXECUTION PROMPT — THE COMMISH (Replit Agent)
+
+Goal
+Make THE COMMISH fully usable end-to-end (web + APIs) on https://thecommish.replit.app with Supabase as the only database, Discord ready (but not dependent on interactive login), Sleeper linking, rules indexing + RAG, slash commands, reminders/digest services, and an in-app Setup Wizard + Dashboard—with guardrails to prevent schema swaps, localhost regressions, or env misuse.
+
+⸻
+
+0) DO NOT VIOLATE — GUARDRAILS & INVARIANTS
+	•	App URL: keep APP_BASE_URL=https://thecommish.replit.app (no trailing slash).
+	•	Database: Supabase ONLY. Use the existing DATABASE_URL (postgres with sslmode=require).
+	•	Do not add or re-add Neon/Replit DB, server/db.ts, or @neondatabase/*.
+	•	Do not change the schema outside approved migration files in /migrations or shared/schema.ts.
+	•	Env Service: Read env only via the centralized env module (server/services/env.ts).
+	•	Do not introduce new process.env.* reads in routes/handlers.
+	•	Discord security: Keep raw body verification for /api/discord/interactions (Ed25519, 3-second rule).
+	•	Routing: Do not switch any OAuth/redirect URIs back to localhost.
+	•	Scope: Build features below. If an external dependency is missing (e.g., user hasn’t done Discord 2FA), handle gracefully, don’t stall or rewrite infra.
+
+If any guardrail would be violated, STOP and propose a minimal alternative.
+
+⸻
+
+1) PRE-FLIGHT SELF-CHECK (Agent must confirm)
+	1.	Read server/services/env.ts and confirm getters exist for:
+	•	database.url, discord.clientId/secret/publicKey/botToken, app.baseUrl, admin.adminKey,
+openai.apiKey, deepseek.apiKey, embeddings model/dimension.
+	2.	Confirm /api/discord/interactions uses express.raw({ type: ‘application/json’ }) and signature verification with tweetnacl on the raw body.
+	3.	Confirm storage is DatabaseStorage when env.database.url is present. (No MemStorage at runtime.)
+	4.	Confirm APP_BASE_URL equals https://thecommish.replit.app. If not, stop and request correction.
+	5.	Confirm DATABASE_URL points to Supabase host (.supabase.co). If not, stop.
+
+If any check fails, stop and print a very short fix list. Otherwise, proceed.
+
+⸻
+
+2) IMPLEMENTATION PLAN (single pass, minimal churn)
+
+Phase A — Stabilize Health, Events, and Status
+
+A.1 Health endpoint
+	•	/api/health must return:
+
+{
+  "status": "ok|degraded|error",
+  "timestamp": "...",
+  "latency": <ms>,
+  "services": {
+    "database": "connected|error",
+    "deepseek": "healthy|error",
+    "discord": "configured|missing",
+    "sleeper": "available|error",
+    "embeddings": "available|error"
+  },
+  "embeddings": { "provider": "openai", "model": "text-embedding-3-small", "dimension": 1536 },
+  "issues": []
+}
+
+
+	•	Database check = real SELECT 1 via DatabaseStorage. No MemStorage shortcuts.
+
+A.2 Events endpoint
+	•	/api/events?leagueId=&limit=20 → latest events from DB (install completed, sleeper linked, rules indexed, digest posted, etc.).
+	•	If empty, return [] (200). No errors for “nothing there.”
+
+Acceptance (curl):
+
+curl -s $APP_BASE_URL/api/health | jq
+curl -s "$APP_BASE_URL/api/events?limit=3" | jq
+
+
+⸻
+
+Phase B — Setup Wizard (Web) – End-to-End
+
+B.1 Page client/src/pages/setup.tsx
+	•	3 steps UI:
+	1.	Discord: “Connect with Discord” → callback persists manageable guilds; user selects guild & channel.
+	2.	Sleeper: enter username, pick league (current season default).
+	3.	Rules: paste rules text → index → Activate.
+
+B.2 Backend endpoints
+	1.	Discord
+
+	•	GET /api/discord/auth-url?redirectUri=<...> — already exists; ensure uses env + guilds scope.
+	•	GET /api/discord/channels?guildId= → returns sendable text channels for bot.
+	•	POST /api/setup/discord body { accountId, guildId, channelId, timezone? }:
+	•	Upsert league with { guildId, channelId, timezone }.
+	•	Register slash commands for guild.
+	•	Post welcome embed to channelId.
+	•	Log install_completed.
+
+	2.	Sleeper
+
+	•	GET /api/sleeper/leagues?username=<u>&season=<yyyy>:
+	•	Resolve userId, return minimal fields: { league_id, name, season, total_rosters }[].
+	•	POST /api/setup/sleeper body { accountId, guildId, sleeperLeagueId }:
+	•	Persist on league row.
+	•	Kick lightweight sync (users/rosters), log sleeper_linked.
+
+	3.	Rules + Activate
+
+	•	POST /api/rag/index/:leagueId body { content, contentType, title, version }:
+	•	SHA-256 hash cache; OpenAI embeddings text-embedding-3-small (1536); pgvector write.
+	•	Return { ok:true, chunksIndexed }.
+	•	POST /api/setup/activate body { accountId, guildId }:
+	•	Ensure league has guildId and channelId (and sleeperLeagueId if present).
+	•	Schedule digest or store “enabled”; log activated.
+
+B.3 Acceptance (curl UI-free path)
+
+# Status should be connected
+curl -s "$APP_BASE_URL/api/health" | jq
+
+# Channels (requires a real guild id after OAuth)
+curl -s "$APP_BASE_URL/api/discord/channels?guildId=<GID>" | jq
+
+# Sleeper list
+curl -s "$APP_BASE_URL/api/sleeper/leagues?username=<USER>&season=$(date +%Y)" | jq
+
+# Index sample rules
+curl -s -X POST "$APP_BASE_URL/api/rag/index/<LEAGUE_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"SECTION 1: Draft in August.","contentType":"text/plain","title":"Rules","version":"2025.1"}' | jq
+
+
+⸻
+
+Phase C — Dashboard (Web) – Status & Utilities
+
+C.1 /dashboard
+	•	Cards show ✓ Discord, ✓ Channel, ✓ Sleeper, ✓ Rules indexed.
+	•	Buttons: “Re-register commands”, “Post test embed”, “Force sync Sleeper”, “Run digest (test)”.
+
+C.2 Backend utilities (admin-key guarded with X-Admin-Key)
+	•	POST /api/discord/register-commands?guildId=...
+	•	POST /api/discord/post-test?guildId=... (embed to league channel)
+	•	POST /api/sleeper/sync?leagueId=... (light sync)
+	•	POST /api/digest/run?leagueId=... (test digest)
+
+Acceptance
+
+curl -s -X POST "$APP_BASE_URL/api/discord/register-commands?guildId=<GID>" -H "X-Admin-Key: $ADMIN_KEY" | jq
+curl -s -X POST "$APP_BASE_URL/api/discord/post-test?guildId=<GID>" -H "X-Admin-Key: $ADMIN_KEY" | jq
+curl -s -X POST "$APP_BASE_URL/api/digest/run?leagueId=<LID>" -H "X-Admin-Key: $ADMIN_KEY" | jq
+
+
+⸻
+
+Phase D — Core Bot Features (MVP)
+
+D.1 Slash Commands (guild-scoped)
+	•	/rules question:<text> → league-scoped RAG search; ephemeral reply with answer + citation.
+	•	/scoring question:<text> → same engine; different prompt wrapper.
+	•	/help → list commands + basic tips.
+	•	/reindex (commish-only) → ephemeral “Reindex started”, triggers last rules doc.
+
+D.2 Owner Mapping (MVP)
+	•	API:
+	•	GET /api/owners?leagueId= → [{ sleeperOwnerId, sleeperTeamName, discordUserId? }]
+	•	POST /api/owners/map body { leagueId, pairs:[{sleeperOwnerId, discordUserId}] }
+	•	Optional slash /whoami → returns mapped team for the invoking user.
+
+D.3 Reminders & Weekly Digest (MVP)
+	•	Config stored per league: timezone; enable lineup/waiver/trade reminders; digest day/time.
+	•	Scheduler can be a simple in-process interval (MVP) that checks due events every minute; guard with jitter and last-run locks to avoid dupes.
+	•	Digest content pulls last week’s matchups/standings from Sleeper and posts an embed to the channel in the league’s chosen tone (neutral default).
+
+Acceptance
+	•	Commands visible in Discord and respond within 3 seconds (ACK + follow-up when needed).
+	•	Digest test endpoint posts a sample embed.
+	•	Owner mappings saved and used in mentions when reminders go out (if any).
+
+⸻
+
+3) ERROR HANDLING & UX POLISH
+	•	Consistent JSON error shape for all /api/*:
+{ "error": { "code": "SOME_CODE", "message": "human readable", "hint": "optional next step" } }
+	•	Frontend: show friendly banners/toasts and “Try again” buttons; don’t dead-end.
+	•	If Discord or Sleeper tokens/config missing, the Setup Wizard shows a “connect first” state.
+	•	If embeddings quota fails (429), indexer should defer with a durable “pending” event and instruct user to retry later; do not crash.
+
+⸻
+
+4) OBSERVABILITY
+	•	Add requestId (uuid v4), duration, and outcome to logs for all API routes.
+	•	For external calls (Discord/Sleeper/OpenAI), log provider latency + status code (no secrets).
+	•	Write key lifecycle events to events table: install_completed, sleeper_linked, rules_indexed, activated, digest_posted, error.
+
+⸻
+
+5) POST-FLIGHT ACCEPTANCE (Agent must run and print results)
+
+Run these and include outputs inline in your final report:
+
+# Health
+curl -s $APP_BASE_URL/api/health | jq
+
+# Events exist (ok if empty array)
+curl -s "$APP_BASE_URL/api/events?limit=5" | jq
+
+# Sleeper listing smoke test (replace handle)
+curl -s "$APP_BASE_URL/api/sleeper/leagues?username=<YOUR_HANDLE>&season=$(date +%Y)" | jq | head -n 40
+
+# If you have a league id (from DB), index rules sample
+curl -s -X POST "$APP_BASE_URL/api/rag/index/<LEAGUE_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"SECTION 1: Draft in August.","contentType":"text/plain","title":"Rules","version":"2025.1"}' | jq
+
+If anything fails, include:
+	•	failing endpoint,
+	•	response payload,
+	•	server log snippet (20 lines),
+	•	concrete 1-step fix.
+
+⸻
+
+6) DO NOTS (repeat—hard stops)
+	•	Do not introduce or re-enable Neon/Replit DB.
+	•	Do not add or change DATABASE_URL host.
+	•	Do not switch any redirect or base URLs to localhost.
+	•	Do not bypass the env service for secrets/config.
+	•	Do not change pgvector dimension (must match 1536) or embeddings model without adjusting schema.
+	•	Do not remove raw-body signature verification for Discord interactions.
+
+⸻
+
+7) OPTIONAL IF TIME ALLOWS (only after MVP passes acceptance)
+	•	“Change home channel” action on Dashboard (reuses /api/discord/channels + PATCH league).
+	•	CSV export for dues/owners.
+	•	File upload for rules (TXT/MD); parse to plain text for MVP.
+
+⸻
+
+8) FINAL REPORT (Agent must output this template)
+	•	Pre-flight checks: ✅/❌ with 1-line results
+	•	Endpoints implemented: list
+	•	UI pages touched: list
+	•	DB migrations applied: list and summarize (no schema drift)
+	•	Acceptance test outputs: paste JSON results
+	•	Remaining known issues: bullets + suggested fixes
+	•	Next recommended steps: bullets (smallest viable increments)
+
+⸻
+
+Notes & Context (for the Agent)
+	•	The Setup Wizard already exists in some form; keep it and complete it rather than rewriting.
+	•	If you need to add tiny schema fields for status/progress, do so via Drizzle migration files and keep them Supabase-compatible (pgvector already installed).
+	•	Keep code changes minimal, additive, and cohesive. Prefer small, targeted edits.
