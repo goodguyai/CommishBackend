@@ -106,7 +106,10 @@ export class DatabaseStorage implements IStorage {
   constructor() {
     const databaseUrl = env.database.url;
     const connection = postgres(databaseUrl, {
-      ssl: { rejectUnauthorized: false }
+      ssl: 'require',
+      max: 10,
+      idle_timeout: 20,
+      connect_timeout: 10,
     });
     this.db = drizzle(connection, { schema });
   }

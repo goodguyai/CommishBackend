@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { env } from "./env.js";
 
 // Discord API types
 export interface DiscordUser {
@@ -477,7 +478,7 @@ export class DiscordService {
                 type: ComponentType.BUTTON,
                 style: 5, // Link button
                 label: "View Dashboard",
-                url: `${process.env.APP_BASE_URL || 'https://localhost:5000'}/league/${data.leagueId}`
+                url: `${env.app.baseUrl}/league/${data.leagueId}`
               }
             ]
           }

@@ -1,0 +1,110 @@
+✅ “Use Supabase. Never localhost. Never Neon.” — Agent playbook
+
+Goal: Ensure the app always uses Supabase (db.igibosrsftdcxljkygjw.supabase.co) and production APP_BASE_URL in both dev and published runs. Remove any code paths or env that switch to Neon/Replit PG or localhost.
+
+0) Quick diagnostics (don’t change anything yet)
+	1.	Show me current boot banner + env echo:
+	•	Run npm run dev (or start the app) and copy the startup banner.
+	•	In logs, confirm lines for:
+	•	Database: host shows *.supabase.co
+	•	App URL: equals our APP_BASE_URL (not localhost)
+	2.	Search the codebase for things that cause flips:
+	•	Find strings: localhost, 127.0.0.1, neondb, ep-, @neondatabase/serverless, DATABASE_URL ??, PGHOST, import { Pool } from '@neondatabase/serverless'
+	•	Report all hits with file:line.
+
+1) Secrets & env: enforce Supabase only
+	1.	In Replit → Publishing → Production app secrets:
+	•	Set
+	•	DATABASE_URL=postgresql://postgres:<your-pw>@db.igibosrsftdcxljkygjw.supabase.co:5432/postgres?sslmode=require
+	•	PGSSLMODE=require
+	•	APP_BASE_URL=https://THECOMMISH.replit.app
+	•	Keep Supabase JWTs if you’re using them (SUPABASE_...), but they’re unrelated to Postgres connectivity.
+	2.	Remove/blank these if present (they make node-postgres silently assemble a different connection):
+	•	PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE
+	3.	If Replit added a “Postgres integration” or “Neon database”, disable/remove it so it doesn’t auto-inject PG* env on deploy.
+
+2) Code: force storage to use the env service (never PG* / never Neon)
+	1.	server/storage.ts
+	•	Ensure the constructor for DatabaseStorage uses only env.database.url (from our env service).
+	•	No direct process.env.DATABASE_URL anywhere in runtime code (it must come through the env service).
+	•	Confirm we import and use the pg driver (import { Pool } from 'pg') and not @neondatabase/serverless.
+	•	Add a guard so the app fails fast if the DB host isn’t Supabase:
+
+const url = new URL(env.database.url);
+if (!url.hostname.endsWith('.supabase.co')) {
+  throw new Error(`Safety check: expected Supabase host, got ${url.hostname}`);
+}
+
+
+	2.	Remove any Neon helpers:
+	•	Delete server/db.ts if it exists.
+	•	Remove any import or dependency on @neondatabase/serverless.
+	•	In package.json, remove the neon package if present and run npm i to clean lockfile.
+	3.	Health check (server/routes.ts):
+	•	DB probe must use the real pool (SELECT 1) from DatabaseStorage.runRawSQL(...).
+	•	No short-circuit “connected” strings.
+
+3) Prevent localhost redirect leaks (Discord + client)
+	1.	Server-side OAuth URIs:
+	•	All Discord OAuth URLs (/api/discord/auth-url, /bot-install-url) must build redirect_uri from env.app.baseUrl (env service), e.g.
+new URL('/discord/callback', env.app.baseUrl).toString()
+	•	No hard-coded http://localhost:3000.
+	2.	Client-side (React):
+	•	In client/src/pages/setup.tsx (or anywhere building URLs), never use window.location.origin fallbacks for production.
+	•	Fetch APP_BASE_URL from GET /api/config and cache in the client. If /api/config doesn’t exist, create:
+
+// server/routes.ts
+app.get('/api/config', (_req, res) => {
+  res.json({ appBaseUrl: env.app.baseUrl });
+});
+
+
+	•	Replace any http://localhost:3000 literal with config.appBaseUrl.
+
+	3.	Supabase Auth “Site URL” (dashboard → Auth → URL configuration):
+	•	Set Site URL = https://THECOMMISH.replit.app
+	•	Add Redirect URLs wildcard to support path variants:
+	•	https://thecommish.replit.app/*
+	•	If you also use a custom domain later, add https://*.yourdomain.com/*
+
+4) Block future regressions (dev & deploy)
+	1.	Env validator (server/services/env.ts):
+	•	Validate DATABASE_URL contains .supabase.co and ?sslmode=require; otherwise throw.
+	2.	Startup banner (server/index.ts):
+	•	Log DB host and APP_BASE_URL every start. Example:
+
+Database: db.igibosrsftdcxljkygjw.supabase.co:5432
+App URL: https://THECOMMISH.replit.app
+
+
+	3.	Scripts:
+	•	Ensure npm run dev and deploy start command both call the same entry (tsx server/index.ts).
+	•	No alt scripts that spin up a different pool for dev.
+
+5) Verification (must match exactly)
+	1.	Restart app. The banner must show:
+	•	Database: db.igibosrsftdcxljkygjw.supabase.co:5432
+	•	App URL: https://THECOMMISH.replit.app
+	2.	Run:
+	•	curl -s $APP_BASE_URL/api/health | jq → "database":"connected"
+	•	curl -s $APP_BASE_URL/api/discord/auth-url?redirectUri=$APP_BASE_URL/discord/callback | jq
+Confirm redirect_uri equals https://THECOMMISH.replit.app/discord/callback
+	3.	Search again for bad strings:
+	•	No remaining localhost, neondb, ep-, or @neondatabase/serverless in repo.
+
+⸻
+
+If the Agent already flipped code to Neon
+
+If you see commits that added Neon or server/db.ts:
+	•	Revert the specific files:
+	•	Delete server/db.ts
+	•	In server/storage.ts switch back to pg + env.database.url
+	•	Remove @neondatabase/serverless from package.json and npm i
+	•	Then re-run Verification above.
+
+⸻
+
+Why this keeps happening
+	•	node-postgres will happily compose a connection from PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE even if DATABASE_URL is set. Those PG* vars can “win” in some setups, causing surprise flips to Neon or localhost. Removing them is the safest move.
+	•	Hard-coded localhost often sneaks in via the client or Discord OAuth examples. Centralizing through an /api/config endpoint and the env service prevents drift.

@@ -62,8 +62,19 @@ let validatedEnv: EnvConfig;
 
 export function validateEnvironment(): EnvConfig {
   try {
-    // Use DATABASE_URL (Replit's built-in database)
-    const databaseUrl = process.env.DATABASE_URL;
+    // ALWAYS use Supabase - never Neon, never localhost
+    const databaseUrl = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
+    
+    // Safety check: must be Supabase
+    if (databaseUrl) {
+      const url = new URL(databaseUrl);
+      if (!url.hostname.endsWith('.supabase.co')) {
+        throw new Error(`Safety check: expected Supabase host (*.supabase.co), got ${url.hostname}`);
+      }
+      if (!databaseUrl.includes('sslmode=require')) {
+        throw new Error('Safety check: DATABASE_URL must include sslmode=require for Supabase');
+      }
+    }
     
     const envWithDatabase = {
       ...process.env,
