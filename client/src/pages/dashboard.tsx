@@ -7,7 +7,7 @@ import { DiscordStatus } from "@/components/discord-status";
 import { SleeperStatus } from "@/components/sleeper-status";
 import { RAGStatus } from "@/components/rag-status";
 import { ActivityLog } from "@/components/activity-log";
-import { Users, Book, Calendar, Bot, Terminal, Send, RefreshCw, FileText } from "lucide-react";
+import { Users, Book, Calendar, Bot, Terminal, Send, RefreshCw, FileText, PlayCircle, Database } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -275,7 +275,7 @@ export default function Dashboard() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <UtilityButton
               icon={<RefreshCw className="w-4 h-4" />}
               title="Register Commands"
@@ -291,6 +291,22 @@ export default function Dashboard() {
               endpoint="/api/discord/post-test"
               requiresGuildId
               testId="button-post-test"
+            />
+            <UtilityButton
+              icon={<PlayCircle className="w-4 h-4" />}
+              title="Run Digest"
+              description="Generate weekly digest for a league"
+              endpoint="/api/digest/run"
+              requiresLeagueId
+              testId="button-run-digest"
+            />
+            <UtilityButton
+              icon={<Database className="w-4 h-4" />}
+              title="Sync Sleeper Data"
+              description="Sync league data from Sleeper"
+              endpointTemplate="/api/sleeper/sync/{leagueId}"
+              requiresLeagueId
+              testId="button-sync-sleeper"
             />
             <UtilityButton
               icon={<RefreshCw className="w-4 h-4" />}
@@ -321,7 +337,9 @@ function UtilityButton({
   title, 
   description, 
   endpoint, 
+  endpointTemplate,
   requiresGuildId, 
+  requiresLeagueId,
   onClick,
   testId 
 }: { 
@@ -329,31 +347,48 @@ function UtilityButton({
   title: string; 
   description: string; 
   endpoint?: string;
+  endpointTemplate?: string;
   requiresGuildId?: boolean;
+  requiresLeagueId?: boolean;
   onClick?: () => void;
   testId: string;
 }) {
   const { toast } = useToast();
-  const [guildId, setGuildId] = useState("");
+  const [inputValue, setInputValue] = useState("");
   const [showInput, setShowInput] = useState(false);
 
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!endpoint) return;
+      let url = endpoint;
       
-      const url = requiresGuildId && guildId 
-        ? `${endpoint}?guildId=${guildId}` 
-        : endpoint;
+      // Build URL based on requirements
+      if (endpointTemplate && requiresLeagueId && inputValue) {
+        url = endpointTemplate.replace('{leagueId}', inputValue);
+      } else if (requiresGuildId && inputValue) {
+        url = `${endpoint}?guildId=${inputValue}`;
+      } else if (requiresLeagueId && inputValue) {
+        url = `${endpoint}?leagueId=${inputValue}`;
+      }
+      
+      if (!url) return;
       
       const adminKey = prompt("Enter ADMIN_KEY:");
       if (!adminKey) throw new Error("Admin key required");
 
-      return apiRequest(url, {
+      const res = await fetch(url, {
         method: "POST",
         headers: {
           "x-admin-key": adminKey,
         },
+        credentials: "include",
       });
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || error.message || "Request failed");
+      }
+
+      return res.json();
     },
     onSuccess: (data: any) => {
       toast({
@@ -361,7 +396,7 @@ function UtilityButton({
         description: data?.message || "Operation completed successfully",
       });
       setShowInput(false);
-      setGuildId("");
+      setInputValue("");
     },
     onError: (error: any) => {
       toast({
@@ -375,12 +410,14 @@ function UtilityButton({
   const handleClick = () => {
     if (onClick) {
       onClick();
-    } else if (requiresGuildId && !guildId) {
+    } else if ((requiresGuildId || requiresLeagueId) && !inputValue) {
       setShowInput(true);
     } else {
       mutation.mutate();
     }
   };
+
+  const inputPlaceholder = requiresLeagueId ? "League ID" : "Guild ID";
 
   return (
     <div className="p-4 bg-secondary rounded-lg border border-border hover:border-primary/50 transition-colors">
@@ -392,13 +429,13 @@ function UtilityButton({
           <h4 className="text-sm font-medium text-foreground mb-1">{title}</h4>
           <p className="text-xs text-muted-foreground mb-3">{description}</p>
           
-          {showInput && requiresGuildId ? (
+          {showInput && (requiresGuildId || requiresLeagueId) ? (
             <div className="space-y-2">
               <input
                 type="text"
-                placeholder="Guild ID"
-                value={guildId}
-                onChange={(e) => setGuildId(e.target.value)}
+                placeholder={inputPlaceholder}
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
                 className="w-full px-2 py-1 text-xs bg-background border border-border rounded"
                 data-testid={`input-${testId}`}
               />
@@ -406,7 +443,7 @@ function UtilityButton({
                 <Button
                   size="sm"
                   onClick={() => mutation.mutate()}
-                  disabled={mutation.isPending || !guildId}
+                  disabled={mutation.isPending || !inputValue}
                   className="text-xs h-7 flex-1"
                   data-testid={`${testId}-submit`}
                 >
@@ -417,7 +454,7 @@ function UtilityButton({
                   variant="outline"
                   onClick={() => {
                     setShowInput(false);
-                    setGuildId("");
+                    setInputValue("");
                   }}
                   className="text-xs h-7"
                   data-testid={`${testId}-cancel`}
