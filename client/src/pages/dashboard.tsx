@@ -8,10 +8,27 @@ import { SleeperStatus } from "@/components/sleeper-status";
 import { RAGStatus } from "@/components/rag-status";
 import { ActivityLog } from "@/components/activity-log";
 import { OwnerMapping } from "@/components/owner-mapping";
-import { Users, Book, Calendar, Bot, Terminal, Send, RefreshCw, FileText, PlayCircle, Database } from "lucide-react";
+import { Users, Book, Calendar, Bot, Terminal, Send, RefreshCw, FileText, PlayCircle, Database, CheckCircle2, XCircle, Clock, Activity } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+
+interface HealthData {
+  status: "healthy" | "degraded";
+  database?: { connected: boolean; latency?: number };
+  deepseek?: { available: boolean; latency?: number };
+  discord?: { available: boolean; latency?: number };
+  openai?: { available: boolean; latency?: number };
+  issues?: { service: string; reason: string }[];
+}
+
+interface EventData {
+  id: string;
+  type: string;
+  createdAt: string;
+  leagueId?: string;
+  payload: any;
+}
 
 export default function Dashboard() {
   // Set page title
@@ -22,12 +39,12 @@ export default function Dashboard() {
     }
   }, []);
 
-  const { data: healthData, isLoading: healthLoading } = useQuery({
+  const { data: healthData, isLoading: healthLoading } = useQuery<HealthData>({
     queryKey: ["/api/health"],
     refetchInterval: 30000, // Refresh every 30 seconds
   });
 
-  const { data: eventsData, isLoading: eventsLoading } = useQuery({
+  const { data: eventsData, isLoading: eventsLoading } = useQuery<EventData[]>({
     queryKey: ["/api/events"],
     queryFn: () => fetch("/api/events?limit=10").then(res => res.json()),
   });
@@ -127,6 +144,157 @@ export default function Dashboard() {
         <DiscordStatus />
         <SleeperStatus />
       </div>
+
+      {/* System Status */}
+      <Card className="mb-8" data-testid="system-status-card">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold text-foreground flex items-center gap-2">
+            <Activity className="w-5 h-5" />
+            System Status
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Health Status */}
+            <div className="space-y-3" data-testid="health-status">
+              <div className="flex items-center gap-2">
+                {!healthData ? (
+                  <>
+                    <Clock className="w-5 h-5 text-muted-foreground animate-pulse" />
+                    <span className="font-medium text-muted-foreground">
+                      {healthLoading ? "Loading..." : "Data Unavailable"}
+                    </span>
+                  </>
+                ) : healthData.status === "healthy" ? (
+                  <>
+                    <CheckCircle2 className="w-5 h-5 text-green-500" />
+                    <span className="font-medium text-foreground">All Systems Operational</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="w-5 h-5 text-red-500" />
+                    <span className="font-medium text-foreground">Issues Detected</span>
+                  </>
+                )}
+              </div>
+              <div className="space-y-2 pl-7">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Database</span>
+                  {!healthData ? (
+                    <Badge variant="secondary" className="text-xs">Unknown</Badge>
+                  ) : (
+                    <Badge variant={healthData.database?.connected ? "default" : "destructive"} className="text-xs">
+                      {healthData.database?.connected ? "Connected" : "Disconnected"}
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">DeepSeek API</span>
+                  {!healthData ? (
+                    <Badge variant="secondary" className="text-xs">Unknown</Badge>
+                  ) : (
+                    <Badge variant={healthData.deepseek?.available ? "default" : "destructive"} className="text-xs">
+                      {healthData.deepseek?.available ? "Available" : "Unavailable"}
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Discord Bot</span>
+                  {!healthData ? (
+                    <Badge variant="secondary" className="text-xs">Unknown</Badge>
+                  ) : (
+                    <Badge variant={healthData.discord?.available ? "default" : "destructive"} className="text-xs">
+                      {healthData.discord?.available ? "Available" : "Unavailable"}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Last Sync */}
+            <div className="space-y-3" data-testid="last-sync">
+              <div className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-blue-500" />
+                <span className="font-medium text-foreground">Last Sync</span>
+              </div>
+              <div className="space-y-2 pl-7">
+                {(() => {
+                  const lastSync = eventsData?.find((e: any) => e.type === "SLEEPER_SYNCED");
+                  if (lastSync) {
+                    const syncTime = new Date(lastSync.createdAt);
+                    const now = new Date();
+                    const diffMs = now.getTime() - syncTime.getTime();
+                    const diffMins = Math.floor(diffMs / 60000);
+                    const diffHours = Math.floor(diffMins / 60);
+                    const diffDays = Math.floor(diffHours / 24);
+                    
+                    let timeAgo = "";
+                    if (diffDays > 0) {
+                      timeAgo = `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+                    } else if (diffHours > 0) {
+                      timeAgo = `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+                    } else if (diffMins > 0) {
+                      timeAgo = `${diffMins} min${diffMins > 1 ? 's' : ''} ago`;
+                    } else {
+                      timeAgo = "Just now";
+                    }
+
+                    return (
+                      <>
+                        <div className="text-sm">
+                          <span className="text-muted-foreground">Sleeper Data: </span>
+                          <span className="text-foreground font-medium">{timeAgo}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {syncTime.toLocaleString()}
+                        </div>
+                      </>
+                    );
+                  }
+                  return (
+                    <div className="text-sm text-muted-foreground">
+                      No sync data available
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
+            {/* Recent Activity */}
+            <div className="space-y-3" data-testid="recent-activity-summary">
+              <div className="flex items-center gap-2">
+                <Activity className="w-5 h-5 text-purple-500" />
+                <span className="font-medium text-foreground">Recent Activity</span>
+              </div>
+              <div className="space-y-2 pl-7">
+                <div className="text-sm">
+                  <span className="text-2xl font-bold text-foreground">
+                    {eventsData?.length || 0}
+                  </span>
+                  <span className="text-muted-foreground ml-2">events (last 10)</span>
+                </div>
+                {eventsData && eventsData.length > 0 && (
+                  <div className="space-y-1">
+                    {Object.entries(
+                      eventsData.reduce((acc: Record<string, number>, e: any) => {
+                        acc[e.type] = (acc[e.type] || 0) + 1;
+                        return acc;
+                      }, {})
+                    )
+                      .slice(0, 3)
+                      .map(([type, count]) => (
+                        <div key={type} className="text-xs text-muted-foreground flex justify-between">
+                          <span>{type.replace(/_/g, ' ')}</span>
+                          <span className="font-medium">×{count}</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Slash Commands Interface */}
       <Card className="mb-8" data-testid="slash-commands-card">
