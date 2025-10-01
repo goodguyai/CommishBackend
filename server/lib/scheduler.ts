@@ -4,10 +4,30 @@ import { EventEmitter } from "events";
 export class Scheduler extends EventEmitter {
   private tasks: Map<string, cron.ScheduledTask> = new Map();
 
-  scheduleWeeklyDigest(leagueId: string, timezone: string = "America/New_York") {
-    // Schedule for Sundays at 9 AM in the league's timezone
+  scheduleWeeklyDigest(
+    leagueId: string, 
+    timezone: string = "America/New_York",
+    day: string = "Sunday",
+    time: string = "09:00"
+  ) {
+    // Convert day to cron day-of-week (0-6, Sunday = 0)
+    const dayMap: Record<string, number> = {
+      Sunday: 0,
+      Monday: 1,
+      Tuesday: 2,
+      Wednesday: 3,
+      Thursday: 4,
+      Friday: 5,
+      Saturday: 6,
+    };
+    const cronDay = dayMap[day] ?? 0;
+
+    // Parse time (HH:MM format)
+    const [hour, minute] = time.split(':').map(Number);
+    const cronTime = `${minute || 0} ${hour || 9} * * ${cronDay}`;
+
     const task = cron.schedule(
-      "0 9 * * 0",
+      cronTime,
       () => {
         this.emit("digest_due", { leagueId, timezone });
       },
@@ -20,7 +40,7 @@ export class Scheduler extends EventEmitter {
     this.tasks.set(`digest_${leagueId}`, task);
     task.start();
     
-    console.log(`Scheduled weekly digest for league ${leagueId} in ${timezone}`);
+    console.log(`Scheduled weekly digest for league ${leagueId}: ${day} at ${time} (${timezone})`);
   }
 
   scheduleSyncJob(leagueId: string, intervalMinutes: number = 15) {

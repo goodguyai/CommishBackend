@@ -48,8 +48,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
 
-      // Generate digest content
-      const digest = await generateDigestContent(league, sleeperService);
+      if (!league.sleeperLeagueId) {
+        console.warn(`Cannot generate digest: League ${data.leagueId} has no Sleeper ID`);
+        return;
+      }
+
+      // Sync Sleeper data first
+      const sleeperData = await sleeperService.syncLeagueData(league.sleeperLeagueId);
+
+      // Generate digest content with actual Sleeper data
+      const digest = await generateDigestContent(league, sleeperData);
 
       // Build digest description with Discord limit protection
       let description = digest.sections.map(s => `**${s.title}**\n${s.content}`).join("\n\n");
@@ -1029,7 +1037,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Schedule jobs for this league
       if (league) {
-        scheduler.scheduleWeeklyDigest(leagueId, league.timezone || 'America/New_York');
+        scheduler.scheduleWeeklyDigest(
+          leagueId, 
+          league.timezone || 'America/New_York',
+          league.digestDay || 'Sunday',
+          league.digestTime || '09:00'
+        );
         scheduler.scheduleSyncJob(leagueId);
       }
 
@@ -1874,6 +1887,23 @@ async function handleConfigCommand(interaction: any, league: any, requestId: str
 
     // Update the league in storage
     await storage.updateLeague(league.id, updateData);
+    
+    // Re-schedule digest if digest config changed
+    if (subcommand === 'digest' || subcommand === 'timezone') {
+      // Unschedule existing digest job
+      scheduler.unschedule(`digest_${league.id}`);
+      
+      // Re-schedule with updated settings
+      const updatedLeague = await storage.getLeague(league.id);
+      if (updatedLeague) {
+        scheduler.scheduleWeeklyDigest(
+          league.id,
+          updatedLeague.timezone || 'America/New_York',
+          updatedLeague.digestDay || 'Sunday',
+          updatedLeague.digestTime || '09:00'
+        );
+      }
+    }
     
     // Log the configuration change
     console.log(`Config updated for league ${league.id}: ${subcommand}`, updateData);

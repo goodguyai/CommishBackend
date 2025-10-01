@@ -28,6 +28,10 @@ export interface SleeperRoster {
     fpts: number;
     fpts_against: number;
   };
+  metadata?: {
+    team_name?: string;
+    [key: string]: any;
+  };
 }
 
 export interface SleeperMatchup {
