@@ -1200,8 +1200,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         scheduler.scheduleWeeklyDigest(
           leagueId, 
           league.timezone || 'America/New_York',
-          league.digestDay || 'Sunday',
-          league.digestTime || '09:00'
+          (league as any).digestDay || 'Sunday',
+          (league as any).digestTime || '09:00'
         );
         scheduler.scheduleSyncJob(leagueId);
       }
@@ -1210,6 +1210,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to create league:", error);
       res.status(500).json({ error: "Failed to create league" });
+    }
+  });
+
+  app.get("/api/leagues/:leagueId", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      const league = await storage.getLeague(leagueId);
+      
+      if (!league) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+      }
+
+      res.json(league);
+    } catch (error) {
+      console.error("Failed to get league:", error);
+      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get league" } });
+    }
+  });
+
+  app.patch("/api/leagues/:leagueId", async (req, res) => {
+    const startTime = Date.now();
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    try {
+      const { leagueId } = req.params;
+      const updateData = z.object({
+        featureFlags: z.record(z.unknown()).optional(),
+        tone: z.string().optional(),
+        timezone: z.string().optional(),
+      }).parse(req.body);
+
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+      }
+
+      // Update league
+      await storage.updateLeague(leagueId, updateData);
+      const updatedLeague = await storage.getLeague(leagueId);
+
+      const latency = Date.now() - startTime;
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId,
+        payload: { command: "league_settings_updated", updates: Object.keys(updateData) },
+        requestId,
+        latency,
+      });
+
+      res.json({ success: true, league: updatedLeague });
+    } catch (error) {
+      console.error("Failed to update league:", error);
+      const latency = Date.now() - startTime;
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        payload: { error: String(error), endpoint: "/api/leagues/:leagueId" },
+        requestId,
+        latency,
+      });
+      res.status(500).json({ error: { code: "UPDATE_FAILED", message: "Failed to update league" } });
     }
   });
 

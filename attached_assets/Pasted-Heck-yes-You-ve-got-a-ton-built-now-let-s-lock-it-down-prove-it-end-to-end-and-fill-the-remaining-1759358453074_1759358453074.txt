@@ -1,0 +1,232 @@
+Heck yes. You’ve got a ton built—now let’s lock it down, prove it end-to-end, and fill the remaining gaps so the beta feels cohesive. Below is a single copy-paste work order for your Replit Agent. It tells it to verify everything it already changed, fix the last pain points (deadline reminders data, auto-meme toggle UI, drift between code & DB, etc.), and add hardening around security/observability. It’s guardrailed so it won’t “helpfully” switch databases or point anything at localhost.
+
+⸻
+
+THE COMMISH – Beta Verification & Finish Line Sprint
+
+(Paste this whole section into Replit Agent)
+
+0) Guardrails (do not change)
+	•	Use Supabase only. No Neon/Replit DB.
+	•	APP_BASE_URL must be https://thecommish.replit.app (no trailing slash, no localhost).
+	•	Read env via server/services/env.ts only (no new process.env calls in routes).
+	•	Keep Discord interactions route using raw body + Ed25519 verification.
+	•	No schema drift: if schema changes are needed, write explicit migrations that match the live DB (see Task 3).
+	•	If a guardrail would be violated, STOP and report the blocking detail and your safest alternative.
+
+⸻
+
+1) Full System Verification (prove the app works E2E)
+
+Goal: independently re-verify everything we already built.
+
+1.1 Health + Core APIs
+	•	Hit /api/health 3x over 2 minutes and confirm status:"ok" and issues:[] each time.
+	•	Hit:
+	•	/api/events?limit=5
+	•	/api/setup/status?guildId=<sampleGuild>
+	•	/api/owners?leagueId=<sampleLeague>
+	•	/api/sleeper/leagues?username=<handle>&season=<YYYY>
+	•	/api/rag/search/<leagueId> with a trivial query (handle errors gracefully if no docs).
+	•	Log response times; flag any endpoint >1200ms p95.
+
+1.2 Setup Wizard (dry run)
+	•	Confirm /setup renders all steps: Discord → Channel → Sleeper → Constitution → Finish.
+	•	Confirm wizard state persists (resume) with 24h TTL and expired sessions are cleaned by the job.
+	•	Confirm permission/error UX shows helpful steps (no cryptic failures).
+
+1.3 Discord Commands
+	•	Ensure /rules, /scoring, /help, /reindex, /whoami are registered and respond (mock interactions if needed).
+	•	Verify tone setting is applied in answers.
+
+1.4 Digest & Reminders (smoke)
+	•	Run admin test buttons from dashboard:
+	•	“Run Weekly Digest (test)” → embed posts (respect 4096 desc limit).
+	•	“Force Sleeper Sync” completes without unhandled errors.
+
+Acceptance:
+	•	Post a short summary of the checks and paste JSON outputs for health/events.
+	•	Report slowest endpoint p95 and the heaviest call in the run.
+
+⸻
+
+2) Fill Remaining UX Gaps (fast wins)
+
+2.1 Auto-Meme Toggle UI
+	•	Add a toggle on the dashboard (League Settings → “Auto-meme on blowouts (≥40 pts)”).
+	•	Persist to leagues.feature_flags.autoMeme (JSONB). Default false.
+	•	Show current state and when it last generated a meme (from events).
+
+2.2 Status Card polish
+	•	If health has issues, show colored badges (DB, Discord, Sleeper, Embeddings) with quick links:
+	•	“Re-register Commands” → POST /api/discord/register-commands?guildId=...
+	•	“Post Test” → POST /api/discord/post-test?guildId=...
+	•	“Force Sync” → POST /api/sleeper/sync/:leagueId
+
+2.3 Owner Mapping – Trust but verify
+	•	On Save, show toast “Saved ✓”.
+	•	Re-fetch mappings and diff against previous to ensure round-trip success.
+
+Acceptance:
+Screenshot or DOM snapshot for the toggle present + saved state reflected on reload; show the POST/GET JSON for mappings round-trip.
+
+⸻
+
+3) Schema–Code–DB Drift Repair (no hidden surprises)
+
+(We know some DDL was applied via SQL; lock it into migrations so future deploys are safe.)
+
+3.1 Introspect live schema for these items (and only these):
+	•	leagues.tone (text or enum)
+	•	leagues.feature_flags (jsonb)
+	•	owner_mappings (league_id, sleeper_owner_id, discord_user_id, unique idx; fk constraints)
+	•	pending_setup.expires_at (timestamp)
+	•	polls (id, league_id, question, options jsonb, message_id, created_at)
+
+3.2 Create a single migration that matches live DB exactly (idempotent if possible):
+	•	Use IF NOT EXISTS guards where safe.
+	•	Don’t touch pgvector or extensions.
+
+3.3 Add a “drift check” script target in package.json (lightweight):
+	•	Runs a read-only compare of expected vs. live and warns (doesn’t mutate).
+
+Acceptance:
+Paste the migration file path and a one-line “drift check: OK” output.
+
+⸻
+
+4) Sleeper Deadlines → Real Reminders (the missing link)
+
+Goal: Reminders work because real deadline timestamps exist.
+
+4.1 Populate deadline records
+	•	Extend the Sleeper sync to create/update deadlines for:
+	•	Lineup lock: per week Sunday 1:00 PM in league timezone (MVP), plus detect Thursday kickoff for players on TNF if feasible; safe fallback is Sunday-only for MVP.
+	•	Waiver: if waiver_type & waiver_day_of_week/waiver_clear_days exist in league settings, compute a weekly clear time (MVP heuristic ok).
+	•	Trade deadline: if trade_deadline (week number) exists, map to that week’s Sunday 1:00 PM local time.
+
+If precise timestamps can’t be derived, create a best-effort record and include source:"heuristic" + a human-readable notes field for transparency.
+
+4.2 Schedule reminders
+	•	For each deadline row:
+	•	If reminders enabled (or flags undefined → default enabled), schedule a Discord notice at D-1 @ 9:00 AM and D-0 @ 60 min in league timezone.
+	•	De-dupe schedules if the row re-syncs.
+
+4.3 Observability
+	•	Write events: deadline_created, reminder_scheduled, reminder_sent.
+	•	Surface next 3 upcoming reminders on the dashboard.
+
+Acceptance:
+	•	After force sync, show JSON of deadlines created for the next week.
+	•	Paste log lines for scheduled reminders.
+
+⸻
+
+5) Discord Robustness & Safety
+
+5.1 Permissions sanity
+	•	If listing channels returns empty → present clear UI (“Bot needs: View Channels, Send Messages, Read History, Embed Links”) + install URL with correct permissions=84992.
+
+5.2 Rate limiting & retry
+	•	Add simple per-route limiter for /api/discord/interactions (e.g., token bucket per IP).
+	•	Add retry with backoff for Discord 429/5xx (max 2 retries) on non-interactive posts (e.g., digests).
+
+5.3 Admin-key scope
+	•	Ensure all admin endpoints (register-commands, post-test, digest/run) require X-Admin-Key.
+	•	Reply with 403 + {code:"forbidden", message:"Admin key required"}.
+
+Acceptance:
+	•	Paste a short log excerpt showing retries/backoff on a simulated 429.
+	•	Hitting admin endpoints without header yields 403 JSON.
+
+⸻
+
+6) RAG Answer Quality Guardrails
+
+6.1 Confidence floor
+	•	If RAG score < threshold, reply: “I can’t find that in your rules. Try rephrasing or re-indexing.”
+
+6.2 Citation format
+	•	Dedup + number citations, include doc title + version, and section label if available.
+
+6.3 Timeout budget
+	•	Slash replies: defer immediately, complete within 3 seconds budget; if exceeded, send partial answer and “Continuing…” follow-up (one message).
+
+Acceptance:
+GIF of /rules response showing numbered citations, or paste the JSON payload used to send the message.
+
+⸻
+
+7) Logs, Health & Error Budgets
+
+7.1 Request logs
+	•	Confirm every API logs: requestId, route, ms, status, outcome.
+	•	Trim body logging to 0 for large or binary routes (we only have JSON).
+
+7.2 Health detail
+	•	/api/health includes issues (array of {service, reason}), and provider latencies for DB/Sleeper/DeepSeek.
+
+7.3 Error budgets
+	•	Add a simple rolling window counter (in-memory) for failed external calls; if >N in 10 min, set health degraded with issues detail.
+
+Acceptance:
+Paste /api/health JSON showing provider latencies present and empty issues in healthy runs.
+
+⸻
+
+8) QA Script (Agent must run and paste outputs)
+
+# A. Health (3x)
+curl -s $APP_BASE_URL/api/health
+
+# B. Events head
+curl -s "$APP_BASE_URL/api/events?limit=5"
+
+# C. Sleeper browse
+curl -s "$APP_BASE_URL/api/sleeper/leagues?username=<YOUR_HANDLE>&season=$(date +%Y)" | head -n 60
+
+# D. Owners (after mapping 1 team in UI)
+curl -s "$APP_BASE_URL/api/owners?leagueId=<LEAGUE_ID>"
+
+# E. Test digest
+curl -s -X POST "$APP_BASE_URL/api/digest/run?leagueId=<LEAGUE_ID>" -H "X-Admin-Key: $ADMIN_KEY"
+
+# F. RAG (if constitution pasted)
+curl -s -X POST "$APP_BASE_URL/api/rag/search/<LEAGUE_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"When do lineups lock?"}'
+
+Agent output must include: raw JSON samples and a one-line analysis per check.
+
+⸻
+
+9) Deliverable Summary (Agent must produce)
+	•	What changed (files/endpoints/pages, bullet list).
+	•	Migrations applied (file names + summary).
+	•	Toggles surfaced (autoMeme, tone, reminders) and their defaults.
+	•	Acceptance outputs pasted.
+	•	Known gaps + proposed next actions (e.g., exact waiver timestamp rules per platform).
+
+⸻
+
+Implementation Notes
+	•	Keep edits additive; don’t refactor large areas when a small change works.
+	•	For Sleeper deadlines, a conservative heuristic is fine for MVP; label source:"heuristic" so we can swap in precise mapping later.
+	•	Never “helpfully” swap DB drivers or endpoints. If SSL/drizzle tooling fights you, prefer runtime SQL wrappers but also write a migration file that mirrors the live DDL for portability.
+
+⸻
+
+After this sprint (nice-to-have)
+	•	Precise schedule ingest (per-week kickoff times), ESPN/Yahoo adapters, keeper/dynasty attributes, dues tracking, trophy embeds, and beta feedback capture.
+
+⸻
+
+End of Work Order
+
+⸻
+
+TL;DR for you
+	•	This tells the Agent to audit & prove everything, finish the “last mile” items (auto-meme toggle UI, real reminders data, drift-free migrations), and add safety around rate limits and admin keys.
+	•	It also locks in reproducibility so your beta doesn’t break on the next deploy.
+
+If you want, after it runs I’ll give you a Go/No-Go checklist to invite the first beta leagues.

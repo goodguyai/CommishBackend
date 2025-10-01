@@ -3,15 +3,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { DiscordStatus } from "@/components/discord-status";
 import { SleeperStatus } from "@/components/sleeper-status";
 import { RAGStatus } from "@/components/rag-status";
 import { ActivityLog } from "@/components/activity-log";
 import { OwnerMapping } from "@/components/owner-mapping";
-import { Users, Book, Calendar, Bot, Terminal, Send, RefreshCw, FileText, PlayCircle, Database, CheckCircle2, XCircle, Clock, Activity } from "lucide-react";
+import { Users, Book, Calendar, Bot, Terminal, Send, RefreshCw, FileText, PlayCircle, Database, CheckCircle2, XCircle, Clock, Activity, Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 
 interface HealthData {
   status: "healthy" | "degraded";
@@ -681,19 +683,15 @@ function QuickPollForm() {
 
   const mutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("/api/polls", {
-        method: "POST",
-        body: {
-          leagueId,
-          question,
-          options: options.filter(o => o.trim() !== ""),
-          createdBy,
-        },
+      const res = await apiRequest("POST", "/api/polls", {
+        leagueId,
+        question,
+        options: options.filter(o => o.trim() !== ""),
+        createdBy,
       });
-      if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       toast({
         title: "Poll created!",
         description: data.message || "Poll posted to Discord successfully",
@@ -837,11 +835,65 @@ function QuickPollForm() {
 }
 
 function LeagueManagementSection() {
+  const { toast } = useToast();
   const [leagueId, setLeagueId] = useState("");
   const [showOwnerMapping, setShowOwnerMapping] = useState(false);
 
+  const { data: league, isLoading, error } = useQuery<any>({
+    queryKey: ["/api/leagues", leagueId],
+    queryFn: async () => {
+      const res = await fetch(`/api/leagues/${leagueId}`);
+      if (!res.ok) {
+        throw new Error(`Failed to load league: ${res.statusText}`);
+      }
+      return res.json();
+    },
+    enabled: !!leagueId && leagueId.trim().length > 0,
+  });
+
+  const { data: lastMemeEvent } = useQuery<any>({
+    queryKey: ["/api/events", leagueId, "auto_meme"],
+    queryFn: async () => {
+      const res = await fetch(`/api/events?leagueId=${leagueId}&type=COMMAND_EXECUTED&limit=100`);
+      if (!res.ok) return null;
+      const events = await res.json();
+      return events.find((e: any) => e.payload?.command === "auto_meme_posted");
+    },
+    enabled: !!leagueId && !!league,
+  });
+
+  const updateSettingsMutation = useMutation({
+    mutationFn: async (featureFlags: any) => {
+      const res = await apiRequest("PATCH", `/api/leagues/${leagueId}`, { featureFlags });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leagues", leagueId] });
+      toast({
+        title: "Settings saved",
+        description: "League settings updated successfully",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Failed to save",
+        description: "Could not update league settings",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleAutoMemeToggle = (checked: boolean) => {
+    if (!league) return;
+    const updatedFlags = {
+      ...(league.featureFlags || {}),
+      autoMeme: checked,
+    };
+    updateSettingsMutation.mutate(updatedFlags);
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex gap-3">
         <input
           type="text"
@@ -860,6 +912,47 @@ function LeagueManagementSection() {
           Load Owner Mapping
         </Button>
       </div>
+
+      {league && (
+        <div className="border border-border rounded-lg p-4 space-y-4" data-testid="league-settings">
+          <div className="flex items-center gap-2 mb-2">
+            <Settings className="w-4 h-4 text-muted-foreground" />
+            <h3 className="font-semibold text-foreground">{league.name || "League Settings"}</h3>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between py-2" data-testid="setting-auto-meme">
+              <div className="space-y-0.5">
+                <Label htmlFor="auto-meme" className="text-sm font-medium cursor-pointer">
+                  Auto-Meme on Blowouts
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Automatically post humorous messages when games have ≥40 point difference
+                </p>
+              </div>
+              <Switch
+                id="auto-meme"
+                checked={(league.featureFlags as any)?.autoMeme || false}
+                onCheckedChange={handleAutoMemeToggle}
+                disabled={updateSettingsMutation.isPending}
+                data-testid="switch-auto-meme"
+              />
+            </div>
+
+            {(league.featureFlags as any)?.autoMeme && (
+              <div className="text-xs text-muted-foreground pl-4 border-l-2 border-primary/20" data-testid="last-meme-info">
+                <p>Last meme posted: {lastMemeEvent 
+                  ? new Date(lastMemeEvent.createdAt).toLocaleString()
+                  : "Never"
+                }</p>
+                {lastMemeEvent && lastMemeEvent.payload?.scoreDiff && (
+                  <p className="mt-1">Score difference: {lastMemeEvent.payload.scoreDiff.toFixed(1)} points</p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showOwnerMapping && leagueId && (
         <OwnerMapping leagueId={leagueId} />
