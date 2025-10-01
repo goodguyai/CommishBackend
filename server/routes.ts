@@ -39,13 +39,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Setup event handlers
   eventBus.on("digest_due", async (data) => {
-    console.log("Weekly digest due for league:", data.leagueId);
-    // TODO: Generate and send digest
+    try {
+      console.log(`[Scheduler] Weekly digest due for league ${data.leagueId}`);
+      
+      const league = await storage.getLeague(data.leagueId);
+      if (!league || !league.channelId) {
+        console.warn(`Cannot send digest: League ${data.leagueId} not found or has no channel`);
+        return;
+      }
+
+      // Generate digest content
+      const digest = await generateDigestContent(league, sleeperService);
+
+      // Build digest description with Discord limit protection
+      let description = digest.sections.map(s => `**${s.title}**\n${s.content}`).join("\n\n");
+      
+      // Discord embed description limit is 4096 chars, keep safe margin
+      if (description.length > 3800) {
+        description = description.substring(0, 3797) + "...";
+      }
+
+      // Post digest to Discord channel
+      const embed = {
+        title: `📊 ${digest.leagueName} - Weekly Digest`.substring(0, 256), // Discord title limit
+        description,
+        color: 0x00D2FF,
+        footer: { text: `THE COMMISH • Generated ${new Date(digest.timestamp).toLocaleString()}` },
+        timestamp: new Date(digest.timestamp).toISOString(), // Fix: ISO8601 format for Discord
+      };
+
+      await discordService.postMessage(league.channelId, { embeds: [embed] });
+      
+      // Log digest sent event (distinct from digest_due)
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId: league.id,
+        payload: { command: "digest_sent", success: true },
+      });
+      
+      console.log(`[Scheduler] Digest sent successfully to league ${data.leagueId}`);
+    } catch (error) {
+      console.error(`[Scheduler] Failed to generate/send digest for league ${data.leagueId}:`, error);
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        leagueId: data.leagueId,
+        payload: { error: "digest_generation_failed", message: String(error) },
+      });
+    }
   });
 
   eventBus.on("sync_due", async (data) => {
-    console.log("Sync due for league:", data.leagueId);
-    // TODO: Trigger Sleeper sync
+    try {
+      console.log(`[Scheduler] Sync due for league ${data.leagueId}`);
+      
+      const league = await storage.getLeague(data.leagueId);
+      if (!league || !league.sleeperLeagueId) {
+        console.warn(`Cannot sync: League ${data.leagueId} not found or has no Sleeper ID`);
+        return;
+      }
+
+      // Sync Sleeper data
+      await sleeperService.syncLeagueData(league.sleeperLeagueId);
+      
+      // Log sync event
+      await storage.createEvent({
+        type: "SLEEPER_SYNCED",
+        leagueId: league.id,
+        payload: { success: true },
+      });
+      
+      console.log(`[Scheduler] Sleeper data synced successfully for league ${data.leagueId}`);
+    } catch (error) {
+      console.error(`[Scheduler] Failed to sync Sleeper data for league ${data.leagueId}:`, error);
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        leagueId: data.leagueId,
+        payload: { error: "sleeper_sync_failed", message: String(error) },
+      });
+    }
   });
   // Dev: Register Discord commands (requires admin key)
   app.post("/api/dev/register-commands", async (req, res) => {
