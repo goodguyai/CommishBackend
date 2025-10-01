@@ -6,7 +6,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarNav } from "@/components/ui/sidebar-nav";
 import Dashboard from "@/pages/dashboard";
 import Leagues from "@/pages/leagues";
-import DiscordSetup from "@/pages/discord-setup";
 import Setup from "@/pages/setup";
 import Help from "@/pages/help";
 import NotFound from "@/pages/not-found";
@@ -72,9 +71,8 @@ function Router() {
         <Route path="/" component={Dashboard} />
         <Route path="/leagues" component={Leagues} />
         <Route path="/setup" component={Setup} />
-        <Route path="/discord-setup" component={DiscordSetup} />
+        <Route path="/settings" component={Setup} />
         <Route path="/help" component={Help} />
-        <Route path="/settings" component={DiscordSetup} />
         {/* Add other routes as they're implemented */}
         <Route component={NotFound} />
       </Switch>

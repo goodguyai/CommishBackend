@@ -94,7 +94,7 @@ export default function Setup() {
   // Discord OAuth Mutations
   const discordAuthMutation = useMutation({
     mutationFn: async () => {
-      const response = await fetch(`/api/discord/user-auth-url?redirectUri=${encodeURIComponent(`${window.location.origin}/discord-callback`)}`);
+      const response = await fetch(`/api/discord/user-auth-url`);
       return response.json();
     },
     onSuccess: (data) => {
@@ -111,7 +111,7 @@ export default function Setup() {
 
   const botInstallMutation = useMutation({
     mutationFn: async (guildId: string) => {
-      const response = await fetch(`/api/discord/bot-install-url?guildId=${guildId}&redirectUri=${encodeURIComponent(window.location.origin)}`);
+      const response = await fetch(`/api/discord/bot-install-url?guildId=${guildId}`);
       return response.json();
     },
     onSuccess: (data) => {

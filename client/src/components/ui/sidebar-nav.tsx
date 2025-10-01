@@ -5,11 +5,11 @@ import { Crown, Home, Users, Bot, Settings, HelpCircle } from "lucide-react";
 const navigation = [
   { name: "Dashboard", href: "/", icon: Home },
   { name: "Leagues", href: "/leagues", icon: Users },
-  { name: "Discord Setup", href: "/discord-setup", icon: Bot },
+  { name: "Setup Wizard", href: "/setup", icon: Bot },
 ];
 
 const secondaryNavigation = [
-  { name: "Settings", href: "/discord-setup", icon: Settings },
+  { name: "Settings", href: "/settings", icon: Settings },
   { name: "Help", href: "/help", icon: HelpCircle },
 ];
 

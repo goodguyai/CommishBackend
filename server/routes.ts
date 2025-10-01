@@ -129,12 +129,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Discord User OAuth Flow
   app.get("/api/discord/user-auth-url", (req, res) => {
     try {
-      const { redirectUri } = req.query;
-      if (!redirectUri || typeof redirectUri !== 'string') {
-        return res.status(400).json({ error: "redirectUri is required" });
-      }
-
       const sessionId = getSessionId(req);
+      // Always use server's APP_BASE_URL to ensure case consistency
+      const redirectUri = `${env.app.baseUrl}/discord-callback`;
       const authUrl = discordService.generateUserAuthUrl(redirectUri, sessionId);
       
       res.json({ url: authUrl });
@@ -217,13 +214,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Discord Bot Installation
   app.get("/api/discord/bot-install-url", (req, res) => {
     try {
-      const { guildId, redirectUri } = req.query;
+      const { guildId } = req.query;
       
-      if (!guildId || !redirectUri) {
-        return res.status(400).json({ error: "guildId and redirectUri are required" });
+      if (!guildId || typeof guildId !== 'string') {
+        return res.status(400).json({ error: "guildId is required" });
       }
 
-      const botInstallUrl = discordService.generateBotInstallUrl(guildId as string, redirectUri as string);
+      // Use server's APP_BASE_URL for consistency
+      const redirectUri = env.app.baseUrl;
+      const botInstallUrl = discordService.generateBotInstallUrl(guildId, redirectUri);
       res.json({ url: botInstallUrl });
     } catch (error) {
       console.error("Error generating bot install URL:", error);
@@ -509,38 +508,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
-  // Discord OAuth2 routes
-  app.get("/api/discord/auth-url", async (req, res) => {
-    try {
-      const { redirectUri, state } = req.query;
-      
-      if (!redirectUri || typeof redirectUri !== "string") {
-        return res.status(400).json({ error: "redirectUri is required" });
-      }
-
-      const authUrl = discordService.generateUserAuthUrl(redirectUri, state as string);
-      res.json({ authUrl });
-    } catch (error) {
-      console.error("Failed to generate Discord auth URL:", error);
-      res.status(500).json({ error: "Failed to generate auth URL" });
-    }
-  });
-
-  app.get("/api/discord/bot-install-url", async (req, res) => {
-    try {
-      const { guildId, redirectUri } = req.query;
-      
-      if (!guildId || !redirectUri || typeof guildId !== "string" || typeof redirectUri !== "string") {
-        return res.status(400).json({ error: "guildId and redirectUri are required" });
-      }
-
-      const installUrl = discordService.generateBotInstallUrl(guildId, redirectUri);
-      res.json({ installUrl });
-    } catch (error) {
-      console.error("Failed to generate bot install URL:", error);
-      res.status(500).json({ error: "Failed to generate install URL" });
-    }
-  });
 
   app.post("/api/discord/oauth-callback", async (req, res) => {
     try {
