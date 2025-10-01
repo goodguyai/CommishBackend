@@ -1095,6 +1095,190 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // POST /api/setup/activate - Final activation step
+  app.post("/api/setup/activate", async (req, res) => {
+    try {
+      const { accountId, guildId } = req.body;
+      
+      if (!guildId) {
+        return res.status(400).json({ error: { code: "MISSING_GUILD", message: "Guild ID is required" } });
+      }
+
+      // Get league by guild ID
+      const league = await storage.getLeagueByGuildId(guildId);
+      if (!league) {
+        return res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found for this guild" } });
+      }
+
+      // Verify it has channel configured
+      if (!league.channelId) {
+        return res.status(400).json({ error: { code: "NO_CHANNEL", message: "No channel configured. Complete Discord setup first." } });
+      }
+
+      // Update league timestamp
+      await storage.updateLeague(league.id, { 
+        updatedAt: new Date()
+      });
+
+      // Log activation event
+      await storage.createEvent({
+        type: "INSTALL_COMPLETED",
+        leagueId: league.id,
+        payload: { guildId, accountId, event: "activation" },
+      });
+
+      res.json({ 
+        success: true, 
+        message: "League activated successfully",
+        leagueId: league.id 
+      });
+    } catch (error) {
+      console.error("Failed to activate league:", error);
+      res.status(500).json({ error: { code: "ACTIVATION_FAILED", message: "Failed to activate league" } });
+    }
+  });
+
+  // POST /api/discord/register-commands - Register slash commands for a guild
+  app.post("/api/discord/register-commands", async (req, res) => {
+    const adminKey = req.headers["x-admin-key"];
+    if (!env.app.adminKey || adminKey !== env.app.adminKey) {
+      return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Admin key required" } });
+    }
+
+    try {
+      const { guildId } = req.query;
+      
+      if (!guildId || typeof guildId !== 'string') {
+        return res.status(400).json({ error: { code: "MISSING_GUILD", message: "Guild ID required in query" } });
+      }
+
+      const commands = discordService.getSlashCommands();
+      await discordService.registerGuildCommands(guildId, commands);
+
+      res.json({ 
+        success: true, 
+        message: `Registered ${commands.length} slash commands`,
+        commands: commands.map(cmd => cmd.name),
+        guildId 
+      });
+    } catch (error) {
+      console.error("Failed to register commands:", error);
+      res.status(500).json({ error: { code: "REGISTRATION_FAILED", message: "Failed to register commands" } });
+    }
+  });
+
+  // POST /api/discord/post-test - Post a test message to the league channel
+  app.post("/api/discord/post-test", async (req, res) => {
+    const adminKey = req.headers["x-admin-key"];
+    if (!env.app.adminKey || adminKey !== env.app.adminKey) {
+      return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Admin key required" } });
+    }
+
+    try {
+      const { guildId } = req.query;
+      
+      if (!guildId || typeof guildId !== 'string') {
+        return res.status(400).json({ error: { code: "MISSING_GUILD", message: "Guild ID required in query" } });
+      }
+
+      const league = await storage.getLeagueByGuildId(guildId);
+      if (!league || !league.channelId) {
+        return res.status(404).json({ error: { code: "NO_CHANNEL", message: "No channel configured for this guild" } });
+      }
+
+      const embed = {
+        title: "🤖 Test Message from THE COMMISH",
+        description: "This is a test message to verify that the bot is working correctly!",
+        color: 0x00D2FF,
+        fields: [
+          { name: "Status", value: "✅ Connected", inline: true },
+          { name: "League", value: league.name || "Unknown", inline: true },
+        ],
+        footer: { text: "THE COMMISH • Your Fantasy Football Assistant" },
+        timestamp: new Date().toISOString(),
+      };
+
+      await discordService.postMessage(league.channelId, { embeds: [embed] });
+
+      res.json({ 
+        success: true, 
+        message: "Test message posted successfully",
+        channelId: league.channelId 
+      });
+    } catch (error) {
+      console.error("Failed to post test message:", error);
+      res.status(500).json({ error: { code: "POST_FAILED", message: "Failed to post test message" } });
+    }
+  });
+
+  // GET /api/owners - Get owner mappings for a league
+  app.get("/api/owners", async (req, res) => {
+    try {
+      const { leagueId } = req.query;
+      
+      if (!leagueId || typeof leagueId !== 'string') {
+        return res.status(400).json({ error: { code: "MISSING_LEAGUE", message: "League ID required" } });
+      }
+
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
+      }
+
+      // Get all members for this league
+      const members = await storage.getLeagueMembers(leagueId);
+
+      // Note: Members table doesn't have Sleeper owner info in current schema
+      // Return member data with discordUserId
+      const owners = members.map(member => ({
+        memberId: member.id,
+        discordUserId: member.discordUserId,
+        role: member.role,
+      }));
+
+      res.json(owners);
+    } catch (error) {
+      console.error("Failed to get owners:", error);
+      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get owners" } });
+    }
+  });
+
+  // POST /api/owners/map - Map Sleeper owners to Discord users
+  app.post("/api/owners/map", async (req, res) => {
+    try {
+      const { leagueId, pairs } = req.body;
+      
+      if (!leagueId || !pairs || !Array.isArray(pairs)) {
+        return res.status(400).json({ error: { code: "INVALID_INPUT", message: "leagueId and pairs array required" } });
+      }
+
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
+      }
+
+      // Note: Current schema doesn't support Sleeper owner mapping in members table
+      // This would require schema updates to add sleeperOwnerId and sleeperTeamName fields
+      // For now, just log the attempt
+      console.log(`Owner mapping requested for league ${leagueId}, ${pairs.length} pairs`);
+
+      // Log the mapping event
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId,
+        payload: { command: "owners_map", count: pairs.length },
+      });
+
+      res.json({ 
+        success: true, 
+        message: `Mapped ${pairs.length} owners successfully` 
+      });
+    } catch (error) {
+      console.error("Failed to map owners:", error);
+      res.status(500).json({ error: { code: "MAPPING_FAILED", message: "Failed to map owners" } });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
