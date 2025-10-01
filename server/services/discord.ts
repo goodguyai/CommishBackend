@@ -385,6 +385,26 @@ export class DiscordService {
               },
             ],
           },
+          {
+            name: "tone",
+            description: "Set the bot's personality/tone",
+            type: 1, // SUB_COMMAND
+            options: [
+              {
+                name: "style",
+                description: "Choose the bot's tone",
+                type: 3, // STRING
+                required: true,
+                choices: [
+                  { name: "Professional", value: "professional" },
+                  { name: "Casual", value: "casual" },
+                  { name: "Funny", value: "funny" },
+                  { name: "Savage", value: "savage" },
+                  { name: "Neutral", value: "neutral" },
+                ],
+              },
+            ],
+          },
         ],
       },
       {

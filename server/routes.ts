@@ -1728,11 +1728,39 @@ async function handleConfigCommand(interaction: any, league: any, requestId: str
         responseMessage = `✅ Feature **${featureName}** ${enabled !== false ? 'enabled' : 'disabled'}`;
         break;
 
+      case "tone":
+        const toneValue = interaction.data?.options?.[0]?.options?.find((opt: any) => opt.name === "style")?.value;
+        
+        if (!toneValue) {
+          return {
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: {
+              content: "❌ Please specify a tone (professional, casual, funny, savage, neutral)",
+              flags: 64,
+            },
+          };
+        }
+
+        const validTones = ['professional', 'casual', 'funny', 'savage', 'neutral'];
+        if (!validTones.includes(toneValue)) {
+          return {
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: {
+              content: `❌ Invalid tone. Choose from: ${validTones.join(', ')}`,
+              flags: 64,
+            },
+          };
+        }
+
+        updateData.tone = toneValue;
+        responseMessage = `✅ Bot tone updated to **${toneValue}**`;
+        break;
+
       default:
         return {
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
           data: {
-            content: "❌ Unknown config option. Use: timezone, digest, or feature",
+            content: "❌ Unknown config option. Use: timezone, digest, tone, or feature",
             flags: 64,
           },
         };
