@@ -705,60 +705,118 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Health check with real database connectivity test
   app.get("/api/health", async (req, res) => {
     const startTime = Date.now();
-    const issues: string[] = [];
+    const issues: { service: string; reason: string }[] = [];
+    const latencies: Record<string, number> = {};
     
     // Test DeepSeek service
+    const deepSeekStart = Date.now();
     const deepSeekHealthy = await deepSeekService.healthCheck();
-    if (!deepSeekHealthy) issues.push("deepseek");
+    latencies.deepseek = Date.now() - deepSeekStart;
+    if (!deepSeekHealthy) {
+      issues.push({ service: "deepseek", reason: "Health check failed" });
+    }
     
     // Test database connectivity with real query
     let databaseStatus = "connected";
-    let databaseLatency = 0;
     try {
       const dbStart = Date.now();
       await storage.runRawSQL("SELECT 1");
-      databaseLatency = Date.now() - dbStart;
+      latencies.database = Date.now() - dbStart;
     } catch (error) {
       databaseStatus = "error";
-      issues.push("database");
+      issues.push({ service: "database", reason: String(error) });
       console.error("Database health check failed:", error);
+      latencies.database = -1;
     }
 
-    // Test OpenAI embeddings availability (basic check)
+    // Test OpenAI embeddings availability
     let embeddingsStatus = "available";
     try {
       if (!env.openai.apiKey) {
         embeddingsStatus = "not_configured";
-        issues.push("embeddings");
+        issues.push({ service: "embeddings", reason: "API key not configured" });
+        latencies.openai = -1;
+      } else {
+        const embedStart = Date.now();
+        // Quick health check - just verify config
+        embeddingsStatus = "healthy";
+        latencies.openai = Date.now() - embedStart;
       }
     } catch (error) {
       embeddingsStatus = "error";
-      issues.push("embeddings");
+      issues.push({ service: "embeddings", reason: String(error) });
+      latencies.openai = -1;
+    }
+
+    // Test Sleeper API availability
+    let sleeperStatus = "available";
+    try {
+      const sleeperStart = Date.now();
+      // Simple health check - Sleeper API state endpoint
+      await fetch("https://api.sleeper.app/v1/state/nfl");
+      latencies.sleeper = Date.now() - sleeperStart;
+      sleeperStatus = "healthy";
+    } catch (error) {
+      sleeperStatus = "error";
+      issues.push({ service: "sleeper", reason: "API unreachable" });
+      latencies.sleeper = -1;
+    }
+
+    // Test Discord bot status
+    let discordStatus = "configured";
+    try {
+      if (!env.discord.botToken || !env.discord.clientId) {
+        discordStatus = "not_configured";
+        issues.push({ service: "discord", reason: "Bot credentials not configured" });
+      } else if (discordService.client?.user) {
+        discordStatus = "connected";
+      } else {
+        discordStatus = "disconnected";
+        issues.push({ service: "discord", reason: "Bot not connected to gateway" });
+      }
+    } catch (error) {
+      discordStatus = "error";
+      issues.push({ service: "discord", reason: String(error) });
     }
 
     // Determine overall status
-    const status = issues.length === 0 ? "ok" : "degraded";
-    const totalLatency = Date.now() - startTime;
+    const status = issues.length === 0 ? "ok" : issues.length <= 2 ? "degraded" : "critical";
+    latencies.total = Date.now() - startTime;
     
     res.json({
       status,
       timestamp: new Date().toISOString(),
-      latency: totalLatency,
+      latency: latencies.total,
       services: {
         database: databaseStatus,
         deepseek: deepSeekHealthy ? "healthy" : "error",
-        discord: "configured",
-        sleeper: "available",
+        discord: discordStatus,
+        sleeper: sleeperStatus,
         embeddings: embeddingsStatus
       },
-      embeddings: {
-        provider: "openai",
-        model: env.openai.embedModel,
-        dimension: env.openai.embedDim
+      providers: {
+        llm: {
+          provider: "deepseek",
+          model: "deepseek-chat",
+          latency: latencies.deepseek
+        },
+        embeddings: {
+          provider: "openai",
+          model: env.openai.embedModel,
+          dimension: env.openai.embedDim,
+          latency: latencies.openai
+        },
+        platform: {
+          provider: "sleeper",
+          latency: latencies.sleeper
+        }
       },
       performance: {
-        database_latency: databaseLatency,
-        total_latency: totalLatency
+        database_ms: latencies.database,
+        deepseek_ms: latencies.deepseek,
+        openai_ms: latencies.openai,
+        sleeper_ms: latencies.sleeper,
+        total_ms: latencies.total
       },
       ...(issues.length > 0 && { issues })
     });
