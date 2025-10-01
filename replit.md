@@ -4,6 +4,36 @@
 
 THE COMMISH is a Discord bot designed for fantasy football leagues, primarily integrated with the Sleeper platform. The application serves as an AI-powered commissioner assistant that helps league members with rule inquiries, deadline tracking, and automated digest generation. Built as a full-stack web application with a React frontend for management and a Node.js backend that handles Discord interactions, the system uses advanced RAG (Retrieval-Augmented Generation) capabilities powered by DeepSeek LLM to provide intelligent responses to league constitution questions.
 
+## Recent Changes (October 1, 2025)
+
+### Backend Enhancements
+- **Activation Endpoint**: Added POST /api/setup/activate for final league activation after setup wizard completion
+- **Admin Utilities Endpoints**: 
+  - POST /api/discord/register-commands - Register slash commands to a specific Discord guild
+  - POST /api/discord/post-test - Post test message to verify bot connectivity
+- **Owner Management Endpoints**: GET /api/owners and POST /api/owners/map (stubbed, requires schema extension for full Sleeper integration)
+- **Scheduler Event Handlers**: Implemented digest_due and sync_due handlers with Discord message posting and Sleeper data synchronization
+  - Added Discord embed length protection (4096 char limit) and ISO8601 timestamp formatting
+  - Comprehensive error handling and event logging
+
+### Frontend Features
+- **Developer Utilities Dashboard Section**: Added utility buttons for admin/debug operations
+  - Register Commands: Deploy slash commands to Discord guilds
+  - Post Test Message: Verify bot connectivity with test embeds
+  - View Logs: Quick access to application logs
+  - Health Check: Open system health status endpoint
+  - Interactive UI with admin key prompts and guildId inputs
+
+### Discord Integration
+- **New Slash Command**: /whoami - Shows user's league profile and role
+  - Displays member info, role (Commissioner/Manager), and Discord linkage
+  - Hardened with guards for missing league and user validation
+
+### Known Limitations
+- Owner mapping endpoints require schema extension (sleeperOwnerId, sleeperTeamName fields on members table)
+- Scheduler handlers lack retry logic for transient failures (acceptable for MVP)
+- Admin key authentication via browser prompt (acceptable for internal dev tools)
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.
