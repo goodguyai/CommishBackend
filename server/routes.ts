@@ -1299,18 +1299,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
       }
 
-      // Get all members for this league
-      const members = await storage.getLeagueMembers(leagueId);
+      // Get all owner mappings for this league
+      const mappings = await storage.getOwnerMappings(leagueId);
 
-      // Note: Members table doesn't have Sleeper owner info in current schema
-      // Return member data with discordUserId
-      const owners = members.map(member => ({
-        memberId: member.id,
-        discordUserId: member.discordUserId,
-        role: member.role,
-      }));
-
-      res.json(owners);
+      res.json(mappings);
     } catch (error) {
       console.error("Failed to get owners:", error);
       res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get owners" } });
@@ -1331,21 +1323,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
       }
 
-      // Note: Current schema doesn't support Sleeper owner mapping in members table
-      // This would require schema updates to add sleeperOwnerId and sleeperTeamName fields
-      // For now, just log the attempt
-      console.log(`Owner mapping requested for league ${leagueId}, ${pairs.length} pairs`);
+      // Validate and upsert each mapping
+      const results = [];
+      for (const pair of pairs) {
+        if (!pair.sleeperOwnerId || !pair.discordUserId) {
+          continue; // Skip invalid pairs
+        }
+        
+        const mappingId = await storage.upsertOwnerMapping({
+          leagueId,
+          sleeperOwnerId: pair.sleeperOwnerId,
+          sleeperTeamName: pair.sleeperTeamName || null,
+          discordUserId: pair.discordUserId,
+          discordUsername: pair.discordUsername || null,
+        });
+        
+        results.push({ id: mappingId, ...pair });
+      }
 
       // Log the mapping event
       await storage.createEvent({
         type: "COMMAND_EXECUTED",
         leagueId,
-        payload: { command: "owners_map", count: pairs.length },
+        payload: { command: "owners_map", count: results.length },
       });
 
       res.json({ 
         success: true, 
-        message: `Mapped ${pairs.length} owners successfully` 
+        message: `Mapped ${results.length} owners successfully`,
+        mappings: results
       });
     } catch (error) {
       console.error("Failed to map owners:", error);

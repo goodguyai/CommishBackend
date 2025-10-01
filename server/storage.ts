@@ -6,7 +6,8 @@ import type {
   User, InsertUser, Account, InsertAccount, League, InsertLeague,
   Member, InsertMember, Document, InsertDocument, Rule, InsertRule,
   Fact, InsertFact, Deadline, InsertDeadline, Event, InsertEvent,
-  DiscordInteraction, PendingSetup, InsertPendingSetup
+  DiscordInteraction, PendingSetup, InsertPendingSetup,
+  OwnerMapping, InsertOwnerMapping
 } from "@shared/schema";
 import { EmbeddingResult } from "./services/rag";
 import { env } from "./services/env";
@@ -94,6 +95,14 @@ export interface IStorage {
   createPendingSetup(setup: InsertPendingSetup): Promise<string>;
   updatePendingSetup(sessionId: string, updates: Partial<PendingSetup>): Promise<void>;
   deletePendingSetup(sessionId: string): Promise<void>;
+
+  // Owner mapping methods
+  getOwnerMappings(leagueId: string): Promise<OwnerMapping[]>;
+  getOwnerMapping(leagueId: string, sleeperOwnerId: string): Promise<OwnerMapping | undefined>;
+  createOwnerMapping(mapping: InsertOwnerMapping): Promise<string>;
+  updateOwnerMapping(leagueId: string, sleeperOwnerId: string, updates: Partial<OwnerMapping>): Promise<void>;
+  deleteOwnerMapping(leagueId: string, sleeperOwnerId: string): Promise<void>;
+  upsertOwnerMapping(mapping: InsertOwnerMapping): Promise<string>;
 
   // Migration methods
   runRawSQL(query: string): Promise<any>;
@@ -525,6 +534,43 @@ export class DatabaseStorage implements IStorage {
     await this.db.delete(schema.pendingSetup).where(eq(schema.pendingSetup.sessionId, sessionId));
   }
 
+  // Owner mapping methods
+  async getOwnerMappings(leagueId: string): Promise<OwnerMapping[]> {
+    return await this.db.select().from(schema.ownerMappings).where(eq(schema.ownerMappings.leagueId, leagueId));
+  }
+
+  async getOwnerMapping(leagueId: string, sleeperOwnerId: string): Promise<OwnerMapping | undefined> {
+    const results = await this.db.select().from(schema.ownerMappings)
+      .where(and(eq(schema.ownerMappings.leagueId, leagueId), eq(schema.ownerMappings.sleeperOwnerId, sleeperOwnerId)));
+    return results[0];
+  }
+
+  async createOwnerMapping(mapping: InsertOwnerMapping): Promise<string> {
+    const results = await this.db.insert(schema.ownerMappings).values(mapping).returning({ id: schema.ownerMappings.id });
+    return results[0].id;
+  }
+
+  async updateOwnerMapping(leagueId: string, sleeperOwnerId: string, updates: Partial<OwnerMapping>): Promise<void> {
+    await this.db.update(schema.ownerMappings)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(and(eq(schema.ownerMappings.leagueId, leagueId), eq(schema.ownerMappings.sleeperOwnerId, sleeperOwnerId)));
+  }
+
+  async deleteOwnerMapping(leagueId: string, sleeperOwnerId: string): Promise<void> {
+    await this.db.delete(schema.ownerMappings)
+      .where(and(eq(schema.ownerMappings.leagueId, leagueId), eq(schema.ownerMappings.sleeperOwnerId, sleeperOwnerId)));
+  }
+
+  async upsertOwnerMapping(mapping: InsertOwnerMapping): Promise<string> {
+    const existing = await this.getOwnerMapping(mapping.leagueId, mapping.sleeperOwnerId);
+    if (existing) {
+      await this.updateOwnerMapping(mapping.leagueId, mapping.sleeperOwnerId, mapping);
+      return existing.id;
+    } else {
+      return await this.createOwnerMapping(mapping);
+    }
+  }
+
   // Migration methods implementation
   async runRawSQL(query: string): Promise<any> {
     return this.db.execute(sql.raw(query));
@@ -546,6 +592,7 @@ export class MemStorage implements IStorage {
   private facts: Map<string, Fact> = new Map();
   private deadlines: Map<string, Deadline> = new Map();
   private events: Map<string, Event> = new Map();
+  private ownerMappings: Map<string, OwnerMapping> = new Map();
 
   // Helper to generate IDs
   private generateId(): string {
@@ -617,7 +664,8 @@ export class MemStorage implements IStorage {
       guildId: league.guildId ?? null,
       channelId: league.channelId ?? null,
       timezone: league.timezone ?? null,
-      featureFlags: league.featureFlags ?? { qa: true, deadlines: true, digest: true, trade_helper: false },
+      tone: league.tone ?? null,
+      featureFlags: league.featureFlags ?? { qa: true, deadlines: true, digest: true, trade_helper: false, autoMeme: false, reminders: { lineupLock: true, waiver: true, tradeDeadline: true } },
       modelPrefs: league.modelPrefs ?? { maxTokens: 1000, provider: "deepseek" }
     };
     this.leagues.set(id, newLeague);
@@ -639,7 +687,13 @@ export class MemStorage implements IStorage {
   }
   async createMember(member: InsertMember): Promise<string> {
     const id = this.generateId();
-    const newMember: Member = { ...member, id, createdAt: new Date() };
+    const newMember: Member = { 
+      ...member, 
+      id, 
+      createdAt: new Date(),
+      sleeperOwnerId: member.sleeperOwnerId ?? null,
+      sleeperTeamName: member.sleeperTeamName ?? null
+    };
     this.members.set(id, newMember);
     return id;
   }
@@ -846,6 +900,53 @@ export class MemStorage implements IStorage {
 
   async deletePendingSetup(sessionId: string): Promise<void> {
     this.pendingSetups.delete(sessionId);
+  }
+
+  // Owner mapping methods
+  async getOwnerMappings(leagueId: string): Promise<OwnerMapping[]> {
+    return Array.from(this.ownerMappings.values()).filter(m => m.leagueId === leagueId);
+  }
+
+  async getOwnerMapping(leagueId: string, sleeperOwnerId: string): Promise<OwnerMapping | undefined> {
+    return Array.from(this.ownerMappings.values()).find(m => m.leagueId === leagueId && m.sleeperOwnerId === sleeperOwnerId);
+  }
+
+  async createOwnerMapping(mapping: InsertOwnerMapping): Promise<string> {
+    const id = this.generateId();
+    const newMapping: OwnerMapping = {
+      ...mapping,
+      id,
+      sleeperTeamName: mapping.sleeperTeamName ?? null,
+      discordUsername: mapping.discordUsername ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    this.ownerMappings.set(id, newMapping);
+    return id;
+  }
+
+  async updateOwnerMapping(leagueId: string, sleeperOwnerId: string, updates: Partial<OwnerMapping>): Promise<void> {
+    const existing = await this.getOwnerMapping(leagueId, sleeperOwnerId);
+    if (existing) {
+      Object.assign(existing, updates, { updatedAt: new Date() });
+    }
+  }
+
+  async deleteOwnerMapping(leagueId: string, sleeperOwnerId: string): Promise<void> {
+    const mapping = await this.getOwnerMapping(leagueId, sleeperOwnerId);
+    if (mapping) {
+      this.ownerMappings.delete(mapping.id);
+    }
+  }
+
+  async upsertOwnerMapping(mapping: InsertOwnerMapping): Promise<string> {
+    const existing = await this.getOwnerMapping(mapping.leagueId, mapping.sleeperOwnerId);
+    if (existing) {
+      await this.updateOwnerMapping(mapping.leagueId, mapping.sleeperOwnerId, mapping);
+      return existing.id;
+    } else {
+      return await this.createOwnerMapping(mapping);
+    }
   }
 
   // Migration methods implementation (no-op for in-memory storage)
