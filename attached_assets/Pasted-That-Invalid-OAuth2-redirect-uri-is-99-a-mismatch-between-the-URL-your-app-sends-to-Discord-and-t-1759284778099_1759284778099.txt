@@ -1,0 +1,118 @@
+That “Invalid OAuth2 redirect_uri” is 99% a mismatch between the URL your app sends to Discord and the exact Redirect URL(s) you’ve allow-listed in the Discord Developer Portal. Let’s fix it fast and make it easy for the Replit Agent to verify.
+
+⸻
+
+1) What this error means (so we aim at the right target)
+
+Discord will only accept an authorization request if the redirect_uri in the browser’s URL exactly matches one of the Redirects you saved for the app (character-for-character, including protocol, path, and query string).
+Common culprits:
+	•	Using http:// instead of https://
+	•	Using a different host (…replit.app vs …repl.co)
+	•	Trailing slash mismatch (/callback vs /callback/)
+	•	Different path than what the code uses
+	•	Extra query params not included in the allow-list
+
+⸻
+
+2) Confirm what your app is actually sending
+
+Run these in the Replit shell (replace nothing; they use your existing secrets):
+
+# Show the base URL your app thinks it is
+echo "$APP_BASE_URL"
+
+# Ask your backend to generate the Discord OAuth URL with the callback we expect to use.
+curl -s "$APP_BASE_URL/api/discord/auth-url?redirectUri=$APP_BASE_URL/api/discord/callback" | jq
+
+# (If your code uses a different callback path, try these as well)
+curl -s "$APP_BASE_URL/api/discord/auth-url?redirectUri=$APP_BASE_URL/discord/callback" | jq
+curl -s "$APP_BASE_URL/api/discord/auth-url?redirectUri=$APP_BASE_URL/setup/discord/callback" | jq
+
+What you want to see: a JSON like { "url": "https://discord.com/oauth2/authorize?...&redirect_uri=https%3A%2F%2Fthecommish.replit.app%2Fapi%2Fdiscord%2Fcallback&..." }
+
+Copy that exact url and open it in your browser. If Discord still says Invalid OAuth2 redirect_uri, go to step 3 and make the Developer Portal match.
+
+⸻
+
+3) Make the Discord Developer Portal match (step-by-step)
+	1.	Go to https://discord.com/developers/applications → select your app.
+	2.	Left sidebar → OAuth2 → General.
+	3.	In Redirects, click Add Another and paste exactly the one your backend uses. Add both of these to be safe (they’re the two most common in our repos):
+	•	https://thecommish.replit.app/api/discord/callback
+	•	https://thecommish.replit.app/discord/callback
+If your auth-url JSON in step 2 showed a different path (e.g. /setup/discord/callback), add that exact one too.
+	4.	Click Save Changes at the bottom.
+	5.	(Unrelated to this error, but good to confirm) Left sidebar → Bot: make sure your bot is added and you have the token saved in Replit.
+	6.	Interactions Endpoint URL is a separate setting (left sidebar → Interactions) and should remain your webhook endpoint (e.g., https://thecommish.replit.app/api/discord/interactions). It does not affect OAuth redirects.
+
+⸻
+
+4) Double-check your Replit settings (quick)
+	•	APP_BASE_URL must be: https://thecommish.replit.app (https, lowercase host, no trailing slash).
+	•	No proxies or alternate domains in front of it.
+	•	Don’t include query strings in APP_BASE_URL.
+
+⸻
+
+5) One pasteable debug endpoint (tell the Agent to add this)
+
+If you want an at-a-glance sanity check, ask the Replit Agent to add this tiny diagnostic route to server/routes.ts:
+
+// DEBUG: shows what redirect the server will use and the final Discord auth URL
+app.get('/api/debug/discord-oauth', (req, res) => {
+  try {
+    const base = process.env.APP_BASE_URL!;
+    const redirect = `${base}/api/discord/callback`; // keep in sync with your setup page
+    const qs = new URLSearchParams({
+      client_id: process.env.DISCORD_CLIENT_ID!,
+      response_type: 'code',
+      scope: 'identify guilds',
+      redirect_uri: redirect,
+      prompt: 'consent'
+    });
+    const url = `https://discord.com/api/oauth2/authorize?${qs.toString()}`;
+    res.json({ app_base_url: base, redirect, url });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+Then:
+
+curl -s "$APP_BASE_URL/api/debug/discord-oauth" | jq
+
+Add the redirect shown there into OAuth2 → Redirects in the Developer Portal if it’s not already present.
+
+⸻
+
+6) Update the setup page to use the same callback (if needed)
+
+If your setup page builds its own link, make sure it asks your backend for the auth URL using the same callback path you allow-listed:
+
+// client/src/pages/setup.tsx (or where you call it)
+const resp = await fetch(`/api/discord/auth-url?redirectUri=${encodeURIComponent(`${window.location.origin}/api/discord/callback`)}`);
+const { url } = await resp.json();
+window.location.href = url;
+
+Do not append random query params to the callback unless you also add that full string to Discord’s Redirects list.
+
+⸻
+
+7) If it still fails, send me these two things
+	•	The output of:
+
+echo "$APP_BASE_URL"
+curl -s "$APP_BASE_URL/api/discord/auth-url?redirectUri=$APP_BASE_URL/api/discord/callback" | jq
+
+
+	•	A screenshot of Discord Developer Portal → OAuth2 → General → Redirects (with the exact entries visible).
+
+I’ll spot the mismatch in seconds.
+
+⸻
+
+TL;DR
+	1.	Use the server to print the exact redirect_uri it’s sending.
+	2.	Add that same URL under OAuth2 → Redirects in Discord Dev Portal.
+	3.	Keep APP_BASE_URL = https://thecommish.replit.app and use /api/discord/callback as your single callback everywhere.
+	4.	Try again—Discord should now accept the OAuth flow.

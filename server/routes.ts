@@ -99,6 +99,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // === DEBUG ENDPOINT FOR OAUTH CONFIGURATION ===
+  app.get("/api/debug/discord-oauth", (req, res) => {
+    try {
+      const base = env.app.baseUrl;
+      const redirect = `${base}/discord-callback`;
+      const params = new URLSearchParams({
+        client_id: env.discord.clientId,
+        response_type: "code",
+        scope: "identify guilds",
+        redirect_uri: redirect,
+        prompt: "consent"
+      });
+      const url = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
+      
+      res.json({
+        app_base_url: base,
+        redirect_uri: redirect,
+        discord_auth_url: url,
+        client_id: env.discord.clientId
+      });
+    } catch (error) {
+      res.status(500).json({ error: String(error) });
+    }
+  });
+
   // === SETUP WIZARD ENDPOINTS ===
   
   // Discord User OAuth Flow
