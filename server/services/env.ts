@@ -62,15 +62,15 @@ let validatedEnv: EnvConfig;
 
 export function validateEnvironment(): EnvConfig {
   try {
-    // Use Supabase as primary database URL if available, fallback to DATABASE_URL
-    const databaseUrl = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
+    // Use DATABASE_URL (Replit's built-in database)
+    const databaseUrl = process.env.DATABASE_URL;
     
-    const envWithSupabase = {
+    const envWithDatabase = {
       ...process.env,
       DATABASE_URL: databaseUrl
     };
     
-    validatedEnv = envSchema.parse(envWithSupabase);
+    validatedEnv = envSchema.parse(envWithDatabase);
     
     // Additional validation for conditional requirements
     if (validatedEnv.EMBEDDINGS_PROVIDER === "openai" && !validatedEnv.OPENAI_API_KEY) {

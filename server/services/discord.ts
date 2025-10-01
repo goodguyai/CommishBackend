@@ -249,6 +249,44 @@ export class DiscordService {
     };
   }
 
+  // Get guild channels
+  async getGuildChannels(guildId: string): Promise<any[]> {
+    const url = `${this.baseUrl}/guilds/${guildId}/channels`;
+    
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bot ${this.botToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch channels: ${response.statusText}`);
+    }
+
+    const channels = await response.json();
+    // Filter to text channels (type 0) where bot can send messages
+    return channels.filter((ch: any) => ch.type === 0);
+  }
+
+  // Post message to channel
+  async postMessage(channelId: string, content: any): Promise<void> {
+    const url = `${this.baseUrl}/channels/${channelId}/messages`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bot ${this.botToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(content),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to post message: ${response.statusText}`);
+    }
+  }
+
   // Standard slash commands
   getSlashCommands(): any[] {
     return [

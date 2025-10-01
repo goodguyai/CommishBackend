@@ -247,6 +247,191 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get guild channels
+  app.get("/api/discord/channels", async (req, res) => {
+    try {
+      const { guildId } = req.query;
+      
+      if (!guildId || typeof guildId !== 'string') {
+        return res.status(400).json({ error: "guildId is required" });
+      }
+
+      const channels = await discordService.getGuildChannels(guildId);
+      res.json({ channels });
+    } catch (error) {
+      console.error("Error fetching channels:", error);
+      res.status(500).json({ error: "Failed to fetch channels" });
+    }
+  });
+
+  // Save Discord setup (guild + channel selection)
+  app.post("/api/setup/discord", async (req, res) => {
+    try {
+      const { guildId, channelId, timezone } = req.body;
+      const sessionId = getSessionId(req);
+      const session = oAuthSessions.get(sessionId);
+      
+      if (!session?.discordUser) {
+        return res.status(401).json({ error: "Not authenticated with Discord" });
+      }
+
+      if (!guildId || !channelId) {
+        return res.status(400).json({ error: "guildId and channelId are required" });
+      }
+
+      // Get or create account
+      let account = await storage.getAccountByDiscordId(session.discordUser.id);
+      if (!account) {
+        const accountId = await storage.createAccount({
+          email: `${session.discordUser.username}@discord.user`,
+          discordUserId: session.discordUser.id,
+        });
+        account = await storage.getAccount(accountId);
+      }
+
+      if (!account) {
+        return res.status(500).json({ error: "Failed to create account" });
+      }
+
+      // Check if league already exists for this guild
+      let league = await storage.getLeagueByGuildId(guildId);
+      
+      if (league) {
+        // Update existing league
+        await storage.updateLeague(league.id, {
+          channelId,
+          timezone: timezone || "America/New_York",
+        });
+      } else {
+        // Create new league
+        const leagueId = await storage.createLeague({
+          accountId: account.id,
+          name: `Discord Server ${guildId}`,
+          platform: "sleeper",
+          guildId,
+          channelId,
+          timezone: timezone || "America/New_York",
+        });
+        league = await storage.getLeague(leagueId);
+      }
+
+      // Register slash commands for this guild
+      const commands = discordService.getSlashCommands();
+      await discordService.registerGuildCommands(guildId, commands);
+
+      // Post welcome message
+      await discordService.postMessage(channelId, {
+        content: "🎉 **THE COMMISH installed!**\n\nI'm ready to help manage your fantasy league. Try these commands:\n• `/rules` - Query league rules and constitution\n• `/scoring` - Display current scoring settings\n• `/help` - Show command help\n\nNext, connect your Sleeper league in the setup wizard to unlock full features!"
+      });
+
+      // Log install event
+      if (league) {
+        await storage.createEvent({
+          leagueId: league.id,
+          type: "INSTALL_COMPLETED",
+          payload: { guildId, channelId },
+        });
+      }
+
+      // Update pending setup
+      await storage.updatePendingSetup(sessionId, {
+        selectedGuildId: guildId,
+        selectedChannelId: channelId,
+        timezone: timezone || "America/New_York",
+      });
+
+      res.json({ ok: true, leagueId: league?.id });
+    } catch (error) {
+      console.error("Discord setup error:", error);
+      res.status(500).json({ error: "Setup failed" });
+    }
+  });
+
+  // === SLEEPER SETUP ENDPOINTS ===
+
+  // Get Sleeper leagues for a username
+  app.get("/api/sleeper/leagues", async (req, res) => {
+    try {
+      const { username, season } = req.query;
+      
+      if (!username || !season || typeof username !== 'string' || typeof season !== 'string') {
+        return res.status(400).json({ error: "username and season are required" });
+      }
+
+      // Get Sleeper user
+      const user = await sleeperService.getUser(username);
+      if (!user) {
+        return res.status(404).json({ error: "Sleeper user not found" });
+      }
+
+      // Get leagues for this user
+      const leagues = await sleeperService.getUserLeagues(user.user_id, season);
+      
+      res.json({ 
+        leagues: leagues.map(l => ({
+          league_id: l.league_id,
+          name: l.name,
+          season: l.season,
+          total_rosters: l.total_rosters,
+          status: l.status
+        }))
+      });
+    } catch (error) {
+      console.error("Error fetching Sleeper leagues:", error);
+      res.status(500).json({ error: "Failed to fetch Sleeper leagues" });
+    }
+  });
+
+  // Save Sleeper setup
+  app.post("/api/setup/sleeper", async (req, res) => {
+    try {
+      const { sleeperLeagueId } = req.body;
+      const sessionId = getSessionId(req);
+      const session = oAuthSessions.get(sessionId);
+      
+      if (!session?.discordUser) {
+        return res.status(401).json({ error: "Not authenticated with Discord" });
+      }
+
+      if (!sleeperLeagueId) {
+        return res.status(400).json({ error: "sleeperLeagueId is required" });
+      }
+
+      // Get pending setup
+      const pendingSetup = await storage.getPendingSetup(sessionId);
+      if (!pendingSetup?.selectedGuildId) {
+        return res.status(400).json({ error: "Discord setup not completed" });
+      }
+
+      // Update league with Sleeper info
+      const league = await storage.getLeagueByGuildId(pendingSetup.selectedGuildId);
+      if (!league) {
+        return res.status(404).json({ error: "League not found" });
+      }
+
+      await storage.updateLeague(league.id, {
+        sleeperLeagueId
+      });
+
+      // Update pending setup
+      await storage.updatePendingSetup(sessionId, {
+        selectedLeagueId: sleeperLeagueId
+      });
+
+      // Log event
+      await storage.createEvent({
+        leagueId: league.id,
+        type: "SLEEPER_SYNCED",
+        payload: { sleeperLeagueId },
+      });
+
+      res.json({ ok: true, leagueId: league.id });
+    } catch (error) {
+      console.error("Sleeper setup error:", error);
+      res.status(500).json({ error: "Setup failed" });
+    }
+  });
+
   // Set home channel for setup
   app.post("/api/setup/discord/set-home-channel", async (req, res) => {
     try {

@@ -1,0 +1,209 @@
+Heck yeah—nice fix. Now let’s turn the bot from “auths successfully” into “end-to-end usable,” with the least clicking for a commissioner.
+
+Below is a single, copy-paste ready work order for your Replit Agent. It’s sequenced, specific, and comes with acceptance tests you (and the agent) can run as it goes. It assumes your app URL is https://thecommish.replit.app, Supabase is the DB, and the Discord Interactions endpoint is already set.
+
+⸻
+
+COPY THIS TO REPLIT AGENT
+
+Goal: Make THE COMMISH fully usable after Discord auth: persist the guild, let the user pick the home channel, connect to Sleeper, register slash commands, post a welcome, and provide a simple status screen. No shell commands for users—everything via UI/API.
+
+⸻
+
+0) Guardrails & invariants (don’t change)
+	•	Keep APP_BASE_URL=https://thecommish.replit.app (no trailing slash).
+	•	Keep the existing raw body verification for /api/discord/interactions.
+	•	Keep env service usage (no new process.env reads in routes).
+
+⸻
+
+1) Finish Setup Step 1 (Discord side)
+
+Problem: After OAuth, nothing is persisted and no welcome is posted.
+
+1.1 Backend: Complete OAuth callback and persistence
+	•	File: server/routes.ts
+	•	In the Discord OAuth callback handler:
+	•	Exchange code → tokens (you already have the client ID/secret).
+	•	Call Discord GET /users/@me and GET /users/@me/guilds to fetch the user + manageable guilds.
+	•	Persist a “pending setup” row with:
+	•	accountId (your internal account or a generated UUID tied to session)
+	•	discordUserId, guildChoices (array of {id, name, icon}), expiresAt (e.g. now + 30 min)
+	•	Return JSON { step: "discord_connected", guildChoices }.
+
+If a setup row exists for this browser/session, upsert it.
+
+1.2 Backend: Channel list endpoint
+	•	Add: GET /api/discord/channels?guildId=<id>
+	•	Use bot token to call GET /guilds/{guild.id}/channels.
+	•	Filter to text channels the bot can send to.
+	•	Return { channels: [{id,name}] }.
+
+1.3 Backend: Save selection & register commands
+	•	Add: POST /api/setup/discord
+	•	Body: { accountId, guildId, channelId, timezone? }
+	•	Actions:
+	•	Create (or update) a leagues record with { accountId, guildId, channelId, timezone }.
+	•	Register slash commands for that guild (use your existing register-commands logic; call it programmatically here).
+	•	Store a minimal “install completed” event in events table.
+	•	Response: { ok: true }.
+
+1.4 Backend: Post a welcome message
+	•	After saving league + registering commands, use bot token to POST /channels/{channelId}/messages:
+	•	“🎉 THE COMMISH installed! Try /rules, /scoring, or connect Sleeper in the setup wizard.”
+
+1.5 Frontend: Setup Step 1 UI
+	•	File: client/src/pages/setup.tsx
+	•	Flow:
+	1.	“Connect with Discord” → open /api/discord/auth-url?redirectUri=${origin}/api/discord/callback, then wait for callback JSON.
+	2.	Render Guild select (from guildChoices), then Channel select (load via /api/discord/channels?guildId=).
+	3.	Save → POST /api/setup/discord.
+	4.	On success, advance to Step 2.
+
+Acceptance checks
+
+# After completing Step 1 in the browser:
+curl -s "$APP_BASE_URL/api/health" | jq '.services.database'  # should be "connected"
+curl -s "$APP_BASE_URL/api/events?limit=5" | jq                  # should show an install event
+
+In Discord, in the chosen channel, you should see the welcome message.
+
+⸻
+
+2) Setup Step 2 (Sleeper linking)
+
+Goal: User enters Sleeper username, picks a league, we store it.
+
+2.1 Backend: Sleeper endpoints
+	•	Add: GET /api/sleeper/leagues?username=<name>&season=<yyyy>
+	•	Call https://api.sleeper.app/v1/user/<username> → userId.
+	•	Call .../v1/user/<userId>/leagues/nfl/<season> → return important fields {league_id, name, season, total_rosters}.
+	•	Add: POST /api/setup/sleeper
+	•	Body: { accountId, guildId, sleeperLeagueId }
+	•	Persist on the same league row { sleeperLeagueId }.
+	•	Optionally kick a background sync (rosters, users) and write an event.
+
+2.2 Frontend: Step 2 UI
+	•	Inputs: Sleeper username (with a default season = current year).
+	•	Show league cards → user picks one → POST /api/setup/sleeper.
+	•	On success, advance to Step 3.
+
+Acceptance checks
+
+curl -s "$APP_BASE_URL/api/sleeper/leagues?username=<YOUR_SLEPER_HANDLE>&season=$(date +%Y)" | jq '.[0]'
+curl -s "$APP_BASE_URL/api/events?limit=5" | jq # should include a sleeper_linked or sync event
+
+
+⸻
+
+3) Setup Step 3 (Activate + Index Rules)
+
+Goal: One click to finish: index rules doc into RAG and enable daily digest.
+
+3.1 Backend: RAG endpoints (if not present or need polish)
+	•	POST /api/rag/index/:leagueId
+	•	Body: { content, contentType, title, version }
+	•	Generate embeddings (cache by hash), write to documents + embeddings.
+	•	Return { ok: true, chunksIndexed }.
+	•	POST /api/setup/activate
+	•	Body: { accountId, guildId }
+	•	Ensure league has: guildId, channelId, sleeperLeagueId (optional for MVP).
+	•	(Optional) schedule a digest with your existing mechanism, or just store the preference.
+	•	Respond { ok: true }.
+
+3.2 Frontend: Step 3 UI
+	•	Drop zone / textarea for “League Constitution” (plain text or PDF -> for MVP text area).
+	•	“Finish Setup” → first calls /api/rag/index/:leagueId, then /api/setup/activate.
+	•	Show a confetti/success state and a “Go to Dashboard” button.
+
+Acceptance checks
+
+# Index a tiny sample constitution:
+curl -s -X POST "$APP_BASE_URL/api/rag/index/<LEAGUE_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"SECTION 1: Draft in August. SECTION 2: 0.5 PPR.","contentType":"text/plain","title":"MVP Rules","version":"2025.1"}' | jq
+
+# Quick search (if available):
+curl -s -X POST "$APP_BASE_URL/api/rag/search/<LEAGUE_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"When is the draft?"}' | jq
+
+
+⸻
+
+4) Dashboard: “Status” screen (MVP)
+
+Goal: Give the user confidence it’s ready.
+
+4.1 Backend: /api/setup/status?guildId=...
+
+Return:
+
+{
+  "guildId":"…",
+  "channelId":"…",
+  "sleeperLeagueId":"…",
+  "commands": ["rules","scoring","help","reindex"],
+  "rag": { "documents": 1, "chunks": 12 },
+  "lastEvents": [...]
+}
+
+4.2 Frontend: /dashboard
+	•	Cards showing ✓ Discord, ✓ Channel, ✓ Sleeper, ✓ Rules indexed.
+	•	A “Re-register commands” button (POST /api/discord/register-commands?guildId=...).
+	•	A “Post test message” button (POST /api/discord/post-test?guildId=...—see next).
+
+4.3 Backend: Utilities (admin-key guarded)
+	•	POST /api/discord/register-commands?guildId=...
+	•	POST /api/discord/post-test?guildId=... → sends a sample embed to the league’s channel.
+
+Acceptance checks
+
+curl -s -X POST "$APP_BASE_URL/api/discord/register-commands?guildId=<GID>" -H "X-Admin-Key: $ADMIN_KEY" | jq
+curl -s -X POST "$APP_BASE_URL/api/discord/post-test?guildId=<GID>" -H "X-Admin-Key: $ADMIN_KEY" | jq
+
+
+⸻
+
+5) Slash commands: verify in Discord
+
+Ensure your handler supports (at minimum):
+	•	/rules question:<text>
+	•	/scoring question:<text>
+	•	/help
+	•	/reindex (re-index latest constitution for this league)
+
+On use:
+	•	For /rules + /scoring: run RAG search scoped to the league; reply ephemerally with best match and rule source title/section if available.
+	•	For /reindex: reply ephemerally “Reindex started” and fire the indexer against the league’s latest document.
+
+Acceptance: In your Discord server, commands are visible and respond successfully.
+
+⸻
+
+6) Error paths & UX polish (quick passes)
+	•	All setup endpoints return structured JSON errors with code and message.
+	•	Frontend renders useful errors and “Try again” buttons.
+	•	Health page /api/health shows "database":"connected", "embeddings":"available", etc., and a list of "issues":[].
+
+⸻
+
+7) Short “Done” checklist for me to verify
+	•	I can finish /setup entirely in the browser (select guild + channel, select Sleeper league, paste rules, finish).
+	•	Welcome message appears in the chosen channel.
+	•	/rules slash command answers something from the pasted doc.
+	•	/dashboard shows everything green.
+	•	/api/health returns status:"ok".
+
+⸻
+
+8) Optional (nice to have if time allows)
+	•	Store setup progress in session so refresh doesn’t lose state.
+	•	Add a “Change home channel” button on the dashboard (reuses /api/discord/channels + PATCH /api/leagues/:id).
+	•	Add a tiny “Import from file” (TXT/Markdown) for the rules doc.
+
+⸻
+
+END OF WORK ORDER
+
+If you want, I can hang here while you paste that to the Agent and then give you the quick verification commands as it completes each section.

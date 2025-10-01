@@ -120,19 +120,20 @@ export default function Setup() {
   });
 
   const setChannelMutation = useMutation({
-    mutationFn: async ({ guildId, channelId }: { guildId: string; channelId: string }) => {
-      const response = await apiRequest("POST", "/api/setup/discord/set-home-channel", {
+    mutationFn: async ({ guildId, channelId, timezone }: { guildId: string; channelId: string; timezone?: string }) => {
+      return await apiRequest("POST", "/api/setup/discord", {
         guildId, 
-        channelId
+        channelId,
+        timezone: timezone || "America/New_York"
       });
-      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/setup/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/discord/me"] });
       setCurrentStep("sleeper");
       toast({
         title: "Discord Setup Complete",
-        description: "Discord channel configured successfully!"
+        description: "Channel configured! Bot commands registered and welcome message posted. 🎉"
       });
     }
   });
@@ -140,15 +141,15 @@ export default function Setup() {
   // Sleeper Mutations
   const findLeaguesMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest("POST", "/api/setup/sleeper/find", {
-        username: sleeperUsername,
-        season: sleeperSeason
-      });
+      const response = await fetch(`/api/sleeper/leagues?username=${encodeURIComponent(sleeperUsername)}&season=${sleeperSeason}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch leagues');
+      }
       return response.json();
     },
     onSuccess: (data: any) => {
-      setAvailableLeagues(data.leagues);
-      if (data.leagues.length === 0) {
+      setAvailableLeagues(data.leagues || []);
+      if (!data.leagues || data.leagues.length === 0) {
         toast({
           title: "No Leagues Found",
           description: `No leagues found for ${sleeperUsername} in ${sleeperSeason}`,
@@ -166,18 +167,17 @@ export default function Setup() {
   });
 
   const selectLeagueMutation = useMutation({
-    mutationFn: async (leagueId: string) => {
-      const response = await apiRequest("POST", "/api/setup/sleeper/select", {
-        leagueId
+    mutationFn: async (sleeperLeagueId: string) => {
+      return await apiRequest("POST", "/api/setup/sleeper", {
+        sleeperLeagueId
       });
-      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/setup/status"] });
       setCurrentStep("finish");
       toast({
-        title: "League Selected",
-        description: "Sleeper league selected successfully!"
+        title: "League Connected! 🏈",
+        description: "Sleeper league linked successfully. Data sync started."
       });
     }
   });
@@ -223,6 +223,11 @@ export default function Setup() {
   const { data: guildStatus } = useQuery({
     queryKey: ["/api/discord/guild-status", setupData.discord.selectedGuild],
     enabled: !!setupData.discord.selectedGuild
+  });
+
+  const { data: channelsData } = useQuery({
+    queryKey: ["/api/discord/channels", setupData.discord.selectedGuild],
+    enabled: !!setupData.discord.selectedGuild && !!(guildStatus as any)?.installed
   });
 
   const stepOrder: SetupStep[] = ["discord", "sleeper", "finish"];
@@ -383,7 +388,7 @@ export default function Setup() {
                           <SelectValue placeholder="Select a channel..." />
                         </SelectTrigger>
                         <SelectContent>
-                          {((guildStatus as any)?.channels || []).map((channel: any) => (
+                          {((channelsData as any)?.channels || []).map((channel: any) => (
                             <SelectItem key={channel.id} value={channel.id}>
                               # {channel.name}
                             </SelectItem>
