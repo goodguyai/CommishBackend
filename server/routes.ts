@@ -109,6 +109,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Sync Sleeper data
       await sleeperService.syncLeagueData(league.sleeperLeagueId);
       
+      // Schedule reminders for upcoming deadlines
+      await scheduleRemindersForLeague(league.id);
+      
       // Log sync event
       await storage.createEvent({
         type: "SLEEPER_SYNCED",
@@ -136,6 +139,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("[Scheduler] Failed to cleanup expired sessions:", error);
     }
   });
+
+  eventBus.on("reminder_due", async (data) => {
+    try {
+      console.log(`[Scheduler] Reminder due for league ${data.leagueId}: ${data.deadlineType} (${data.hoursBefore}h before)`);
+      
+      const league = await storage.getLeague(data.leagueId);
+      if (!league || !league.channelId) {
+        console.warn(`Cannot send reminder: League ${data.leagueId} not found or has no channel`);
+        return;
+      }
+
+      // Check if reminder is enabled for this deadline type
+      // Default to enabled if featureFlags.reminders is undefined
+      const reminderType = data.deadlineType.toLowerCase();
+      const featureFlags = league.featureFlags as any;
+      const remindersConfig = featureFlags?.reminders;
+      
+      // Check specific reminder type toggle (default to true if undefined)
+      let reminderEnabled = true;
+      if (remindersConfig) {
+        if (reminderType.includes('lineup')) {
+          reminderEnabled = remindersConfig.lineupLock !== false;
+        } else if (reminderType.includes('waiver')) {
+          reminderEnabled = remindersConfig.waiver !== false;
+        } else if (reminderType.includes('trade')) {
+          reminderEnabled = remindersConfig.tradeDeadline !== false;
+        }
+      }
+
+      if (!reminderEnabled) {
+        console.log(`${data.deadlineType} reminders disabled for league ${data.leagueId}, skipping`);
+        return;
+      }
+
+      // Build reminder embed
+      const deadlineTimestamp = Math.floor(new Date(data.deadlineTime).getTime() / 1000);
+      const embed = {
+        title: `⏰ Deadline Reminder`,
+        description: `**${data.deadlineType}** is coming up in **${data.hoursBefore} hour${data.hoursBefore > 1 ? 's' : ''}**!\n\nDeadline: <t:${deadlineTimestamp}:F> (<t:${deadlineTimestamp}:R>)`,
+        color: data.hoursBefore === 1 ? 0xDC2626 : 0xF59E0B, // Red for 1h, amber for 24h
+        footer: { text: `THE COMMISH • ${league.name}` },
+        timestamp: new Date().toISOString(),
+      };
+
+      // Send reminder to Discord channel
+      await discordService.postMessage(league.channelId, { embeds: [embed] });
+      
+      // Log reminder sent event
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId: league.id,
+        payload: { 
+          command: "reminder_sent", 
+          deadlineType: data.deadlineType,
+          hoursBefore: data.hoursBefore,
+          success: true 
+        },
+      });
+      
+      console.log(`[Scheduler] Reminder sent successfully to league ${data.leagueId}`);
+    } catch (error) {
+      console.error(`[Scheduler] Failed to send reminder for league ${data.leagueId}:`, error);
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        leagueId: data.leagueId,
+        payload: { error: "reminder_send_failed", message: String(error) },
+      });
+    }
+  });
+
   // Dev: Register Discord commands (requires admin key)
   app.post("/api/dev/register-commands", async (req, res) => {
     // Admin authentication
@@ -2118,5 +2191,70 @@ async function handleChannelSelect(req: any, res: any, interaction: any) {
         flags: 64,
       },
     });
+  }
+}
+
+// Utility function to schedule reminders for upcoming deadlines
+async function scheduleRemindersForLeague(leagueId: string) {
+  try {
+    const league = await storage.getLeague(leagueId);
+    if (!league) return;
+
+    // Get upcoming deadlines (next 30 days)
+    const upcomingDeadlines = await storage.getUpcomingDeadlines(leagueId, 20);
+    
+    if (upcomingDeadlines.length === 0) {
+      console.log(`No upcoming deadlines found for league ${leagueId}`);
+      return;
+    }
+
+    // Unschedule existing reminders for this league
+    scheduler.unscheduleReminders(leagueId);
+
+    // Count deadlines by type for logging
+    const deadlinesByType: Record<string, number> = {};
+    let scheduledCount = 0;
+
+    // Schedule reminders for each deadline (handles lineup lock, waiver, trade, and custom deadlines)
+    for (const deadline of upcomingDeadlines) {
+      const deadlineTime = new Date(deadline.isoTime);
+      const hoursUntilDeadline = (deadlineTime.getTime() - Date.now()) / (1000 * 60 * 60);
+      
+      // Track deadline types
+      deadlinesByType[deadline.type] = (deadlinesByType[deadline.type] || 0) + 1;
+      
+      // Only schedule reminders for deadlines that are at least 1 hour away
+      if (hoursUntilDeadline < 1) {
+        console.log(`Skipping ${deadline.type} (${deadline.id}) - deadline is less than 1h away`);
+        continue;
+      }
+
+      // Determine which reminder times to use based on time until deadline
+      const reminderTimes: number[] = [];
+      if (hoursUntilDeadline >= 24) {
+        reminderTimes.push(24, 1); // 24h and 1h before
+      } else if (hoursUntilDeadline >= 1) {
+        reminderTimes.push(1); // Only 1h before
+      }
+
+      if (reminderTimes.length > 0) {
+        scheduler.scheduleReminder(
+          leagueId,
+          deadline.id,
+          deadline.type,
+          deadlineTime,
+          league.timezone || "America/New_York",
+          reminderTimes
+        );
+        scheduledCount++;
+      }
+    }
+
+    console.log(
+      `Scheduled reminders for ${scheduledCount} deadlines in league ${leagueId}:`,
+      deadlinesByType
+    );
+  } catch (error) {
+    console.error(`Failed to schedule reminders for league ${leagueId}:`, error);
   }
 }
