@@ -60,9 +60,17 @@ export default function Setup() {
     timezone: null
   });
   const [sleeperUsername, setSleeperUsername] = useState("");
-  const [sleeperSeason, setSleeperSeason] = useState(new Date().getFullYear().toString());
+  const currentYear = new Date().getFullYear();
+  const [sleeperSeason, setSleeperSeason] = useState(currentYear.toString());
   const [availableLeagues, setAvailableLeagues] = useState<SleeperLeague[]>([]);
   const { toast} = useToast();
+  
+  // Generate season options (current year + 2 previous years)
+  const seasonOptions = [
+    currentYear.toString(),
+    (currentYear - 1).toString(),
+    (currentYear - 2).toString()
+  ];
 
   // Check for OAuth errors in URL params
   useEffect(() => {
@@ -179,7 +187,11 @@ export default function Setup() {
   // Sleeper Mutations
   const findLeaguesMutation = useMutation({
     mutationFn: async () => {
-      const response = await fetch(`/api/sleeper/leagues?username=${encodeURIComponent(sleeperUsername)}&season=${sleeperSeason}`);
+      const trimmedUsername = sleeperUsername.trim();
+      if (!trimmedUsername) {
+        throw new Error('Username is required');
+      }
+      const response = await fetch(`/api/sleeper/leagues?username=${encodeURIComponent(trimmedUsername)}&season=${sleeperSeason}`);
       if (!response.ok) {
         throw new Error('Failed to fetch leagues');
       }
@@ -190,8 +202,13 @@ export default function Setup() {
       if (!data.leagues || data.leagues.length === 0) {
         toast({
           title: "No Leagues Found",
-          description: `No leagues found for ${sleeperUsername} in ${sleeperSeason}`,
+          description: `No leagues found for "${sleeperUsername}" in ${sleeperSeason}. Try a different season or check if you're in an active league for that year.`,
           variant: "destructive"
+        });
+      } else {
+        toast({
+          title: "Leagues Found",
+          description: `Found ${data.leagues.length} league${data.leagues.length !== 1 ? 's' : ''} for ${sleeperSeason}. Select one to continue.`
         });
       }
     },
@@ -216,6 +233,13 @@ export default function Setup() {
       toast({
         title: "League Connected! 🏈",
         description: "Sleeper league linked successfully. Data sync started."
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "League Connection Failed",
+        description: `Unable to connect to this league: ${error.message}. This may be a private league or temporary API issue. Please try again.`,
+        variant: "destructive"
       });
     }
   });
@@ -523,21 +547,32 @@ export default function Setup() {
               <Input
                 id="sleeper-username"
                 value={sleeperUsername}
-                onChange={(e) => setSleeperUsername(e.target.value)}
+                onChange={(e) => {
+                  setSleeperUsername(e.target.value);
+                  // Reset leagues when username changes
+                  if (availableLeagues.length > 0) {
+                    setAvailableLeagues([]);
+                  }
+                }}
                 placeholder="Enter your Sleeper username"
                 data-testid="sleeper-username-input"
               />
+              <p className="text-xs text-muted-foreground">
+                Find your username in the Sleeper app under Profile
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="sleeper-season">Season</Label>
               <Select value={sleeperSeason} onValueChange={setSleeperSeason}>
-                <SelectTrigger>
+                <SelectTrigger data-testid="season-select">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="2024">2024</SelectItem>
-                  <SelectItem value="2023">2023</SelectItem>
-                  <SelectItem value="2022">2022</SelectItem>
+                  {seasonOptions.map(season => (
+                    <SelectItem key={season} value={season}>
+                      {season}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
