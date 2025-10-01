@@ -126,6 +126,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
   });
+
+  eventBus.on("cleanup_due", async () => {
+    try {
+      console.log("[Scheduler] Global cleanup due - removing expired wizard sessions");
+      const deletedCount = await storage.cleanupExpiredSetups();
+      console.log(`[Scheduler] Cleaned up ${deletedCount} expired wizard sessions`);
+    } catch (error) {
+      console.error("[Scheduler] Failed to cleanup expired sessions:", error);
+    }
+  });
   // Dev: Register Discord commands (requires admin key)
   app.post("/api/dev/register-commands", async (req, res) => {
     // Admin authentication

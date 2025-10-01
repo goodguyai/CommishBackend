@@ -74,6 +74,25 @@ export class Scheduler extends EventEmitter {
     this.unschedule(`digest_${leagueId}`);
     this.unschedule(`sync_${leagueId}`);
   }
+
+  scheduleGlobalCleanup() {
+    // Run daily at 3 AM UTC to clean up expired wizard sessions
+    const task = cron.schedule(
+      "0 3 * * *",
+      () => {
+        this.emit("cleanup_due");
+      },
+      {
+        scheduled: false,
+        timezone: "UTC"
+      }
+    );
+
+    this.tasks.set("global_cleanup", task);
+    task.start();
+    
+    console.log("Scheduled global cleanup job: daily at 3 AM UTC");
+  }
 }
 
 export const scheduler = new Scheduler();

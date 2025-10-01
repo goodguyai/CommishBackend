@@ -1,5 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
+import { scheduler } from "./lib/scheduler";
 import { setupVite, serveStatic, log } from "./vite";
 import { validateEnvironment } from "./services/env";
 import { generateRequestId } from "./lib/crypto";
@@ -102,6 +103,9 @@ app.use((req, res, next) => {
   validateEnvironment();
   
   const server = await registerRoutes(app);
+
+  // Initialize global cleanup job for expired wizard sessions
+  scheduler.scheduleGlobalCleanup();
 
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

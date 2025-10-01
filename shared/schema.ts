@@ -170,6 +170,7 @@ export const pendingSetup = pgTable("pending_setup", {
   sleeperSeason: text("sleeper_season"),
   selectedLeagueId: text("selected_league_id"),
   timezone: text("timezone").default("America/New_York"),
+  expiresAt: timestamp("expires_at"), // TTL: wizard session expires after 24 hours
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

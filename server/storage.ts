@@ -95,6 +95,7 @@ export interface IStorage {
   createPendingSetup(setup: InsertPendingSetup): Promise<string>;
   updatePendingSetup(sessionId: string, updates: Partial<PendingSetup>): Promise<void>;
   deletePendingSetup(sessionId: string): Promise<void>;
+  cleanupExpiredSetups(): Promise<number>; // Returns count of deleted sessions
 
   // Owner mapping methods
   getOwnerMappings(leagueId: string): Promise<OwnerMapping[]>;
@@ -516,22 +517,48 @@ export class DatabaseStorage implements IStorage {
   // Pending setup methods
   async getPendingSetup(sessionId: string): Promise<PendingSetup | undefined> {
     const results = await this.db.select().from(schema.pendingSetup).where(eq(schema.pendingSetup.sessionId, sessionId));
-    return results[0];
+    const setup = results[0];
+    
+    // Check expiry - return undefined if expired
+    if (setup && setup.expiresAt && new Date() > setup.expiresAt) {
+      await this.deletePendingSetup(sessionId); // Clean up expired session
+      return undefined;
+    }
+    
+    return setup;
   }
 
   async createPendingSetup(insertSetup: InsertPendingSetup): Promise<string> {
-    const results = await this.db.insert(schema.pendingSetup).values(insertSetup).returning({ id: schema.pendingSetup.id });
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 24); // 24 hour TTL
+    
+    const results = await this.db.insert(schema.pendingSetup)
+      .values({ ...insertSetup, expiresAt })
+      .returning({ id: schema.pendingSetup.id });
     return results[0].id;
   }
 
   async updatePendingSetup(sessionId: string, updates: Partial<PendingSetup>): Promise<void> {
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 24); // Refresh 24 hour TTL on updates
+    
+    // Exclude expiresAt from updates to prevent override
+    const { expiresAt: _, ...safeUpdates } = updates;
+    
     await this.db.update(schema.pendingSetup)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...safeUpdates, updatedAt: new Date(), expiresAt })
       .where(eq(schema.pendingSetup.sessionId, sessionId));
   }
 
   async deletePendingSetup(sessionId: string): Promise<void> {
     await this.db.delete(schema.pendingSetup).where(eq(schema.pendingSetup.sessionId, sessionId));
+  }
+
+  async cleanupExpiredSetups(): Promise<number> {
+    const result = await this.db.delete(schema.pendingSetup)
+      .where(sql`${schema.pendingSetup.expiresAt} < NOW()`)
+      .returning({ id: schema.pendingSetup.id });
+    return result.length;
   }
 
   // Owner mapping methods
@@ -866,11 +893,22 @@ export class MemStorage implements IStorage {
   private pendingSetups = new Map<string, PendingSetup>();
 
   async getPendingSetup(sessionId: string): Promise<PendingSetup | undefined> {
-    return this.pendingSetups.get(sessionId);
+    const setup = this.pendingSetups.get(sessionId);
+    
+    // Check expiry - return undefined if expired
+    if (setup && setup.expiresAt && new Date() > setup.expiresAt) {
+      this.pendingSetups.delete(sessionId); // Clean up expired session
+      return undefined;
+    }
+    
+    return setup;
   }
 
   async createPendingSetup(insertSetup: InsertPendingSetup): Promise<string> {
     const id = this.generateId();
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 24); // 24 hour TTL
+    
     const newSetup: PendingSetup = {
       ...insertSetup,
       id,
@@ -882,6 +920,7 @@ export class MemStorage implements IStorage {
       sleeperUsername: insertSetup.sleeperUsername || null,
       sleeperSeason: insertSetup.sleeperSeason || null,
       selectedLeagueId: insertSetup.selectedLeagueId || null,
+      expiresAt,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -894,12 +933,28 @@ export class MemStorage implements IStorage {
   async updatePendingSetup(sessionId: string, updates: Partial<PendingSetup>): Promise<void> {
     const existing = this.pendingSetups.get(sessionId);
     if (existing) {
-      this.pendingSetups.set(sessionId, { ...existing, ...updates, updatedAt: new Date() });
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + 24); // Refresh 24 hour TTL on updates
+      // Exclude expiresAt from updates to prevent override
+      const { expiresAt: _, ...safeUpdates } = updates;
+      this.pendingSetups.set(sessionId, { ...existing, ...safeUpdates, updatedAt: new Date(), expiresAt });
     }
   }
 
   async deletePendingSetup(sessionId: string): Promise<void> {
     this.pendingSetups.delete(sessionId);
+  }
+
+  async cleanupExpiredSetups(): Promise<number> {
+    const now = new Date();
+    let count = 0;
+    Array.from(this.pendingSetups.entries()).forEach(([sessionId, setup]) => {
+      if (setup.expiresAt && now > setup.expiresAt) {
+        this.pendingSetups.delete(sessionId);
+        count++;
+      }
+    });
+    return count;
   }
 
   // Owner mapping methods
