@@ -811,6 +811,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           case "reindex":
             response = await handleReindexCommand(interaction, league!, requestId);
             break;
+          case "whoami":
+            response = await handleWhoamiCommand(interaction, league!, requestId);
+            break;
           default:
             response = {
               type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -1647,6 +1650,68 @@ async function handleReindexCommand(interaction: any, league: any, requestId: st
     type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
     data: { flags: 64 },
   };
+}
+
+async function handleWhoamiCommand(interaction: any, league: any, requestId: string) {
+  try {
+    // Guard: Ensure league exists
+    if (!league) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "❌ This command must be used in a configured league server.",
+          flags: 64,
+        },
+      };
+    }
+
+    // Extract Discord user ID from interaction
+    const userId = interaction.member?.user?.id || interaction.user?.id;
+    
+    if (!userId) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "❌ Unable to identify user from Discord interaction.",
+          flags: 64,
+        },
+      };
+    }
+
+    // Get member info from storage by Discord user ID
+    // Note: storage.getMember expects (leagueId, discordUserId) per schema
+    const member = await storage.getMember(league.id, userId);
+
+    if (!member) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: `❓ **Not Registered**\n\nYou're not currently registered as a member of **${league.name}**.\n\nContact your league commissioner to get added.`,
+          flags: 64,
+        },
+      };
+    }
+
+    const roleEmoji = member.role === "COMMISH" ? "👑" : "📊";
+    const roleLabel = member.role === "COMMISH" ? "Commissioner" : "Manager";
+
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: `${roleEmoji} **Your League Profile**\n\n🏈 **League:** ${league.name}\n🎯 **Role:** ${roleLabel}\n🆔 **Member ID:** ${member.id}\n👤 **Discord ID:** <@${userId}>`,
+        flags: 64,
+      },
+    };
+  } catch (error) {
+    console.error("Whoami command failed:", error);
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Failed to retrieve member info. Please try again.",
+        flags: 64,
+      },
+    };
+  }
 }
 
 async function handleChannelSelect(req: any, res: any, interaction: any) {

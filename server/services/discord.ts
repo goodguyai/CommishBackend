@@ -391,6 +391,10 @@ export class DiscordService {
         name: "reindex",
         description: "Rebuild RAG index (Commissioner only)",
       },
+      {
+        name: "whoami",
+        description: "Show your member info and role in the league",
+      },
     ];
   }
 

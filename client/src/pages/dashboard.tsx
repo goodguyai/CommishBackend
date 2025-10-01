@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,8 +7,10 @@ import { DiscordStatus } from "@/components/discord-status";
 import { SleeperStatus } from "@/components/sleeper-status";
 import { RAGStatus } from "@/components/rag-status";
 import { ActivityLog } from "@/components/activity-log";
-import { Users, Book, Calendar, Bot } from "lucide-react";
-import { useEffect } from "react";
+import { Users, Book, Calendar, Bot, Terminal, Send, RefreshCw, FileText } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 export default function Dashboard() {
   // Set page title
@@ -264,8 +266,179 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      {/* Developer Utilities */}
+      <Card className="mb-8" data-testid="developer-utilities-card">
+        <CardHeader>
+          <CardTitle className="text-lg font-semibold text-foreground flex items-center gap-2">
+            <Terminal className="w-5 h-5" />
+            Developer Utilities
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <UtilityButton
+              icon={<RefreshCw className="w-4 h-4" />}
+              title="Register Commands"
+              description="Register slash commands to Discord"
+              endpoint="/api/discord/register-commands"
+              requiresGuildId
+              testId="button-register-commands"
+            />
+            <UtilityButton
+              icon={<Send className="w-4 h-4" />}
+              title="Post Test Message"
+              description="Send test message to channel"
+              endpoint="/api/discord/post-test"
+              requiresGuildId
+              testId="button-post-test"
+            />
+            <UtilityButton
+              icon={<RefreshCw className="w-4 h-4" />}
+              title="View Logs"
+              description="Check application logs"
+              onClick={() => window.open('/__logs', '_blank')}
+              testId="button-view-logs"
+            />
+            <UtilityButton
+              icon={<FileText className="w-4 h-4" />}
+              title="Health Check"
+              description="View system health status"
+              onClick={() => window.open('/api/health', '_blank')}
+              testId="button-health-check"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Recent Activity */}
       <ActivityLog events={eventsData || []} isLoading={eventsLoading} />
+    </div>
+  );
+}
+
+function UtilityButton({ 
+  icon, 
+  title, 
+  description, 
+  endpoint, 
+  requiresGuildId, 
+  onClick,
+  testId 
+}: { 
+  icon: React.ReactNode; 
+  title: string; 
+  description: string; 
+  endpoint?: string;
+  requiresGuildId?: boolean;
+  onClick?: () => void;
+  testId: string;
+}) {
+  const { toast } = useToast();
+  const [guildId, setGuildId] = useState("");
+  const [showInput, setShowInput] = useState(false);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!endpoint) return;
+      
+      const url = requiresGuildId && guildId 
+        ? `${endpoint}?guildId=${guildId}` 
+        : endpoint;
+      
+      const adminKey = prompt("Enter ADMIN_KEY:");
+      if (!adminKey) throw new Error("Admin key required");
+
+      return apiRequest(url, {
+        method: "POST",
+        headers: {
+          "x-admin-key": adminKey,
+        },
+      });
+    },
+    onSuccess: (data: any) => {
+      toast({
+        title: "Success",
+        description: data?.message || "Operation completed successfully",
+      });
+      setShowInput(false);
+      setGuildId("");
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error?.message || "Operation failed",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleClick = () => {
+    if (onClick) {
+      onClick();
+    } else if (requiresGuildId && !guildId) {
+      setShowInput(true);
+    } else {
+      mutation.mutate();
+    }
+  };
+
+  return (
+    <div className="p-4 bg-secondary rounded-lg border border-border hover:border-primary/50 transition-colors">
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center flex-shrink-0">
+          {icon}
+        </div>
+        <div className="flex-1 min-w-0">
+          <h4 className="text-sm font-medium text-foreground mb-1">{title}</h4>
+          <p className="text-xs text-muted-foreground mb-3">{description}</p>
+          
+          {showInput && requiresGuildId ? (
+            <div className="space-y-2">
+              <input
+                type="text"
+                placeholder="Guild ID"
+                value={guildId}
+                onChange={(e) => setGuildId(e.target.value)}
+                className="w-full px-2 py-1 text-xs bg-background border border-border rounded"
+                data-testid={`input-${testId}`}
+              />
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => mutation.mutate()}
+                  disabled={mutation.isPending || !guildId}
+                  className="text-xs h-7 flex-1"
+                  data-testid={`${testId}-submit`}
+                >
+                  {mutation.isPending ? "Running..." : "Execute"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setShowInput(false);
+                    setGuildId("");
+                  }}
+                  className="text-xs h-7"
+                  data-testid={`${testId}-cancel`}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button
+              size="sm"
+              onClick={handleClick}
+              disabled={mutation.isPending}
+              className="text-xs h-7 w-full"
+              data-testid={testId}
+            >
+              {mutation.isPending ? "Running..." : "Run"}
+            </Button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
