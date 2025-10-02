@@ -5,6 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Plus } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
+import { toast } from 'sonner';
 
 interface WaiverSuggestion {
   id: string;
@@ -32,6 +33,15 @@ export function WaiversPage() {
       faab: suggestion.suggestFaab,
       note: suggestion.note,
     });
+    toast.success(`Added ${suggestion.player} to waiver queue`, {
+      description: `Priority: ${waiverQueue.length + 1} • FAAB: $${suggestion.suggestFaab}`,
+    });
+  };
+
+  const handleSimulate = () => {
+    toast.info('Simulating waiver results...', {
+      description: 'This feature will process all waiver claims and show predicted outcomes.',
+    });
   };
 
   return (
@@ -41,7 +51,11 @@ export function WaiversPage() {
           <h1 className="text-2xl font-bold text-text-primary mb-1">Waivers</h1>
           <p className="text-text-secondary">Week 4 waiver wire suggestions</p>
         </div>
-        <Button data-testid="button-simulate" className="bg-gradient-cta text-white shadow-depth1 hover:shadow-depth2">
+        <Button 
+          onClick={handleSimulate}
+          data-testid="button-simulate" 
+          className="bg-gradient-cta text-white shadow-depth1 hover:shadow-depth2"
+        >
           Simulate Results
         </Button>
       </div>

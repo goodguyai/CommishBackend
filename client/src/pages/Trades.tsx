@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { toast } from 'sonner';
 
 interface TradeOpportunity {
   id: string;
@@ -28,6 +29,24 @@ export function TradesPage() {
     queryKey: ['/api/mock/trades/log'],
   });
 
+  const handleCreateOffer = () => {
+    toast.info('Opening trade builder...', {
+      description: 'Select players to build a custom trade offer.',
+    });
+  };
+
+  const handlePropose = (opp: TradeOpportunity) => {
+    toast.success(`Trade proposed to Team ${opp.targetTeamId}`, {
+      description: `Offering: ${opp.give.join(', ')} for ${opp.get.join(', ')}`,
+    });
+  };
+
+  const handleReview = (trade: PendingTrade) => {
+    toast.info(`Reviewing trade: ${trade.teams[0]} ↔ ${trade.teams[1]}`, {
+      description: `Fairness score: ${trade.fairnessScore}% - Opening detailed analysis...`,
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -35,7 +54,11 @@ export function TradesPage() {
           <h1 className="text-2xl font-bold text-text-primary mb-1">Trades</h1>
           <p className="text-text-secondary">Active offers and opportunities</p>
         </div>
-        <Button data-testid="button-create-trade" className="bg-gradient-cta text-white shadow-depth1 hover:shadow-depth2">
+        <Button 
+          onClick={handleCreateOffer}
+          data-testid="button-create-trade" 
+          className="bg-gradient-cta text-white shadow-depth1 hover:shadow-depth2"
+        >
           Create Offer
         </Button>
       </div>
@@ -57,7 +80,13 @@ export function TradesPage() {
                 <div key={opp.id} className="p-4 border border-border-subtle rounded-lg bg-surface-elevated shadow-depth1">
                   <div className="flex items-center justify-between mb-2">
                     <div className="font-medium text-text-primary">Trade with Team {opp.targetTeamId}</div>
-                    <Button size="sm" variant="ghost" data-testid={`button-propose-${opp.id}`} className="text-brand-teal hover:bg-surface-hover">
+                    <Button 
+                      size="sm" 
+                      variant="ghost" 
+                      onClick={() => handlePropose(opp)}
+                      data-testid={`button-propose-${opp.id}`} 
+                      className="text-brand-teal hover:bg-surface-hover"
+                    >
                       Propose
                     </Button>
                   </div>
@@ -102,7 +131,13 @@ export function TradesPage() {
                     </Badge>
                   </div>
                   <div className="flex gap-2 mt-3">
-                    <Button size="sm" variant="secondary" data-testid={`button-review-${trade.id}`} className="bg-surface-hover text-text-primary hover:bg-surface-overlay">
+                    <Button 
+                      size="sm" 
+                      variant="secondary" 
+                      onClick={() => handleReview(trade)}
+                      data-testid={`button-review-${trade.id}`} 
+                      className="bg-surface-hover text-text-primary hover:bg-surface-overlay"
+                    >
                       Review
                     </Button>
                   </div>

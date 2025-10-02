@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useLocation } from 'wouter';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { AlertTriangle, TrendingUp, Users, Trophy } from 'lucide-react';
@@ -24,6 +25,7 @@ interface CommissionerTask {
 }
 
 export function DashboardPage() {
+  const [, setLocation] = useLocation();
   const { data: injuries, isLoading: injuriesLoading } = useQuery<{ entries: InjuryEntry[] }>({
     queryKey: ['/api/mock/injuries'],
   });
@@ -36,6 +38,13 @@ export function DashboardPage() {
     queryKey: ['/api/mock/commissioner/tasks'],
   });
 
+  const stats = [
+    { label: 'Teams', value: '12', icon: Users, color: 'text-brand-teal', href: '/app/matchups' },
+    { label: 'Active Trades', value: '3', icon: TrendingUp, color: 'text-brand-teal', href: '/app/trades' },
+    { label: 'Waiver Claims', value: '8', icon: Users, color: 'text-brand-gold', href: '/app/waivers' },
+    { label: 'Start/Sit Alerts', value: '5', icon: AlertTriangle, color: 'text-brand-coral', href: '/app/matchups' },
+  ];
+
   return (
     <div className="space-y-6">
       <div>
@@ -44,13 +53,13 @@ export function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { label: 'Teams', value: '12', icon: Users, color: 'text-brand-teal' },
-          { label: 'Active Trades', value: '3', icon: TrendingUp, color: 'text-brand-teal' },
-          { label: 'Waiver Claims', value: '8', icon: Users, color: 'text-brand-gold' },
-          { label: 'Start/Sit Alerts', value: '5', icon: AlertTriangle, color: 'text-brand-coral' },
-        ].map((stat, i) => (
-          <Card key={i} className="bg-surface-card border-border-subtle shadow-depth1">
+        {stats.map((stat, i) => (
+          <Card 
+            key={i} 
+            className="bg-surface-card border-border-subtle shadow-depth1 hover:shadow-depth2 transition-all cursor-pointer"
+            onClick={() => setLocation(stat.href)}
+            data-testid={`stat-card-${i}`}
+          >
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div>
@@ -116,7 +125,11 @@ export function DashboardPage() {
             ) : (
               <div className="space-y-3">
                 {waivers?.slice(0, 3).map((waiver, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 bg-surface-elevated border border-border-subtle rounded-lg">
+                  <div 
+                    key={i} 
+                    className="flex items-center justify-between p-3 bg-surface-elevated border border-border-subtle rounded-lg hover:bg-surface-hover transition-colors cursor-pointer"
+                    onClick={() => setLocation('/app/waivers')}
+                  >
                     <div>
                       <div className="font-medium text-text-primary">{waiver.player}</div>
                       <div className="text-sm text-text-secondary">{waiver.team}</div>
