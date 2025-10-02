@@ -1,94 +1,61 @@
-import { Switch, Route } from "wouter";
-import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
-import { Toaster } from "@/components/ui/toaster";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { SidebarNav } from "@/components/ui/sidebar-nav";
-import Dashboard from "@/pages/dashboard";
-import Leagues from "@/pages/leagues";
-import Setup from "@/pages/setup";
-import Help from "@/pages/help";
-import NotFound from "@/pages/not-found";
-import { Menu } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { useState } from "react";
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './lib/queryClient';
+import { Switch, Route } from 'wouter';
+import { TooltipProvider } from './components/ui/Tooltip';
+import { Toaster } from './components/ui/Toast';
 
-function Layout({ children }: { children: React.ReactNode }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+import { AppShell } from './components/layout/AppShell';
+import { DashboardPage } from './pages/Dashboard';
+import { WaiversPage } from './pages/Waivers';
+import { TradesPage } from './pages/Trades';
+import { MatchupsPage } from './pages/Matchups';
+import { ReportsPage } from './pages/Reports';
+import { RulesPage } from './pages/Rules';
+import { ChatPage } from './pages/Chat';
+import { SettingsPage } from './pages/Settings';
+import { TerminalPage } from './pages/Terminal';
+import { OnboardingPage } from './pages/Onboarding';
+import { LandingPage } from './pages/Landing';
 
+function AppRouter() {
   return (
-    <div className="min-h-screen flex bg-background">
-      <SidebarNav />
-      
-      <div className="lg:pl-72 flex flex-col flex-1">
-        {/* Top bar */}
-        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-border bg-card px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="-m-2.5 p-2.5 text-muted-foreground lg:hidden"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            data-testid="mobile-menu-button"
-          >
-            <Menu className="w-5 h-5" />
-          </Button>
-          
-          <div className="flex flex-1 gap-x-4 self-stretch lg:gap-x-6">
-            <div className="flex flex-1 items-center">
-              {/* Page title will be set by individual pages */}
-            </div>
-            <div className="flex items-center gap-x-4 lg:gap-x-6">
-              {/* Discord Connection Status */}
-              <div className="flex items-center gap-x-2">
-                <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-                <span className="text-sm text-muted-foreground">Discord Connected</span>
-              </div>
-              
-              {/* User Menu */}
-              <div className="flex items-center gap-x-2">
-                <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
-                  <span className="text-sm font-semibold text-primary-foreground">JD</span>
-                </div>
-                <span className="text-sm font-medium text-foreground">John Doe</span>
-              </div>
-            </div>
+    <Switch>
+      <Route path="/" component={LandingPage} />
+      <Route path="/onboarding" component={OnboardingPage} />
+      <Route path="/app">
+        <AppShell>
+          <Switch>
+            <Route path="/app" component={DashboardPage} />
+            <Route path="/app/waivers" component={WaiversPage} />
+            <Route path="/app/trades" component={TradesPage} />
+            <Route path="/app/matchups" component={MatchupsPage} />
+            <Route path="/app/reports" component={ReportsPage} />
+            <Route path="/app/rules" component={RulesPage} />
+            <Route path="/app/chat" component={ChatPage} />
+            <Route path="/app/settings" component={SettingsPage} />
+            <Route path="/app/terminal" component={TerminalPage} />
+          </Switch>
+        </AppShell>
+      </Route>
+      <Route>
+        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+          <div className="text-center">
+            <h1 className="text-4xl font-bold text-gray-900 mb-2">404</h1>
+            <p className="text-gray-600">Page not found</p>
           </div>
         </div>
-
-        {/* Main content */}
-        <main className="flex-1 py-8">
-          {children}
-        </main>
-      </div>
-    </div>
+      </Route>
+    </Switch>
   );
 }
 
-function Router() {
-  return (
-    <Layout>
-      <Switch>
-        <Route path="/" component={Dashboard} />
-        <Route path="/leagues" component={Leagues} />
-        <Route path="/setup" component={Setup} />
-        <Route path="/settings" component={Setup} />
-        <Route path="/help" component={Help} />
-        {/* Add other routes as they're implemented */}
-        <Route component={NotFound} />
-      </Switch>
-    </Layout>
-  );
-}
-
-function App() {
+export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
+        <AppRouter />
         <Toaster />
-        <Router />
       </TooltipProvider>
     </QueryClientProvider>
   );
 }
-
-export default App;
