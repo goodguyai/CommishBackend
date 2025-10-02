@@ -1,0 +1,158 @@
+You are an expert Next.js 14 + TypeScript + Tailwind + shadcn/ui + tRPC engineer. 
+Goal: Make “The Commish” front-end fully clickable and demo-ready WITHOUT a live DB. 
+Assume Supabase DATABASE_URL is temporarily broken. Build with mocks first, behind a single flag, so we can later swap to real endpoints.
+
+## Constraints
+- No hard-coded secrets. Provide .env.local.example only.
+- Do NOT “clean” DATABASE_URL in code. Keep data traffic mocked via MSW.
+- Use App Router, React Server Components where sensible, client components for interactivity.
+- Use shadcn/ui primitives; keep components accessible (ARIA, focus states).
+- Add Storybook for atomic work; but main priority is the running app.
+
+## Packages to add
+- msw, @mswjs/data (fixtures)
+- zustand (client state), jotai (optional) 
+- @tanstack/react-query (for query ergonomics with MSW stubs)
+- cmdk (command palette)
+- @radix-ui primitives (bundled via shadcn)
+- react-hook-form + zod (forms/validation)
+- socket.io-client (mock real-time presence/typing)
+- framer-motion (micro-interactions)
+- date-fns
+- lucide-react (icons)
+
+## Global scaffolding
+- Create /lib/config.ts with FEATURE flags:
+  export const FEATURES = { MOCK_MODE: true, ENABLE_PERSONAS: true, ENABLE_CHAT: true, ENABLE_TERMINAL: true };
+- Create /mocks/ with:
+  - msw handlers for: /api/leagues, /api/users, /api/trades, /api/waivers, /api/matchups, /api/reports, /api/rules, /api/personas, /api/chat
+  - realistic FIXTURES for: 2 demo leagues, 12 teams, rosters, FAAB balances, weekly matchups (Weeks 1–5), waiver claims, trade offers, constitution sections, persona settings, chat threads.
+  - an “Injury Apocalypse 2025” dataset (Week 1–4) for demo cards: key players, statuses, ETA, commentary.
+- Bootstrap MSW so that all “tRPC” calls funnel to MSW during MOCK_MODE.
+
+## Routes & pages (App Router)
+- /(marketing) simple hero + “Enter App” button (kept minimal)
+- /app (shell with sidebar: Dashboard, Waivers, Trades, Matchups, Reports, Rules, Chat, Settings; topbar: command palette, notifications, league switcher)
+- /app/dashboard
+- /app/waivers
+- /app/trades
+- /app/matchups
+- /app/reports
+- /app/rules
+- /app/chat
+- /app/settings
+- /onboarding (wizard)
+
+## Core screens (first pass, fully interactive with mocks)
+
+1) Onboarding (/onboarding)
+- Steps: Choose Platform (Sleeper/ESPN/Manual) → Paste League ID or “Demo League” → Map Scoring → Invite Managers (email placeholders) → Review
+- Validation with zod; use toasts for step success; generate a demo league if no ID.
+
+2) League Dashboard (/app/dashboard)
+- Cards:
+  - Injury Heatmap (from fixtures): pill filters (QB/RB/WR/TE; Week), sparkline for injury trend; click → details drawer.
+  - Waiver Radar: top 6 adds with short rationale; “Add to Queue”.
+  - Trade Opportunities: 3 suggested targets with league-fit tags (“RB-needy”, “WR surplus”).
+  - Start/Sit Alerts: 5 lineup warnings (bye, injury risk).
+  - Commissioner Tasks: checklist (pending trades to review, rules edits to approve, content to post).
+- Micro-interactions: skeletons on load; framer-motion for card hover; confetti on task complete.
+
+3) Waiver/FAAB Assistant (/app/waivers)
+- Table with player, priority, FAAB suggestion, conflict detection.
+- Drag-and-drop to reorder claims; optimistic toasts; “Simulate Results” button opens side panel with probable outcomes.
+
+4) Trade Arbiter (/app/trades)
+- Create Offer modal (select team, players, picks, notes).
+- “Fairness meter” (mocked score); add rationale (rich-text).
+- Voting log for commissioner league; approve/deny with comment.
+- Timeline of trade events; export summary as Markdown.
+
+5) Matchup + Start/Sit (/app/matchups)
+- Weekly tabs; per-matchup view with projected pts, volatility, “coach’s note”.
+- “Explain this recommendation” accordion with bullet rationale.
+
+6) Weekly Reports (/app/reports)
+- Generate: “Week X: The Commish Report” from fixtures.
+- Sections: League Headlines, Best/Worst Moves, Injury Watch, Waiver Wins, Trade Tracker, Power Rankings.
+- Share: copy to clipboard; “Post to Chat” button.
+
+7) Rules/Constitution Builder (/app/rules)
+- Left nav tree of sections; editor on right (react-hook-form).
+- Templates gallery (keepers, FAAB, trade veto policy).
+- “Ask The Commish” mini-Q&A (stubbed): ask rule → suggested clause → insert.
+
+8) League Chat Hub (/app/chat)
+- Channels (general, waivers, trades, smack-talk).
+- Messages with reactions, threads, slash commands: /report, /poll, /rules
+- Presence dots, typing indicator (mocked socket).
+- Bot “The Commish” posts: waiver summary, injury alerts, weekly report.
+
+9) Persona Packs (Settings → Personas)
+- Toggle voices (Sassy, Batman, Yoda). Save applies to bot replies across chat and reports (just text style for now).
+
+10) The Commish Terminal (floating button + /app/terminal)
+- Monaco-like input or simple textarea if faster.
+- Commands:
+  - league status
+  - generate report week <n>
+  - propose trade <teamA> <teamB>
+  - set rule "<title>"
+  - export constitution
+- Wire commands to the same MSW fixtures; show output panes (JSON + human summary).
+
+## Components (shadcn-based; create under /components)
+- DataTable, Card, Drawer, Dialog, Tooltip, Toast, Badge, Tabs, CommandPalette (cmdk), PersonaBadge, PresenceDot, LoadingSkeleton, EmptyState, MarkdownViewer.
+
+## State
+- zustand store: selectedLeagueId, week, userPersona, waiverQueue, tradeDraft, notifications.
+- Persist minimal UI prefs in localStorage.
+
+## Command Palette (⌘K)
+- Actions: “Go to…” routes, “Generate Weekly Report,” “Open Terminal,” “Post to Chat,” “Toggle Persona”.
+
+## Design polish & anti-stale tricks
+- Motion on hover/press; subtle shadows; animated skeletons.
+- Beautiful empty states with “Try this” buttons that prefill fixtures.
+- Toasts for all mutations; optimistic updates everywhere.
+- First-run tour (coach-marks) using a small library or custom.
+
+## Testing / DX
+- Add basic Playwright smoke path: 
+  - load /onboarding → create demo league → land on dashboard → add waiver → create trade → generate report → post to chat.
+- Add ESLint + Prettier; type-check CI step.
+- Storybook for core components (Card, DataTable, Drawer, Dialog, MarkdownViewer).
+
+## File map (high level)
+- app/
+  - layout.tsx, globals.css
+  - onboarding/page.tsx
+  - app/(shell)/layout.tsx
+  - app/(shell)/dashboard/page.tsx
+  - app/(shell)/waivers/page.tsx
+  - app/(shell)/trades/page.tsx
+  - app/(shell)/matchups/page.tsx
+  - app/(shell)/reports/page.tsx
+  - app/(shell)/rules/page.tsx
+  - app/(shell)/chat/page.tsx
+  - app/(shell)/settings/page.tsx
+  - app/(shell)/terminal/page.tsx
+- components/…
+- lib/config.ts, lib/utils.ts
+- mocks/{handlers.ts, server.ts, fixtures/*.ts}
+- store/useAppStore.ts
+- styles/…
+- .env.local.example
+
+## Deliverables for this sprint
+1) All routes render and are clickable with mock data.
+2) Command palette + Terminal operational against fixtures.
+3) MSW mocking flag works (FEATURES.MOCK_MODE).
+4) One end-to-end Playwright smoke test passing.
+5) README with “Mock Mode Dev” and “Later: Real API” instructions.
+
+## After DB fix (leave stubs)
+- Prepare tRPC routers for leagues, users, waivers, trades, reports, rules, chat.
+- Add Supabase auth wrapper but keep it OFF in MOCK_MODE.
+
+Start now. Produce diffs, file tree, and usage notes as you go. 
