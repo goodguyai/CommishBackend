@@ -32,8 +32,8 @@ export function TradesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">Trades</h1>
-          <p className="text-gray-600">Active offers and opportunities</p>
+          <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Trades</h1>
+          <p className="text-neutral-midnight/60">Active offers and opportunities</p>
         </div>
         <Button data-testid="button-create-trade">
           Create Offer
@@ -54,20 +54,20 @@ export function TradesPage() {
           ) : (
             <div className="space-y-4">
               {opportunities?.map((opp) => (
-                <div key={opp.id} className="p-4 border border-gray-200 rounded-lg">
+                <div key={opp.id} className="p-4 border border-neutral-panel rounded-lg">
                   <div className="flex items-center justify-between mb-2">
-                    <div className="font-medium text-gray-900">Trade with Team {opp.targetTeamId}</div>
+                    <div className="font-medium text-neutral-midnight">Trade with Team {opp.targetTeamId}</div>
                     <Button size="sm" variant="ghost" data-testid={`button-propose-${opp.id}`}>
                       Propose
                     </Button>
                   </div>
-                  <div className="text-sm text-gray-600 mb-1">
+                  <div className="text-sm text-neutral-midnight/60 mb-1">
                     Give: <span className="font-medium">{opp.give.join(', ')}</span>
                   </div>
-                  <div className="text-sm text-gray-600 mb-2">
+                  <div className="text-sm text-neutral-midnight/60 mb-2">
                     Get: <span className="font-medium">{opp.get.join(', ')}</span>
                   </div>
-                  <div className="text-xs text-gray-500">{opp.rationale}</div>
+                  <div className="text-xs text-neutral-midnight/60">{opp.rationale}</div>
                 </div>
               ))}
             </div>
@@ -89,9 +89,9 @@ export function TradesPage() {
           ) : (
             <div className="space-y-4">
               {pending?.filter(t => t.status === 'pending').map((trade) => (
-                <div key={trade.id} className="p-4 border border-gray-200 rounded-lg">
+                <div key={trade.id} className="p-4 border border-neutral-panel rounded-lg">
                   <div className="flex items-center justify-between mb-2">
-                    <div className="font-medium text-gray-900">
+                    <div className="font-medium text-neutral-midnight">
                       {trade.teams[0]} ↔ {trade.teams[1]}
                     </div>
                     <Badge variant={trade.fairnessScore >= 80 ? 'success' : 'warning'}>
