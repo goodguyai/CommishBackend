@@ -1,0 +1,72 @@
+export const injuryApocalypse = {
+  weekRange: "Weeks 1–4",
+  notes: "Demonstration dataset for UI only. Not real medical information.",
+  entries: [
+    {
+      player: "QB J. Star",
+      team: "CIN",
+      status: "Out (foot)",
+      eta: "TBD",
+      impact: "Major",
+      blurb: "Managers pivoting to streamers. Backup gaining confidence.",
+    },
+    {
+      player: "WR M. RookiePhenom",
+      team: "NYG",
+      status: "Knee – week-to-week",
+      eta: "2–4 weeks",
+      impact: "High",
+      blurb: "Targets to redistribute among WR2 and slot. Monitor practice reports.",
+    },
+    {
+      player: "RB J. Veteran",
+      team: "ARI",
+      status: "Ankle – IR (designated to return)",
+      eta: "4+ weeks",
+      impact: "High",
+      blurb: "Backup elevated to RB1. Handcuff value sky-high.",
+    },
+    {
+      player: "RB T. RookiePower",
+      team: "ARI",
+      status: "Hamstring – day-to-day",
+      eta: "Unclear",
+      impact: "Medium",
+      blurb: "Monitor practice reps. Game-time decision likely.",
+    },
+    {
+      player: "TE S. Reliable",
+      team: "KC",
+      status: "Concussion protocol",
+      eta: "1–2 weeks",
+      impact: "Medium",
+      blurb: "TE2 sees volume bump if he's out.",
+    },
+    {
+      player: "WR D. Speedster",
+      team: "MIA",
+      status: "Hamstring – IR",
+      eta: "3–5 weeks",
+      impact: "High",
+      blurb: "WR3 moves into WR2 role. Volume redistribution key.",
+    },
+    {
+      player: "QB P. Veteran",
+      team: "LAR",
+      status: "Thumb – questionable",
+      eta: "This week",
+      impact: "Low",
+      blurb: "Expected to play. Monitor pre-game reports.",
+    },
+    {
+      player: "RB C. Workhorse",
+      team: "BAL",
+      status: "Knee – probable",
+      eta: "This week",
+      impact: "Low",
+      blurb: "Limited practice but trending toward playing.",
+    },
+  ],
+};
+
+export type InjuryEntry = typeof injuryApocalypse.entries[0];
