@@ -1,0 +1,564 @@
+Here’s your copy-paste MASTER PROMPT for Replit Agent v2. It includes context, goals, advisor guidance, file tree, code, and acceptance criteria to spin up a living Style Guide + design system for GoodGuy AI / THE COMMISH (Vite + React, vanilla CSS variables). Paste this whole prompt into Replit and let it run.
+
+⸻
+
+MASTER PROMPT — GoodGuy AI / THE COMMISH Design System & Style Guide
+
+ROLE
+
+You are my Senior Frontend Architect & Design Systems Lead. Build a framework-agnostic design system with a live /style-guide page. Stack: Vite + React + TypeScript, vanilla CSS variables (no Tailwind). Output must be portable to other apps.
+
+BRAND CONTEXT (source of truth)
+	•	Product: THE COMMISH—AI co-commissioner for fantasy leagues.
+	•	Voice: modern, confident, a dash of playful snark; GitHub-clean.
+	•	Tagline: Play Nice.
+	•	Visuals (from landing page):
+	•	Dark, cinematic backgrounds; teal core + hot-pink gradient accents.
+	•	Heavy display headlines (all caps, sometimes italic).
+	•	Big rounded cards with subtle glow; bold CTAs.
+
+TOP GOALS
+	1.	Create a design-tokens layer (JSON + CSS variables) to drive colors, type scale, spacing, radii, shadows, motion.
+	2.	Ship a live Style Guide (/src/pages/StyleGuide.tsx) that documents tokens, components, UX patterns, and shows copy-to-clipboard snippets.
+	3.	Provide reusable UI primitives (Button, Card, Badge, Input, Icon, CodeBlock, ColorSwatch).
+	4.	Include a sample dashboard preview showing Commissioner-first cards: League Actions, Transaction Review, Fairness Review, League Reports, ChatOps.
+	5.	Write docs + acceptance criteria and a migration guide for dropping this system into other repos.
+
+ADVISOR PANEL (what they’d tell us)
+	•	Product Design: Keep the system small and legible. Vanilla CSS variables mean easier porting to marketing, bot consoles, and future Next/Expo apps.
+	•	Eng: Avoid Tailwind lock-in; keep tokens as JSON → generate CSS once.
+	•	Brand: Anchor on teal #009898, deep slate #042E2E, and a hot-pink → coral CTA gradient like the hero text.
+	•	UX: Lead with Commissioner tasks, not “team advice.”
+	•	Perf/Access: Respect prefers-reduced-motion; high-contrast by default.
+
+If you disagree, propose an alternative in DOCS.md > Alternatives & Tradeoffs.
+
+⸻
+
+PROJECT TASKS
+	1.	Initialize (if needed) Vite React TS; otherwise do not overwrite existing app—only add files.
+	2.	Add fonts (Google): Archivo Black (display), Lato (body).
+	3.	Create tokens JSON and a small build script that emits CSS variables.
+	4.	Implement global.css using tokens vars; set dark theme.
+	5.	Build UI primitives (Button/Card/Badge/Input/Icon).
+	6.	Build /style-guide page with live examples + copy buttons.
+	7.	Build /preview-dashboard showing the 5 Commish cards.
+	8.	Add README and DOCS.md with migration notes and acceptance criteria.
+	9.	Add a minimal eslint + prettier config if absent.
+
+⸻
+
+FILE TREE (create if missing)
+
+/src/styles/tokens.json
+/src/styles/tokens.css          // generated from tokens.json (but commit an initial hand-written version)
+/src/styles/global.css
+/src/components/ui/Button.tsx
+/src/components/ui/Card.tsx
+/src/components/ui/Badge.tsx
+/src/components/ui/Input.tsx
+/src/components/ui/Icon.tsx
+/src/components/ui/CodeBlock.tsx
+/src/components/ui/ColorSwatch.tsx
+/src/pages/StyleGuide.tsx
+/src/pages/PreviewDashboard.tsx
+/scripts/build-tokens.mjs
+/public/fonts/ (downloaded via import URL or @import in CSS)
+/DOCS.md
+/README.md
+
+
+⸻
+
+DESIGN TOKENS (authoritative)
+
+/src/styles/tokens.json
+
+{
+  "brand": {
+    "teal": "#009898",
+    "slate": "#042E2E",
+    "ctaPink": "#FF4D6D",
+    "ctaCoral": "#FF7A59",
+    "gold": "#FFB100"
+  },
+  "neutral": {
+    "white": "#F8F8F8",
+    "ink": "#0B0B0D",
+    "g600": "#6B7280",
+    "g900": "#111827",
+    "panel": "#121619"
+  },
+  "typography": {
+    "display": "'Archivo Black', system-ui, sans-serif",
+    "body": "'Lato', system-ui, sans-serif",
+    "scale": {
+      "h00": "4.75rem",
+      "h1": "3.25rem",
+      "h2": "2.125rem",
+      "h3": "1.5rem",
+      "lead": "1.125rem",
+      "body": "1rem",
+      "caption": "0.875rem",
+      "micro": "0.75rem"
+    }
+  },
+  "radii": { "xs": "6px", "sm": "10px", "md": "12px", "lg": "16px", "xl": "20px", "pill": "999px" },
+  "spacing": { "1": "0.25rem", "2": "0.5rem", "3": "0.75rem", "4": "1rem", "6": "1.5rem", "8": "2rem", "12": "3rem", "16": "4rem" },
+  "shadow": {
+    "card": "0 2px 8px rgba(0,0,0,0.12)",
+    "elevated": "0 4px 16px rgba(0,0,0,0.18)",
+    "button": "0 2px 6px rgba(0,0,0,0.2)"
+  },
+  "motion": { "fast": "180ms", "normal": "300ms", "ease": "cubic-bezier(0.4, 0, 0.2, 1)" }
+}
+
+/src/styles/tokens.css (initial commit, can be re-generated)
+
+:root {
+  /* Brand */
+  --brand-teal: #009898;
+  --brand-slate: #042E2E;
+  --brand-cta-pink: #FF4D6D;
+  --brand-cta-coral: #FF7A59;
+  --brand-gold: #FFB100;
+
+  /* Neutral */
+  --neutral-white: #F8F8F8;
+  --neutral-ink: #0B0B0D;
+  --neutral-g600: #6B7280;
+  --neutral-g900: #111827;
+  --neutral-panel: #121619;
+
+  /* Typography */
+  --font-display: 'Archivo Black', system-ui, sans-serif;
+  --font-body: 'Lato', system-ui, sans-serif;
+
+  --fs-h00: 4.75rem;
+  --fs-h1: 3.25rem;
+  --fs-h2: 2.125rem;
+  --fs-h3: 1.5rem;
+  --fs-lead: 1.125rem;
+  --fs-body: 1rem;
+  --fs-caption: 0.875rem;
+  --fs-micro: 0.75rem;
+
+  /* Radii */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* Shadows */
+  --shadow-card: 0 2px 8px rgba(0,0,0,0.12);
+  --shadow-elevated: 0 4px 16px rgba(0,0,0,0.18);
+  --shadow-button: 0 2px 6px rgba(0,0,0,0.2);
+
+  /* Motion */
+  --motion-fast: 180ms;
+  --motion-normal: 300ms;
+  --motion-ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Derived */
+  --cta-gradient: linear-gradient(90deg, var(--brand-cta-pink), var(--brand-cta-coral));
+}
+
+/scripts/build-tokens.mjs
+
+(Simple generator stub; safe to run later if you want JSON→CSS flow.)
+
+import fs from 'node:fs';
+const tokens = JSON.parse(fs.readFileSync('src/styles/tokens.json','utf-8'));
+
+const out = [];
+out.push(':root {');
+out.push(`  --brand-teal: ${tokens.brand.teal};`);
+out.push(`  --brand-slate: ${tokens.brand.slate};`);
+out.push(`  --brand-cta-pink: ${tokens.brand.ctaPink};`);
+out.push(`  --brand-cta-coral: ${tokens.brand.ctaCoral};`);
+out.push(`  --brand-gold: ${tokens.brand.gold};`);
+out.push(`  --neutral-white: ${tokens.neutral.white};`);
+out.push(`  --neutral-ink: ${tokens.neutral.ink};`);
+out.push(`  --neutral-g600: ${tokens.neutral.g600};`);
+out.push(`  --neutral-g900: ${tokens.neutral.g900};`);
+out.push(`  --neutral-panel: ${tokens.neutral.panel};`);
+Object.entries(tokens.typography.scale).forEach(([k,v])=> out.push(`  --fs-${k}: ${v};`));
+Object.entries(tokens.radii).forEach(([k,v])=> out.push(`  --radius-${k}: ${v};`));
+Object.entries(tokens.spacing).forEach(([k,v])=> out.push(`  --space-${k}: ${v};`));
+Object.entries(tokens.shadow).forEach(([k,v])=> out.push(`  --shadow-${k}: ${v};`));
+out.push(`  --motion-fast: ${tokens.motion.fast};`);
+out.push(`  --motion-normal: ${tokens.motion.normal};`);
+out.push(`  --motion-ease: ${tokens.motion.ease};`);
+out.push(`  --cta-gradient: linear-gradient(90deg, ${tokens.brand.ctaPink}, ${tokens.brand.ctaCoral});`);
+out.push('}');
+fs.mkdirSync('src/styles',{recursive:true});
+fs.writeFileSync('src/styles/tokens.css', out.join('\n')+'\n');
+console.log('Wrote src/styles/tokens.css');
+
+
+⸻
+
+GLOBAL STYLES
+
+/src/styles/global.css
+
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Lato:wght@300;400;700&display=swap');
+@import './tokens.css';
+
+:root { color-scheme: dark; }
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  color: var(--neutral-white);
+  background: radial-gradient(1200px 600px at 50% -10%, #0e2020, transparent) var(--neutral-ink);
+}
+
+h1,h2,h3,.display {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+a { color: var(--brand-teal); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.card {
+  background: var(--neutral-panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-6);
+}
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--space-2);
+  border-radius: var(--radius-pill);
+  padding: 0.75rem 1.25rem;
+  font-weight: 700;
+  transition: transform var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease);
+  cursor: pointer;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--cta-gradient); color: black; box-shadow: var(--shadow-button); }
+.btn-secondary { background: var(--brand-teal); color: #001515; }
+.btn-outline { border: 1px solid #2a2f33; color: var(--neutral-white); background: transparent; }
+.btn-ghost { color: var(--neutral-white); background: transparent; }
+.btn-danger { background: #C62828; }
+
+.input {
+  width: 100%; background: #0f1316; color: var(--neutral-white);
+  border: 1px solid #22292f; border-radius: var(--radius-sm);
+  padding: 0.65rem 0.8rem; outline: none;
+}
+.input:focus { border-color: var(--brand-teal); box-shadow: 0 0 0 3px rgba(0,152,152,0.25); }
+
+.badge {
+  display:inline-flex; align-items:center; gap:6px;
+  border-radius: var(--radius-pill); padding: 0.25rem 0.5rem; font-size: 0.85rem;
+}
+.badge-primary { background: rgba(0,152,152,.15); color: #8AF4F1; border: 1px solid rgba(0,152,152,.35); }
+.badge-outline { border: 1px solid #2b3136; color: var(--neutral-white); }
+
+
+⸻
+
+UI PRIMITIVES (React)
+
+/src/components/ui/Button.tsx
+
+import React from 'react';
+type Variant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger';
+export function Button({ variant='primary', children, className='', ...props }:
+  React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
+  return (
+    <button className={`btn btn-${variant} ${className}`} {...props}>
+      {children}
+    </button>
+  );
+}
+
+/src/components/ui/Card.tsx
+
+import React from 'react';
+export function Card({ children, className='', ...props }:
+  React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={`card ${className}`} {...props}>{children}</div>;
+}
+
+/src/components/ui/Badge.tsx
+
+import React from 'react';
+type Variant='primary'|'outline';
+export function Badge({ variant='primary', children, className='', ...props }:
+  React.HTMLAttributes<HTMLSpanElement> & {variant?:Variant}) {
+  return <span className={`badge badge-${variant} ${className}`} {...props}>{children}</span>;
+}
+
+/src/components/ui/Input.tsx
+
+import React from 'react';
+export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
+  ({ className='', ...props }, ref) => (<input ref={ref} className={`input ${className}`} {...props} />)
+);
+Input.displayName = 'Input';
+
+/src/components/ui/Icon.tsx
+
+import React from 'react';
+export const Trophy = (props: React.SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" {...props}>
+    <path d="M6 3h12v3a6 6 0 0 1-12 0V3Z" stroke="currentColor" strokeWidth="2"/>
+    <path d="M4 6a4 4 0 0 0 4 4M20 6a4 4 0 0 1-4 4" stroke="currentColor" strokeWidth="2"/>
+    <path d="M12 12v4M8 20h8" stroke="currentColor" strokeWidth="2"/>
+  </svg>
+);
+export const Zap = (props: React.SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" {...props}>
+    <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" stroke="currentColor" strokeWidth="2"/>
+  </svg>
+);
+export const Chat = (props: React.SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" {...props}>
+    <path d="M21 12a8 8 0 1 1-3-6.3l3 .3V12Z" stroke="currentColor" strokeWidth="2"/>
+    <path d="M9 12h6M9 8h6M9 16h3" stroke="currentColor" strokeWidth="2"/>
+  </svg>
+);
+export const Bars = (props: React.SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" {...props}>
+    <path d="M5 20V10M12 20V4M19 20v-8" stroke="currentColor" strokeWidth="2"/>
+  </svg>
+);
+
+/src/components/ui/CodeBlock.tsx
+
+import React, {useState} from 'react';
+
+export function CodeBlock({ title, code, language='css' }:{
+  title: string; code: string; language?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(()=>setCopied(false), 1800); };
+  return (
+    <div className="card" style={{padding:'1rem'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.5rem'}}>
+        <strong>{title}</strong>
+        <button className="btn btn-outline" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+      </div>
+      <pre style={{margin:0, overflowX:'auto'}}><code>{code}</code></pre>
+    </div>
+  );
+}
+
+/src/components/ui/ColorSwatch.tsx
+
+import React from 'react';
+export function ColorSwatch({ name, value, description }:{
+  name:string; value:string; description?:string;
+}) {
+  return (
+    <div className="card" style={{display:'flex',gap:'1rem',alignItems:'center'}}>
+      <div style={{width:48,height:48,borderRadius:12,background:value,boxShadow:'var(--shadow-card)'}}/>
+      <div>
+        <div style={{fontWeight:700}}>{name}</div>
+        <div style={{opacity:.9}}>{value}</div>
+        {description && <div style={{opacity:.7}}>{description}</div>}
+      </div>
+    </div>
+  );
+}
+
+
+⸻
+
+PAGES
+
+/src/pages/StyleGuide.tsx
+
+import React from 'react';
+import '../styles/global.css';
+import { Button } from '../components/ui/Button';
+import { Card } from '../components/ui/Card';
+import { Badge } from '../components/ui/Badge';
+import { Input } from '../components/ui/Input';
+import { CodeBlock } from '../components/ui/CodeBlock';
+import { ColorSwatch } from '../components/ui/ColorSwatch';
+
+const cssVars = `:root { /* truncated for demo; see src/styles/tokens.css */ }`;
+
+export default function StyleGuide() {
+  return (
+    <div style={{maxWidth:1100, margin:'0 auto', padding:'2rem'}}>
+      <header style={{marginBottom:'2rem'}}>
+        <h1 className="display" style={{background:'var(--cta-gradient)', WebkitBackgroundClip:'text', color:'transparent'}}>GoodGuy AI Style Guide</h1>
+        <p>Complete design system for cross-platform implementation.</p>
+      </header>
+
+      <section style={{display:'grid', gap:'1rem', marginBottom:'2rem'}}>
+        <h2>Brand Identity</h2>
+        <Card>
+          <strong>Tagline:</strong> Play Nice.<br/>
+          <strong>Voice:</strong> modern, confident, a dash of playful snark; GitHub-clean.
+        </Card>
+      </section>
+
+      <section style={{display:'grid', gap:'1rem', marginBottom:'2rem'}}>
+        <h2>Color Palette</h2>
+        <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px,1fr))', gap:'1rem'}}>
+          <ColorSwatch name="Teal Core" value="#009898" description="--brand-teal"/>
+          <ColorSwatch name="Deep Slate" value="#042E2E" description="--brand-slate"/>
+          <ColorSwatch name="CTA Pink" value="#FF4D6D" description="--brand-cta-pink"/>
+          <ColorSwatch name="CTA Coral" value="#FF7A59" description="--brand-cta-coral"/>
+          <ColorSwatch name="Gold" value="#FFB100" description="--brand-gold"/>
+          <ColorSwatch name="Panel" value="#121619" description="--neutral-panel"/>
+        </div>
+      </section>
+
+      <section style={{display:'grid', gap:'1rem', marginBottom:'2rem'}}>
+        <h2>Typography</h2>
+        <Card><div className="display">THE COMMISH</div></Card>
+        <Card><h2>Section Heading</h2></Card>
+        <Card><p style={{fontSize:'var(--fs-lead)'}}>Lead text size for intros and hero copy.</p></Card>
+      </section>
+
+      <section style={{display:'grid', gap:'1rem', marginBottom:'2rem'}}>
+        <h2>Buttons</h2>
+        <div style={{display:'flex', gap:'1rem', flexWrap:'wrap'}}>
+          <Button>Primary</Button>
+          <Button variant="secondary">Secondary</Button>
+          <Button variant="outline">Outline</Button>
+          <Button variant="ghost">Ghost</Button>
+          <Button variant="danger">Danger</Button>
+        </div>
+      </section>
+
+      <section style={{display:'grid', gap:'1rem', marginBottom:'2rem'}}>
+        <h2>Form & Badges</h2>
+        <Input placeholder="Email"/>
+        <div style={{display:'flex', gap:'0.5rem', marginTop:'0.5rem'}}>
+          <Badge>Primary Badge</Badge>
+          <Badge variant="outline">Outline Badge</Badge>
+        </div>
+      </section>
+
+      <section style={{display:'grid', gap:'1rem', marginBottom:'2rem'}}>
+        <h2>Tokens (copy)</h2>
+        <CodeBlock title="tokens.css" code={cssVars} language="css"/>
+      </section>
+
+      <footer style={{opacity:.7, marginTop:'3rem'}}>© GoodGuy AI — Play Nice.</footer>
+    </div>
+  );
+}
+
+/src/pages/PreviewDashboard.tsx  (commissioner-first demo)
+
+import React from 'react';
+import '../styles/global.css';
+import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Trophy, Zap, Chat, Bars } from '../components/ui/Icon';
+
+const Item = ({icon, title, desc, count=0, href='#'}:
+  {icon:React.ReactNode; title:string; desc:string; count?:number; href?:string}) => (
+  <a href={href} style={{textDecoration:'none', color:'inherit'}}>
+    <Card style={{display:'flex', gap:'1rem', alignItems:'center'}}>
+      <div style={{width:48,height:48,borderRadius:12,display:'grid',placeItems:'center',background:'rgba(0,152,152,.15)',color:'#8AF4F1'}}>{icon}</div>
+      <div style={{flex:1}}>
+        <div style={{fontWeight:800, textTransform:'capitalize'}}>{title}</div>
+        <div style={{opacity:.85}}>{desc}</div>
+      </div>
+      {count>0 && <div className="badge badge-primary">{count}</div>}
+    </Card>
+  </a>
+);
+
+export default function PreviewDashboard(){
+  return (
+    <div style={{maxWidth:900, margin:'0 auto', padding:'2rem'}}>
+      <h1 className="display" style={{marginBottom:'1rem'}}>Commissioner Console</h1>
+      <p style={{marginBottom:'1.5rem'}}>What needs your decision right now?</p>
+
+      <div style={{display:'grid', gap:'1rem'}}>
+        <Item icon={<Zap/>} title="League Actions (Inbox)" desc="Trades, waivers, rule issues waiting for review" count={3}/>
+        <Item icon={<Bars/>} title="Transaction Review" desc="Approve/deny moves with an audit trail"/>
+        <Item icon={<Trophy/>} title="Fairness Review" desc="Evidence packs + constitution precedent"/>
+        <Item icon={<Trophy/>} title="League Reports" desc="Auto-generated weekly commissioner recap"/>
+        <Item icon={<Chat/>} title="ChatOps" desc="Moderate disputes via Discord; track escalations"/>
+      </div>
+
+      <div style={{marginTop:'2rem'}}><Button>Primary Action</Button></div>
+    </div>
+  );
+}
+
+
+⸻
+
+ROUTING NOTE
+
+If you’re using react-router, register routes to /style-guide and /preview-dashboard. If you have a custom router, just ensure both components are reachable.
+
+⸻
+
+DOCS
+
+/README.md
+	•	Run:
+
+npm i
+node scripts/build-tokens.mjs   # optional JSON→CSS regeneration
+npm run dev
+
+
+	•	Pages: /style-guide, /preview-dashboard
+	•	Design Tokens: edit src/styles/tokens.json, regenerate CSS.
+
+/DOCS.md
+	•	Migration: Copy /src/styles, /src/components/ui, and /src/pages/StyleGuide.tsx. Import global.css at app root.
+	•	Accessibility: high contrast default; honor prefers-reduced-motion.
+	•	Alternatives & Tradeoffs: If we later adopt Tailwind/ShadCN, keep tokens as CSS variables; map via Tailwind config theme.extend.colors using rgb(var(--var) / <alpha-value>) pattern.
+	•	Commissioner UX: lead with League Actions; all decisions log to an Audit Ledger and post to Discord.
+
+⸻
+
+ACCEPTANCE CRITERIA
+	•	Tokens render in /style-guide; copy buttons work.
+	•	Buttons, Cards, Badges, Inputs visually match the Commish page tone (dark, teal, pink-coral CTAs).
+	•	/preview-dashboard shows five Commissioner cards with counts.
+	•	No Tailwind dependency; zero runtime errors in Vite.
+	•	Fonts load (Archivo Black + Lato).
+	•	Code is TypeScript-clean; ESLint passes.
+
+⸻
+
+RUN COMMANDS (Replit)
+	1.	npm create vite@latest (if project not present) → React + TS.
+	2.	npm i
+	3.	Add files above.
+	4.	npm run dev
+
+⸻
+
+WHERE I MIGHT BE WRONG (room for disagreement)
+	•	If your existing app already uses Tailwind, mapping tokens into tailwind.config.js may speed dev.
+	•	If you prefer CSS-in-JS, convert primitives to styled-components—tokens still flow via :root vars.
+	•	If you plan SSR/SEO soon, port pages into Next 14 later; tokens stay identical.
+
+⸻
+
+Deliver exactly as specified. If a file already exists, merge safely and print unified diffs. When done, output the dev server URL and a checklist confirming each acceptance criterion.
