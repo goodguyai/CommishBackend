@@ -1,16 +1,32 @@
+import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
+import { Skeleton } from '@/components/ui/Skeleton';
+
+interface TradeOpportunity {
+  id: string;
+  targetTeamId: string;
+  give: string[];
+  get: string[];
+  rationale: string;
+}
+
+interface PendingTrade {
+  id: string;
+  teams: string[];
+  status: string;
+  fairnessScore: number;
+}
 
 export function TradesPage() {
-  const opportunities = [
-    { id: 1, team: 'Gridiron Geeks', give: 'RB BenchGuy', get: 'WR T. Breakout', note: 'They need RB depth' },
-    { id: 2, team: 'Touchdown Titans', give: 'TE Surplus', get: 'RB Flex Play', note: 'TE for RB swap' },
-  ];
+  const { data: opportunities, isLoading: oppsLoading } = useQuery<TradeOpportunity[]>({
+    queryKey: ['/api/mock/trades/opportunities'],
+  });
 
-  const pending = [
-    { id: 1, teams: ['Birds of Prey', 'Gridiron Geeks'], status: 'pending', fairness: 85 },
-  ];
+  const { data: pending, isLoading: pendingLoading } = useQuery<PendingTrade[]>({
+    queryKey: ['/api/mock/trades/log'],
+  });
 
   return (
     <div className="space-y-6">
@@ -29,25 +45,33 @@ export function TradesPage() {
           <CardTitle>Trade Opportunities</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
-            {opportunities.map((opp) => (
-              <div key={opp.id} className="p-4 border border-gray-200 rounded-lg">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-medium text-gray-900">Trade with {opp.team}</div>
-                  <Button size="sm" variant="ghost" data-testid={`button-propose-${opp.id}`}>
-                    Propose
-                  </Button>
+          {oppsLoading ? (
+            <div className="space-y-4">
+              {[1, 2].map((i) => (
+                <Skeleton key={i} className="h-24 w-full" />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {opportunities?.map((opp) => (
+                <div key={opp.id} className="p-4 border border-gray-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="font-medium text-gray-900">Trade with Team {opp.targetTeamId}</div>
+                    <Button size="sm" variant="ghost" data-testid={`button-propose-${opp.id}`}>
+                      Propose
+                    </Button>
+                  </div>
+                  <div className="text-sm text-gray-600 mb-1">
+                    Give: <span className="font-medium">{opp.give.join(', ')}</span>
+                  </div>
+                  <div className="text-sm text-gray-600 mb-2">
+                    Get: <span className="font-medium">{opp.get.join(', ')}</span>
+                  </div>
+                  <div className="text-xs text-gray-500">{opp.rationale}</div>
                 </div>
-                <div className="text-sm text-gray-600 mb-1">
-                  Give: <span className="font-medium">{opp.give}</span>
-                </div>
-                <div className="text-sm text-gray-600 mb-2">
-                  Get: <span className="font-medium">{opp.get}</span>
-                </div>
-                <div className="text-xs text-gray-500">{opp.note}</div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -56,25 +80,33 @@ export function TradesPage() {
           <CardTitle>Pending Trades</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
-            {pending.map((trade) => (
-              <div key={trade.id} className="p-4 border border-gray-200 rounded-lg">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-medium text-gray-900">
-                    {trade.teams[0]} ↔ {trade.teams[1]}
+          {pendingLoading ? (
+            <div className="space-y-4">
+              {[1].map((i) => (
+                <Skeleton key={i} className="h-20 w-full" />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {pending?.filter(t => t.status === 'pending').map((trade) => (
+                <div key={trade.id} className="p-4 border border-gray-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="font-medium text-gray-900">
+                      {trade.teams[0]} ↔ {trade.teams[1]}
+                    </div>
+                    <Badge variant={trade.fairnessScore >= 80 ? 'success' : 'warning'}>
+                      Fairness: {trade.fairnessScore}%
+                    </Badge>
                   </div>
-                  <Badge variant={trade.fairness >= 80 ? 'success' : 'warning'}>
-                    Fairness: {trade.fairness}%
-                  </Badge>
+                  <div className="flex gap-2 mt-3">
+                    <Button size="sm" variant="secondary" data-testid={`button-review-${trade.id}`}>
+                      Review
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex gap-2 mt-3">
-                  <Button size="sm" variant="secondary" data-testid={`button-review-${trade.id}`}>
-                    Review
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -1,7 +1,41 @@
+import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { AlertTriangle, TrendingUp, Users, Trophy } from 'lucide-react';
 
+interface InjuryEntry {
+  player: string;
+  team: string;
+  status: string;
+  impact: string;
+}
+
+interface WaiverSuggestion {
+  id: string;
+  player: string;
+  team: string;
+  suggestFaab: number;
+}
+
+interface CommissionerTask {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
 export function DashboardPage() {
+  const { data: injuries, isLoading: injuriesLoading } = useQuery<{ entries: InjuryEntry[] }>({
+    queryKey: ['/api/mock/injuries'],
+  });
+
+  const { data: waivers, isLoading: waiversLoading } = useQuery<WaiverSuggestion[]>({
+    queryKey: ['/api/mock/waivers/suggestions'],
+  });
+
+  const { data: tasks, isLoading: tasksLoading } = useQuery<CommissionerTask[]>({
+    queryKey: ['/api/mock/commissioner/tasks'],
+  });
+
   return (
     <div className="space-y-6">
       <div>
@@ -36,31 +70,35 @@ export function DashboardPage() {
             <CardTitle>Injury Heatmap</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              {[
-                { player: 'RB J. Veteran', team: 'ARI', status: 'Out', impact: 'High' },
-                { player: 'WR M. RookiePhenom', team: 'NYG', status: 'Questionable', impact: 'Medium' },
-                { player: 'QB P. Veteran', team: 'LAR', status: 'Probable', impact: 'Low' },
-              ].map((injury, i) => (
-                <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div>
-                    <div className="font-medium text-gray-900">{injury.player}</div>
-                    <div className="text-sm text-gray-500">{injury.team} - {injury.status}</div>
+            {injuriesLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-16 w-full" />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {injuries?.entries.slice(0, 3).map((injury, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div>
+                      <div className="font-medium text-gray-900">{injury.player}</div>
+                      <div className="text-sm text-gray-500">{injury.team} - {injury.status}</div>
+                    </div>
+                    <span
+                      className={`text-xs px-2 py-1 rounded-full ${
+                        injury.impact === 'High'
+                          ? 'bg-red-100 text-red-800'
+                          : injury.impact === 'Medium'
+                          ? 'bg-yellow-100 text-yellow-800'
+                          : 'bg-green-100 text-green-800'
+                      }`}
+                    >
+                      {injury.impact}
+                    </span>
                   </div>
-                  <span
-                    className={`text-xs px-2 py-1 rounded-full ${
-                      injury.impact === 'High'
-                        ? 'bg-red-100 text-red-800'
-                        : injury.impact === 'Medium'
-                        ? 'bg-yellow-100 text-yellow-800'
-                        : 'bg-green-100 text-green-800'
-                    }`}
-                  >
-                    {injury.impact}
-                  </span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -69,24 +107,28 @@ export function DashboardPage() {
             <CardTitle>Waiver Radar</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              {[
-                { player: 'RB J. Rookie', team: 'BUF', faab: 18 },
-                { player: 'WR T. Breakout', team: 'LAC', faab: 12 },
-                { player: 'TE R. Sleeper', team: 'KC', faab: 8 },
-              ].map((waiver, i) => (
-                <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div>
-                    <div className="font-medium text-gray-900">{waiver.player}</div>
-                    <div className="text-sm text-gray-500">{waiver.team}</div>
+            {waiversLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-16 w-full" />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {waivers?.slice(0, 3).map((waiver, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div>
+                      <div className="font-medium text-gray-900">{waiver.player}</div>
+                      <div className="text-sm text-gray-500">{waiver.team}</div>
+                    </div>
+                    <div className="text-sm">
+                      <span className="font-semibold text-[#009898]">${waiver.suggestFaab}</span>
+                      <span className="text-gray-500 ml-1">FAAB</span>
+                    </div>
                   </div>
-                  <div className="text-sm">
-                    <span className="font-semibold text-[#009898]">${waiver.faab}</span>
-                    <span className="text-gray-500 ml-1">FAAB</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -96,25 +138,29 @@ export function DashboardPage() {
           <CardTitle>Commissioner Tasks</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-2">
-            {[
-              { task: 'Review pending trade between Birds of Prey and Gridiron Geeks', done: false },
-              { task: 'Post Week 4 report to league chat', done: true },
-              { task: 'Check injury updates for starting lineups', done: false },
-            ].map((item, i) => (
-              <div key={i} className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={item.done}
-                  className="w-4 h-4 rounded border-gray-300 text-[#009898]"
-                  readOnly
-                />
-                <span className={item.done ? 'text-gray-400 line-through' : 'text-gray-900'}>
-                  {item.task}
-                </span>
-              </div>
-            ))}
-          </div>
+          {tasksLoading ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {tasks?.map((item) => (
+                <div key={item.id} className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={item.done}
+                    className="w-4 h-4 rounded border-gray-300 text-[#009898]"
+                    readOnly
+                  />
+                  <span className={item.done ? 'text-gray-400 line-through' : 'text-gray-900'}>
+                    {item.text}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -96,6 +96,7 @@ export const handlers = [
         give: ['RB BenchGuy'],
         get: ['WR T. Breakout'],
         status: 'pending',
+        fairnessScore: 85,
         timestamp: Date.now() - 3600_000,
       },
       {
@@ -104,6 +105,7 @@ export const handlers = [
         give: ['QB Backup'],
         get: ['WR Flex'],
         status: 'approved',
+        fairnessScore: 92,
         timestamp: Date.now() - 7200_000,
       },
     ]);

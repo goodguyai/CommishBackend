@@ -1,14 +1,38 @@
+import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/Table';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { Plus } from 'lucide-react';
+import { useAppStore } from '@/store/useAppStore';
+
+interface WaiverSuggestion {
+  id: string;
+  player: string;
+  team: string;
+  pos: string;
+  suggestFaab: number;
+  note: string;
+}
 
 export function WaiversPage() {
-  const suggestions = [
-    { id: 1, player: 'RB J. Rookie', team: 'BUF', pos: 'RB', faab: 18, note: 'Lead back while starter recovers' },
-    { id: 2, player: 'WR T. Breakout', team: 'LAC', pos: 'WR', faab: 12, note: 'Targets rising 3 weeks straight' },
-    { id: 3, player: 'TE R. Sleeper', team: 'KC', pos: 'TE', faab: 8, note: 'TE1 went to IR' },
-  ];
+  const { data: suggestions, isLoading } = useQuery<WaiverSuggestion[]>({
+    queryKey: ['/api/mock/waivers/suggestions'],
+  });
+
+  const { waiverQueue, addWaiverToQueue } = useAppStore();
+
+  const handleAddToQueue = (suggestion: WaiverSuggestion) => {
+    addWaiverToQueue({
+      id: suggestion.id,
+      player: suggestion.player,
+      team: suggestion.team,
+      pos: suggestion.pos,
+      priority: waiverQueue.length + 1,
+      faab: suggestion.suggestFaab,
+      note: suggestion.note,
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -27,45 +51,75 @@ export function WaiversPage() {
           <CardTitle>Top Suggestions</CardTitle>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Player</TableHead>
-                <TableHead>Team</TableHead>
-                <TableHead>Pos</TableHead>
-                <TableHead>Suggested FAAB</TableHead>
-                <TableHead>Note</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {suggestions.map((s) => (
-                <TableRow key={s.id}>
-                  <TableCell className="font-medium">{s.player}</TableCell>
-                  <TableCell>{s.team}</TableCell>
-                  <TableCell>{s.pos}</TableCell>
-                  <TableCell className="font-semibold text-[#009898]">${s.faab}</TableCell>
-                  <TableCell className="text-sm text-gray-600">{s.note}</TableCell>
-                  <TableCell>
-                    <Button size="sm" variant="ghost" data-testid={`button-add-${s.id}`}>
-                      <Plus className="w-4 h-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
+          {isLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-12 w-full" />
               ))}
-            </TableBody>
-          </Table>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Player</TableHead>
+                  <TableHead>Team</TableHead>
+                  <TableHead>Pos</TableHead>
+                  <TableHead>Suggested FAAB</TableHead>
+                  <TableHead>Note</TableHead>
+                  <TableHead></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {suggestions?.map((s) => (
+                  <TableRow key={s.id}>
+                    <TableCell className="font-medium">{s.player}</TableCell>
+                    <TableCell>{s.team}</TableCell>
+                    <TableCell>{s.pos}</TableCell>
+                    <TableCell className="font-semibold text-[#009898]">${s.suggestFaab}</TableCell>
+                    <TableCell className="text-sm text-gray-600">{s.note}</TableCell>
+                    <TableCell>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleAddToQueue(s)}
+                        data-testid={`button-add-${s.id}`}
+                      >
+                        <Plus className="w-4 h-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Your Queue (Drag to Reorder)</CardTitle>
+          <CardTitle>Your Queue ({waiverQueue.length})</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="text-center py-8 text-gray-500">
-            No waivers queued yet. Add players from suggestions above.
-          </div>
+          {waiverQueue.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              No waivers queued yet. Add players from suggestions above.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {waiverQueue.map((item, index) => (
+                <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-medium text-gray-500">#{index + 1}</span>
+                    <div>
+                      <div className="font-medium text-gray-900">{item.player}</div>
+                      <div className="text-sm text-gray-500">{item.team} - {item.pos}</div>
+                    </div>
+                  </div>
+                  <div className="text-sm font-semibold text-[#009898]">${item.faab}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
