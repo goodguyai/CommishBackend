@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Plus } from 'lucide-react';
+import { toast } from 'sonner';
 
 export function RulesPage() {
   const rules = [
@@ -9,6 +10,18 @@ export function RulesPage() {
     { id: 3, title: 'Keeper Rules', body: 'Keep up to 2 players. Cost is 1 round earlier than drafted...' },
   ];
 
+  const handleAddRule = () => {
+    toast.info('Opening rule editor...', {
+      description: 'Create a new league rule or policy.',
+    });
+  };
+
+  const handleEditRule = (ruleId: number, ruleTitle: string) => {
+    toast.info(`Editing: ${ruleTitle}`, {
+      description: 'Opening rule editor with existing content.',
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -16,7 +29,11 @@ export function RulesPage() {
           <h1 className="text-2xl font-bold text-text-primary mb-1">Rules</h1>
           <p className="text-text-secondary">League constitution and policies</p>
         </div>
-        <Button data-testid="button-add-rule" className="bg-gradient-cta text-white shadow-depth1 hover:shadow-depth2">
+        <Button 
+          onClick={handleAddRule}
+          data-testid="button-add-rule" 
+          className="bg-gradient-cta text-white shadow-depth1 hover:shadow-depth2"
+        >
           <Plus className="w-4 h-4 mr-2" />
           Add Rule
         </Button>
@@ -30,7 +47,13 @@ export function RulesPage() {
             </CardHeader>
             <CardContent>
               <p className="text-sm text-text-secondary">{rule.body}</p>
-              <Button size="sm" variant="ghost" className="mt-3 text-brand-teal hover:bg-surface-hover" data-testid={`button-edit-${rule.id}`}>
+              <Button 
+                size="sm" 
+                variant="ghost" 
+                onClick={() => handleEditRule(rule.id, rule.title)}
+                className="mt-3 text-brand-teal hover:bg-surface-hover" 
+                data-testid={`button-edit-${rule.id}`}
+              >
                 Edit
               </Button>
             </CardContent>

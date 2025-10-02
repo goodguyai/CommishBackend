@@ -1,8 +1,27 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { FileText, Download, Share2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 export function ReportsPage() {
+  const handleGenerate = () => {
+    toast.info('Generating Week 4 report...', {
+      description: 'Analyzing matchups, trades, waivers, and league activity.',
+    });
+  };
+
+  const handleDownload = (week: number) => {
+    toast.success(`Downloading Week ${week} report`, {
+      description: 'Report exported as PDF.',
+    });
+  };
+
+  const handleShare = (week: number) => {
+    toast.success(`Week ${week} report shared`, {
+      description: 'Link copied to clipboard.',
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -10,7 +29,11 @@ export function ReportsPage() {
           <h1 className="text-2xl font-bold text-text-primary mb-1">Reports</h1>
           <p className="text-text-secondary">Weekly recaps and analysis</p>
         </div>
-        <Button data-testid="button-generate" className="bg-gradient-cta text-white shadow-depth1 hover:shadow-depth2">
+        <Button 
+          onClick={handleGenerate}
+          data-testid="button-generate" 
+          className="bg-gradient-cta text-white shadow-depth1 hover:shadow-depth2"
+        >
           <FileText className="w-4 h-4 mr-2" />
           Generate Week 4
         </Button>
@@ -29,10 +52,22 @@ export function ReportsPage() {
                   <div className="text-sm text-text-secondary">Generated 2 days ago</div>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" variant="ghost" data-testid={`button-download-${week}`} className="text-brand-teal hover:bg-surface-hover">
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    onClick={() => handleDownload(week)}
+                    data-testid={`button-download-${week}`} 
+                    className="text-brand-teal hover:bg-surface-hover"
+                  >
                     <Download className="w-4 h-4" />
                   </Button>
-                  <Button size="sm" variant="ghost" data-testid={`button-share-${week}`} className="text-brand-teal hover:bg-surface-hover">
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    onClick={() => handleShare(week)}
+                    data-testid={`button-share-${week}`} 
+                    className="text-brand-teal hover:bg-surface-hover"
+                  >
                     <Share2 className="w-4 h-4" />
                   </Button>
                 </div>

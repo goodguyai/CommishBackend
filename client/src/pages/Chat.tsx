@@ -1,10 +1,13 @@
+import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Send } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import { toast } from 'sonner';
 
 export function ChatPage() {
+  const [message, setMessage] = useState('');
   const channels = ['general', 'waivers', 'trades', 'smack-talk'];
   
   const messages = [
@@ -12,6 +15,26 @@ export function ChatPage() {
     { id: 2, author: 'alice', text: 'Queued WR T. Breakout for 12 FAAB. Thoughts?', time: '30m ago' },
     { id: 3, author: 'bob', text: 'Anyone need a RB? Got depth, need WR help', time: '15m ago' },
   ];
+
+  const handleSendMessage = () => {
+    if (!message.trim()) {
+      toast.error('Message cannot be empty', {
+        description: 'Please type a message before sending.',
+      });
+      return;
+    }
+
+    toast.success('Message sent', {
+      description: `Posted to #general: "${message.substring(0, 50)}${message.length > 50 ? '...' : ''}"`,
+    });
+    setMessage('');
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleSendMessage();
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -60,10 +83,18 @@ export function ChatPage() {
           <div className="flex gap-2">
             <Input 
               placeholder="Type a message..." 
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyPress={handleKeyPress}
               data-testid="input-message" 
               className="bg-surface-hover border-border-default text-text-primary placeholder:text-text-muted"
             />
-            <Button size="sm" data-testid="button-send" className="bg-brand-teal text-white hover:bg-brand-teal/90 shadow-depth1">
+            <Button 
+              size="sm" 
+              onClick={handleSendMessage}
+              data-testid="button-send" 
+              className="bg-brand-teal text-white hover:bg-brand-teal/90 shadow-depth1"
+            >
               <Send className="w-4 h-4" />
             </Button>
           </div>

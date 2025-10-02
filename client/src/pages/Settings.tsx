@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { useAppStore } from '@/store/useAppStore';
+import { toast } from 'sonner';
 
 export function SettingsPage() {
   const { userPersona, setUserPersona } = useAppStore();
@@ -10,6 +11,20 @@ export function SettingsPage() {
     { id: 'batman', name: 'Batman', desc: 'Terse vigilante metaphors' },
     { id: 'yoda', name: 'Yoda', desc: 'Inverted syntax wisdom' },
   ] as const;
+
+  const handlePersonaChange = (personaId: 'neutral' | 'sassy' | 'batman' | 'yoda') => {
+    setUserPersona(personaId);
+    const persona = personas.find(p => p.id === personaId);
+    toast.success(`Bot personality updated`, {
+      description: `Now using ${persona?.name} style: ${persona?.desc}`,
+    });
+  };
+
+  const handleNotificationToggle = (notificationType: string, checked: boolean) => {
+    toast.info(`${notificationType} ${checked ? 'enabled' : 'disabled'}`, {
+      description: `You will ${checked ? 'now receive' : 'no longer receive'} ${notificationType.toLowerCase()}.`,
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -27,7 +42,7 @@ export function SettingsPage() {
             {personas.map((p) => (
               <button
                 key={p.id}
-                onClick={() => setUserPersona(p.id)}
+                onClick={() => handlePersonaChange(p.id)}
                 className={`w-full p-4 border-2 rounded-lg text-left transition-all ${
                   userPersona === p.id
                     ? 'border-brand-teal bg-brand-teal/10 shadow-glow'
@@ -55,6 +70,8 @@ export function SettingsPage() {
                 <input
                   type="checkbox"
                   defaultChecked
+                  onChange={(e) => handleNotificationToggle(item, e.target.checked)}
+                  data-testid={`notification-${i}`}
                   className="w-4 h-4 rounded border-border-default bg-surface-elevated text-brand-teal"
                 />
               </div>
