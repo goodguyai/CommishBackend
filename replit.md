@@ -84,6 +84,43 @@ THE COMMISH is a Discord bot designed for fantasy football leagues, primarily in
 - **Poll Results**: No vote counting or results retrieval (future enhancement)
 - **Poll Expiry**: No automatic cleanup for expired polls (future enhancement)
 
+## Recent Changes (October 2, 2025)
+
+### Demo UI Implementation
+Built a fully functional demo interface powered by MSW (Mock Service Worker) while awaiting CDN infrastructure fixes:
+
+**Infrastructure & State Management**
+- **MSW Mock API**: Comprehensive mock data fixtures for leagues, rosters, matchups, trades, waivers, and injuries
+- **Service Worker**: Initialized MSW service worker (`client/public/mockServiceWorker.js`) to intercept API requests
+- **Zustand Store**: Client-side state management for leagues, persona selection, waiver queue, and notifications
+- **Feature Flags**: MOCK_MODE toggle in `client/src/lib/config.ts` to switch between mock and real APIs
+
+**UI Component Library**
+- **12+ Reusable Components**: Button, Card, Table, Dialog, Toast, Tabs, Drawer, Tooltip, Input, Badge, Skeleton, EmptyState
+- **Design System**: Clean, friendly UX with light neutrals (#f9fafb), teal accent (#009898), and gold (#FFB100)
+- **Tailwind Styling**: Utility-first CSS with consistent spacing and typography
+
+**Routing & Pages**
+- **Wouter Integration**: Fixed nested route handling for /app/* subpaths with startsWith() checks
+- **11 Page Components**: Landing, Onboarding, Dashboard, Waivers, Trades, Matchups, Reports, Rules, Chat, Settings, Terminal
+- **AppShell Layout**: Consistent sidebar navigation with active state indicators and collapsible menu
+
+**Data Integration**
+- **TanStack Query**: All pages fetch data from MSW handlers via useQuery hooks
+- **Type Safety**: Fixed handler/component type mismatches (fairness → fairnessScore)
+- **Loading States**: Skeleton loaders display during data fetching
+- **Error Handling**: Graceful fallbacks for empty states and failed requests
+
+**Testing & Validation**
+- **E2E Test Suite**: Playwright tests verify all user flows (landing → dashboard, sidebar navigation, data hydration)
+- **Test Coverage**: Verified landing page, persona selection, waiver queue, trade opportunities, settings
+- **Data-Testid**: Comprehensive test identifiers for all interactive elements
+
+**Known Issues**
+- **CDN Blocker**: Replit CDN intercepts parameterized /api/* routes before Express (escalation package ready)
+- **Workaround**: MSW provides fully functional demo while awaiting infrastructure fix
+- **Future Work**: Centralize shared typings, add automated tests for waiver/trade interactions
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.
