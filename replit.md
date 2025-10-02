@@ -9,7 +9,16 @@ Preferred communication style: Simple, everyday language.
 ## System Architecture
 
 ### UI/UX Decisions
-The frontend uses React with TypeScript, Vite, and shadcn/ui components built on Radix UI, styled with Tailwind CSS. It features a dark theme by default, responsive design, and a comprehensive design system with brand tokens, a living style guide, and a consistent visual rebrand across all pages.
+The frontend uses React with TypeScript, Vite, and shadcn/ui components built on Radix UI, styled with Tailwind CSS. It features a comprehensive dark theme with high-contrast design:
+
+**Dark Theme System (October 2025):**
+- **Color Palette**: Near-black backgrounds (#050607-#111820), white text (#F5F7FA), deep shadows for depth
+- **Brand Colors**: Teal (#009898), Coral (#FF5F82), Gold (#FFC75F), Pink (#FF4D6D)
+- **Design Tokens**: Complete token system in tokens.json/tokens.css with semantic color mapping
+- **Components**: All UI components (Card, Table, Button, Input) use explicit dark backgrounds with design token references
+- **Shadows**: Multi-layered depth system (shadow-depth1, shadow-depth2) with inset highlights for 3D effect
+- **Contrast**: White text on dark surfaces ensures high accessibility and readability
+- **Pages**: All 11 pages rebuilt with consistent dark styling (Dashboard, Waivers, Trades, Matchups, Reports, Rules, Chat, Settings, Terminal, AppShell)
 
 ### Technical Implementations
 - **Frontend**: React, TypeScript, Vite, Wouter (routing), TanStack Query (server state), Zustand (client state).
