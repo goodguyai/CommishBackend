@@ -24,7 +24,7 @@ export function Dialog({ open, onClose, title, children, size = 'md' }: DialogPr
           leaveFrom="opacity-100"
           leaveTo="opacity-0"
         >
-          <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" aria-hidden="true" />
         </Transition.Child>
 
         <div className="fixed inset-0 flex items-center justify-center p-4">
@@ -39,7 +39,7 @@ export function Dialog({ open, onClose, title, children, size = 'md' }: DialogPr
           >
             <HeadlessDialog.Panel
               className={clsx(
-                'w-full bg-white rounded-lg shadow-xl',
+                'w-full bg-surface-card border border-border-subtle rounded-lg shadow-depth2',
                 {
                   'max-w-sm': size === 'sm',
                   'max-w-md': size === 'md',
@@ -49,13 +49,13 @@ export function Dialog({ open, onClose, title, children, size = 'md' }: DialogPr
               )}
             >
               {title && (
-                <div className="flex items-center justify-between px-6 py-4 border-b">
-                  <HeadlessDialog.Title className="text-lg font-semibold text-gray-900">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+                  <HeadlessDialog.Title className="text-lg font-semibold text-text-primary">
                     {title}
                   </HeadlessDialog.Title>
                   <button
                     onClick={onClose}
-                    className="text-gray-400 hover:text-gray-600 transition-colors"
+                    className="text-text-muted hover:text-text-primary transition-colors"
                     data-testid="dialog-close"
                   >
                     <X className="w-5 h-5" />

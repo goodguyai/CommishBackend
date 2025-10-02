@@ -1,18 +1,61 @@
 import { useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Terminal as TerminalIcon } from 'lucide-react';
+import { apiRequest } from '@/lib/queryClient';
+
+interface TerminalOutput {
+  command: string;
+  response: string;
+  timestamp: string;
+}
 
 export function TerminalPage() {
-  const [output, setOutput] = useState<string[]>([
-    '> Welcome to THE COMMISH Terminal',
-    '> Type a command and press Enter',
-    '> Examples: league status, generate report week 4, propose trade',
+  const [outputs, setOutputs] = useState<TerminalOutput[]>([
+    {
+      command: 'system',
+      response: '> Welcome to THE COMMISH Terminal\n> Type a command and press Enter\n> Examples: league status, generate report week 4, propose trade, set rule, export constitution',
+      timestamp: new Date().toLocaleTimeString(),
+    },
   ]);
+  const [commandInput, setCommandInput] = useState('');
 
-  const handleCommand = (cmd: string) => {
-    setOutput([...output, `> ${cmd}`, '> Command executed successfully']);
+  const executeMutation = useMutation({
+    mutationFn: async (command: string) => {
+      const response = await apiRequest('POST', '/api/mock/terminal/execute', { command });
+      const data = await response.json();
+      return data;
+    },
+    onSuccess: (data: any, command) => {
+      setOutputs([
+        ...outputs,
+        {
+          command,
+          response: data.summary || 'Command executed',
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ]);
+      setCommandInput('');
+    },
+    onError: (error, command) => {
+      setOutputs([
+        ...outputs,
+        {
+          command,
+          response: `Error: ${error instanceof Error ? error.message : 'Command failed'}`,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ]);
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (commandInput.trim()) {
+      executeMutation.mutate(commandInput);
+    }
   };
 
   return (
@@ -30,31 +73,40 @@ export function TerminalPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="flex-1 overflow-y-auto p-6 bg-[#0a0a0a] font-mono text-sm">
-          <div className="space-y-1">
-            {output.map((line, i) => (
-              <div key={i} className="text-brand-teal">{line}</div>
+          <div className="space-y-3">
+            {outputs.map((output, i) => (
+              <div key={i} className="space-y-1">
+                {output.command !== 'system' && (
+                  <div className="text-text-muted">
+                    <span className="text-brand-teal">$</span> {output.command}
+                  </div>
+                )}
+                <div className="text-brand-teal whitespace-pre-wrap">{output.response}</div>
+                <div className="text-xs text-text-muted">{output.timestamp}</div>
+              </div>
             ))}
+            {executeMutation.isPending && (
+              <div className="text-brand-gold animate-pulse">Executing...</div>
+            )}
           </div>
         </CardContent>
         <div className="border-t border-border-subtle p-4 bg-[#0a0a0a]">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const input = e.currentTarget.elements.namedItem('cmd') as HTMLInputElement;
-              if (input.value.trim()) {
-                handleCommand(input.value);
-                input.value = '';
-              }
-            }}
-            className="flex gap-2"
-          >
+          <form onSubmit={handleSubmit} className="flex gap-2">
             <Input
-              name="cmd"
+              value={commandInput}
+              onChange={(e) => setCommandInput(e.target.value)}
               placeholder="Enter command..."
+              disabled={executeMutation.isPending}
               className="bg-surface-elevated border-border-default text-brand-teal placeholder:text-text-muted"
               data-testid="input-command"
             />
-            <Button type="submit" size="sm" data-testid="button-execute" className="bg-brand-teal text-white hover:bg-brand-teal/90">
+            <Button 
+              type="submit" 
+              size="sm" 
+              disabled={executeMutation.isPending}
+              data-testid="button-execute" 
+              className="bg-brand-teal text-white hover:bg-brand-teal/90"
+            >
               Execute
             </Button>
           </form>
