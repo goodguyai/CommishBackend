@@ -20,6 +20,27 @@ The frontend uses React with TypeScript, Vite, and shadcn/ui components built on
 - **Contrast**: White text on dark surfaces ensures high accessibility and readability
 - **Pages**: All 11 pages rebuilt with consistent dark styling (Dashboard, Waivers, Trades, Matchups, Reports, Rules, Chat, Settings, Terminal, AppShell)
 
+**Dashboard Redesign (October 2025):**
+- **League Management Focus**: Dashboard redesigned from team management to league administration focus
+- **Top Stats**: Active Leagues (0), Rules Queries (127), Upcoming Deadlines (5), AI Tokens Used (2.1K)
+- **Discord Integration Card**: Shows bot status, permissions, slash commands registration, webhook verification
+- **Sleeper Integration Card**: Displays league info, season/week data, sync status, cache status, API usage
+- **Available Slash Commands**: Grid of 6 Discord commands (/rules, /deadlines, /scoring, /config, /remind, /help) with access badges
+- **RAG System Status**: Constitution version, sections, embeddings, vector dimensions, recent queries, reindex button
+- **AI Assistant (DeepSeek)**: Model info, request metrics, response times, cache hit rates, token usage with progress bar
+- **Recent Activity Log**: System events with timestamps (Sleeper sync, command execution, digest generation, reindexing)
+
+**Interactive Elements (October 2025):**
+- **Mobile Navigation**: Drawer auto-closes on navigation, dark theme styling, no white border
+- **Dashboard Cards**: All stat cards and integration cards fully interactive with toast feedback
+- **Waivers**: Add to queue, simulate results buttons functional
+- **Trades**: Create offer, propose, review buttons functional
+- **Reports**: Generate, download, share buttons with toast notifications
+- **Rules**: Add rule, edit buttons with toast feedback
+- **Chat**: Send messages with Enter key support, empty message validation
+- **Settings**: Persona selection and notification toggles with toast confirmations
+- **Toast System**: Consistent feedback using sonner library across all interactive elements
+
 ### Technical Implementations
 - **Frontend**: React, TypeScript, Vite, Wouter (routing), TanStack Query (server state), Zustand (client state).
 - **Backend**: Node.js with Express, TypeScript. Modular service-oriented pattern for Discord, Sleeper, DeepSeek LLM, and RAG functionalities.
