@@ -38,8 +38,8 @@ export function WaiversPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">Waivers</h1>
-          <p className="text-gray-600">Week 4 waiver wire suggestions</p>
+          <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Waivers</h1>
+          <p className="text-neutral-midnight/60">Week 4 waiver wire suggestions</p>
         </div>
         <Button data-testid="button-simulate">
           Simulate Results
@@ -75,8 +75,8 @@ export function WaiversPage() {
                     <TableCell className="font-medium">{s.player}</TableCell>
                     <TableCell>{s.team}</TableCell>
                     <TableCell>{s.pos}</TableCell>
-                    <TableCell className="font-semibold text-[#009898]">${s.suggestFaab}</TableCell>
-                    <TableCell className="text-sm text-gray-600">{s.note}</TableCell>
+                    <TableCell className="font-semibold text-brand-teal">${s.suggestFaab}</TableCell>
+                    <TableCell className="text-sm text-neutral-midnight/60">{s.note}</TableCell>
                     <TableCell>
                       <Button
                         size="sm"
@@ -101,21 +101,21 @@ export function WaiversPage() {
         </CardHeader>
         <CardContent>
           {waiverQueue.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-neutral-midnight/60">
               No waivers queued yet. Add players from suggestions above.
             </div>
           ) : (
             <div className="space-y-2">
               {waiverQueue.map((item, index) => (
-                <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <div key={item.id} className="flex items-center justify-between p-3 bg-neutral-panel rounded-lg">
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-gray-500">#{index + 1}</span>
+                    <span className="text-sm font-medium text-neutral-midnight/60">#{index + 1}</span>
                     <div>
-                      <div className="font-medium text-gray-900">{item.player}</div>
-                      <div className="text-sm text-gray-500">{item.team} - {item.pos}</div>
+                      <div className="font-medium text-neutral-midnight">{item.player}</div>
+                      <div className="text-sm text-neutral-midnight/60">{item.team} - {item.pos}</div>
                     </div>
                   </div>
-                  <div className="text-sm font-semibold text-[#009898]">${item.faab}</div>
+                  <div className="text-sm font-semibold text-brand-teal">${item.faab}</div>
                 </div>
               ))}
             </div>
