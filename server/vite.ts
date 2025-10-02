@@ -8,6 +8,20 @@ import { nanoid } from "nanoid";
 
 const viteLogger = createLogger();
 
+/**
+ * Small helper: determine if this request is for our JSON API.
+ * We guard both "/api" and "/api/*" (and an optional "/commish-api" lane).
+ */
+function isApiPath(url: string | undefined | null) {
+  if (!url) return false;
+  return (
+    url === "/api" ||
+    url.startsWith("/api/") ||
+    url === "/commish-api" ||
+    url.startsWith("/commish-api/")
+  );
+}
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -40,9 +54,26 @@ export async function setupVite(app: Express, server: Server) {
     appType: "custom",
   });
 
-  app.use(vite.middlewares);
+  /**
+   * IMPORTANT GUARD 1:
+   * Wrap vite.middlewares so it NEVER runs for /api/*.
+   * If it's an API request, we skip directly to the next middleware
+   * (your Express API routes), avoiding HTML responses.
+   */
+  app.use((req, res, next) => {
+    const url = req.originalUrl || req.url || "";
+    if (isApiPath(url)) return next();
+    return (vite.middlewares as any)(req, res, next);
+  });
+
+  /**
+   * IMPORTANT GUARD 2:
+   * The dev catch-all that serves index.html must also ignore /api/*.
+   * Otherwise API calls return HTML.
+   */
   app.use("*", async (req, res, next) => {
-    const url = req.originalUrl;
+    const url = req.originalUrl || req.url || "";
+    if (isApiPath(url)) return next();
 
     try {
       const clientTemplate = path.resolve(
@@ -52,7 +83,7 @@ export async function setupVite(app: Express, server: Server) {
         "index.html",
       );
 
-      // always reload the index.html file from disk incase it changes
+      // always reload the index.html file from disk in case it changes
       let template = await fs.promises.readFile(clientTemplate, "utf-8");
       template = template.replace(
         `src="/src/main.tsx"`,
@@ -76,10 +107,16 @@ export function serveStatic(app: Express) {
     );
   }
 
+  // Static assets (ok for any path; your API routes should be mounted before this in prod)
   app.use(express.static(distPath));
 
-  // fall through to index.html if the file doesn't exist
-  app.use("*", (_req, res) => {
+  /**
+   * Production catch-all for SPA:
+   * Also ignore /api/* so API requests never get index.html.
+   */
+  app.use("*", (req, res, next) => {
+    const url = req.originalUrl || req.url || "";
+    if (isApiPath(url)) return next();
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }
