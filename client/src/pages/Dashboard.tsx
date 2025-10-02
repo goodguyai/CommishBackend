@@ -39,8 +39,8 @@ export function DashboardPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Dashboard</h1>
-        <p className="text-neutral-midnight/60">Week 4 overview and key insights</p>
+        <h1 className="text-2xl font-bold text-text-primary mb-1">Dashboard</h1>
+        <p className="text-text-secondary">Week 4 overview and key insights</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -48,14 +48,14 @@ export function DashboardPage() {
           { label: 'Teams', value: '12', icon: Users, color: 'text-brand-teal' },
           { label: 'Active Trades', value: '3', icon: TrendingUp, color: 'text-brand-teal' },
           { label: 'Waiver Claims', value: '8', icon: Users, color: 'text-brand-gold' },
-          { label: 'Start/Sit Alerts', value: '5', icon: AlertTriangle, color: 'text-cta-coral' },
+          { label: 'Start/Sit Alerts', value: '5', icon: AlertTriangle, color: 'text-brand-coral' },
         ].map((stat, i) => (
-          <Card key={i}>
+          <Card key={i} className="bg-surface-card border-border-subtle shadow-depth1">
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-neutral-midnight/60">{stat.label}</p>
-                  <p className="text-2xl font-bold text-neutral-midnight mt-1">{stat.value}</p>
+                  <p className="text-sm text-text-secondary">{stat.label}</p>
+                  <p className="text-2xl font-bold text-text-primary mt-1">{stat.value}</p>
                 </div>
                 <stat.icon className={`w-8 h-8 ${stat.color}`} />
               </div>
@@ -65,32 +65,32 @@ export function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
+        <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
-            <CardTitle>Injury Heatmap</CardTitle>
+            <CardTitle className="text-text-primary">Injury Heatmap</CardTitle>
           </CardHeader>
           <CardContent>
             {injuriesLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-16 w-full" />
+                  <Skeleton key={i} className="h-16 w-full bg-surface-hover" />
                 ))}
               </div>
             ) : (
               <div className="space-y-3">
                 {injuries?.entries.slice(0, 3).map((injury, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 bg-neutral-panel rounded-lg">
+                  <div key={i} className="flex items-center justify-between p-3 bg-surface-elevated border border-border-subtle rounded-lg">
                     <div>
-                      <div className="font-medium text-neutral-midnight">{injury.player}</div>
-                      <div className="text-sm text-neutral-midnight/60">{injury.team} - {injury.status}</div>
+                      <div className="font-medium text-text-primary">{injury.player}</div>
+                      <div className="text-sm text-text-secondary">{injury.team} - {injury.status}</div>
                     </div>
                     <span
-                      className={`text-xs px-2 py-1 rounded-full ${
+                      className={`text-xs px-2 py-1 rounded-full font-medium ${
                         injury.impact === 'High'
-                          ? 'bg-cta-coral/10 text-cta-coral'
+                          ? 'bg-brand-coral/20 text-brand-coral border border-brand-coral/30'
                           : injury.impact === 'Medium'
-                          ? 'bg-brand-gold/10 text-brand-gold'
-                          : 'bg-brand-teal/10 text-brand-teal'
+                          ? 'bg-brand-gold/20 text-brand-gold border border-brand-gold/30'
+                          : 'bg-brand-teal/20 text-brand-teal border border-brand-teal/30'
                       }`}
                     >
                       {injury.impact}
@@ -102,28 +102,28 @@ export function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
-            <CardTitle>Waiver Radar</CardTitle>
+            <CardTitle className="text-text-primary">Waiver Radar</CardTitle>
           </CardHeader>
           <CardContent>
             {waiversLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-16 w-full" />
+                  <Skeleton key={i} className="h-16 w-full bg-surface-hover" />
                 ))}
               </div>
             ) : (
               <div className="space-y-3">
                 {waivers?.slice(0, 3).map((waiver, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 bg-neutral-panel rounded-lg">
+                  <div key={i} className="flex items-center justify-between p-3 bg-surface-elevated border border-border-subtle rounded-lg">
                     <div>
-                      <div className="font-medium text-neutral-midnight">{waiver.player}</div>
-                      <div className="text-sm text-neutral-midnight/60">{waiver.team}</div>
+                      <div className="font-medium text-text-primary">{waiver.player}</div>
+                      <div className="text-sm text-text-secondary">{waiver.team}</div>
                     </div>
                     <div className="text-sm">
                       <span className="font-semibold text-brand-teal">${waiver.suggestFaab}</span>
-                      <span className="text-neutral-midnight/60 ml-1">FAAB</span>
+                      <span className="text-text-muted ml-1">FAAB</span>
                     </div>
                   </div>
                 ))}
@@ -133,15 +133,15 @@ export function DashboardPage() {
         </Card>
       </div>
 
-      <Card>
+      <Card className="bg-surface-card border-border-subtle shadow-depth2">
         <CardHeader>
-          <CardTitle>Commissioner Tasks</CardTitle>
+          <CardTitle className="text-text-primary">Commissioner Tasks</CardTitle>
         </CardHeader>
         <CardContent>
           {tasksLoading ? (
             <div className="space-y-2">
               {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-8 w-full" />
+                <Skeleton key={i} className="h-8 w-full bg-surface-hover" />
               ))}
             </div>
           ) : (
@@ -151,10 +151,10 @@ export function DashboardPage() {
                   <input
                     type="checkbox"
                     checked={item.done}
-                    className="w-4 h-4 rounded border-neutral-panel text-brand-teal"
+                    className="w-4 h-4 rounded border-border-default text-brand-teal bg-surface-elevated"
                     readOnly
                   />
-                  <span className={item.done ? 'text-neutral-midnight/40 line-through' : 'text-neutral-midnight'}>
+                  <span className={item.done ? 'text-text-muted line-through' : 'text-text-primary'}>
                     {item.text}
                   </span>
                 </div>

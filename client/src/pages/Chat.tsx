@@ -16,16 +16,20 @@ export function ChatPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Chat</h1>
-        <p className="text-neutral-midnight/60">League discussions and bot updates</p>
+        <h1 className="text-2xl font-bold text-text-primary mb-1">Chat</h1>
+        <p className="text-text-secondary">League discussions and bot updates</p>
       </div>
 
-      <Card className="h-[600px] flex flex-col">
-        <CardHeader className="border-b">
+      <Card className="h-[600px] flex flex-col bg-surface-card border-border-subtle shadow-depth2">
+        <CardHeader className="border-b border-border-subtle">
           <Tabs defaultValue="general">
-            <TabsList>
+            <TabsList className="bg-surface-elevated border border-border-subtle">
               {channels.map((ch) => (
-                <TabsTrigger key={ch} value={ch}>
+                <TabsTrigger 
+                  key={ch} 
+                  value={ch}
+                  className="data-[state=active]:bg-brand-teal data-[state=active]:text-white text-text-secondary"
+                >
                   #{ch}
                 </TabsTrigger>
               ))}
@@ -36,26 +40,30 @@ export function ChatPage() {
           <div className="space-y-4">
             {messages.map((msg) => (
               <div key={msg.id} className="flex gap-3">
-                <div className="w-8 h-8 bg-brand-teal rounded-full flex items-center justify-center shrink-0">
-                  <span className="text-xs font-semibold text-neutral-white">
+                <div className="w-8 h-8 bg-brand-teal rounded-full flex items-center justify-center shrink-0 shadow-glow">
+                  <span className="text-xs font-semibold text-white">
                     {msg.author[0].toUpperCase()}
                   </span>
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="font-medium text-neutral-midnight">{msg.author}</span>
-                    <span className="text-xs text-neutral-midnight/60">{msg.time}</span>
+                    <span className="font-medium text-text-primary">{msg.author}</span>
+                    <span className="text-xs text-text-muted">{msg.time}</span>
                   </div>
-                  <p className="text-sm text-neutral-midnight/80">{msg.text}</p>
+                  <p className="text-sm text-text-secondary">{msg.text}</p>
                 </div>
               </div>
             ))}
           </div>
         </CardContent>
-        <div className="border-t p-4">
+        <div className="border-t border-border-subtle p-4 bg-surface-elevated">
           <div className="flex gap-2">
-            <Input placeholder="Type a message..." data-testid="input-message" />
-            <Button size="sm" data-testid="button-send">
+            <Input 
+              placeholder="Type a message..." 
+              data-testid="input-message" 
+              className="bg-surface-hover border-border-default text-text-primary placeholder:text-text-muted"
+            />
+            <Button size="sm" data-testid="button-send" className="bg-brand-teal text-white hover:bg-brand-teal/90 shadow-depth1">
               <Send className="w-4 h-4" />
             </Button>
           </div>

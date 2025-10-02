@@ -14,13 +14,13 @@ export function SettingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Settings</h1>
-        <p className="text-neutral-midnight/60">Personalize your experience</p>
+        <h1 className="text-2xl font-bold text-text-primary mb-1">Settings</h1>
+        <p className="text-text-secondary">Personalize your experience</p>
       </div>
 
-      <Card>
+      <Card className="bg-surface-card border-border-subtle shadow-depth2">
         <CardHeader>
-          <CardTitle>Bot Personality</CardTitle>
+          <CardTitle className="text-text-primary">Bot Personality</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
@@ -28,34 +28,34 @@ export function SettingsPage() {
               <button
                 key={p.id}
                 onClick={() => setUserPersona(p.id)}
-                className={`w-full p-4 border-2 rounded-lg text-left transition-colors ${
+                className={`w-full p-4 border-2 rounded-lg text-left transition-all ${
                   userPersona === p.id
-                    ? 'border-brand-teal bg-brand-teal/5'
-                    : 'border-neutral-panel hover:border-neutral-panel/80'
+                    ? 'border-brand-teal bg-brand-teal/10 shadow-glow'
+                    : 'border-border-subtle bg-surface-elevated hover:border-border-default hover:bg-surface-hover'
                 }`}
                 data-testid={`persona-${p.id}`}
               >
-                <div className="font-medium text-neutral-midnight">{p.name}</div>
-                <div className="text-sm text-neutral-midnight/60 mt-1">{p.desc}</div>
+                <div className="font-medium text-text-primary">{p.name}</div>
+                <div className="text-sm text-text-secondary mt-1">{p.desc}</div>
               </button>
             ))}
           </div>
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="bg-surface-card border-border-subtle shadow-depth2">
         <CardHeader>
-          <CardTitle>Notifications</CardTitle>
+          <CardTitle className="text-text-primary">Notifications</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
             {['Waiver alerts', 'Trade proposals', 'Lineup warnings', 'Weekly reports'].map((item, i) => (
               <div key={i} className="flex items-center justify-between py-2">
-                <span className="text-neutral-midnight">{item}</span>
+                <span className="text-text-primary">{item}</span>
                 <input
                   type="checkbox"
                   defaultChecked
-                  className="w-4 h-4 rounded border-neutral-panel text-brand-teal"
+                  className="w-4 h-4 rounded border-border-default bg-surface-elevated text-brand-teal"
                 />
               </div>
             ))}

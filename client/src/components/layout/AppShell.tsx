@@ -38,13 +38,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const unreadCount = notifications.filter(n => !n.read).length;
 
   const SidebarContent = () => (
-    <div className="flex h-full flex-col">
-      <div className="flex h-16 items-center px-6 border-b border-neutral-panel">
+    <div className="flex h-full flex-col bg-surface-elevated">
+      <div className="flex h-16 items-center px-6 border-b border-border-subtle">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-brand-teal rounded-lg flex items-center justify-center">
-            <span className="text-neutral-white font-bold text-sm">TC</span>
+          <div className="w-8 h-8 bg-brand-teal rounded-lg flex items-center justify-center shadow-glow">
+            <span className="text-white font-bold text-sm">TC</span>
           </div>
-          <span className="font-semibold text-neutral-midnight">THE COMMISH</span>
+          <span className="font-semibold text-text-primary">THE COMMISH</span>
         </div>
       </div>
 
@@ -58,10 +58,10 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Link key={item.name} href={item.href}>
                 <a
                   className={clsx(
-                    'group flex items-center gap-x-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                    'group flex items-center gap-x-3 rounded-md px-3 py-2 text-sm font-medium transition-all',
                     isActive
-                      ? 'bg-brand-teal text-neutral-white'
-                      : 'text-neutral-midnight/80 hover:bg-neutral-panel hover:text-neutral-midnight'
+                      ? 'bg-brand-teal text-white shadow-glow'
+                      : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
                   )}
                   data-testid={`nav-${item.name.toLowerCase()}`}
                 >
@@ -74,8 +74,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
       </div>
 
-      <div className="border-t border-neutral-panel p-4">
-        <div className="text-xs text-neutral-midnight/60">
+      <div className="border-t border-border-subtle p-4">
+        <div className="text-xs text-text-muted">
           Mode: <span className="font-medium text-brand-teal">Demo</span>
         </div>
       </div>
@@ -83,10 +83,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   );
 
   return (
-    <div className="min-h-screen bg-neutral-panel">
+    <div className="min-h-screen bg-surface-base">
       {/* Desktop Sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
-        <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-neutral-white border-r border-neutral-panel">
+        <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-surface-elevated border-r border-border-subtle shadow-depth1">
           <SidebarContent />
         </div>
       </div>
@@ -98,11 +98,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="lg:pl-64">
         {/* Topbar */}
-        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-neutral-panel bg-neutral-white px-4 shadow-sm sm:gap-x-6 sm:px-6">
+        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-border-subtle bg-surface-elevated px-4 shadow-depth1 sm:gap-x-6 sm:px-6">
           <Button
             variant="ghost"
             size="sm"
-            className="lg:hidden"
+            className="lg:hidden text-text-primary hover:bg-surface-hover"
             onClick={() => setMobileMenuOpen(true)}
             data-testid="mobile-menu-toggle"
           >
@@ -111,27 +111,27 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <div className="flex flex-1 gap-x-4 self-stretch items-center">
             <div className="flex items-center gap-2 min-w-0 flex-1">
-              <button className="flex items-center gap-2 rounded-md border border-neutral-panel px-3 py-1.5 text-sm hover:bg-neutral-panel transition-colors max-w-xs">
-                <span className="truncate font-medium text-neutral-midnight">Demo League One</span>
-                <ChevronDown className="h-4 w-4 text-neutral-midnight/40" />
+              <button className="flex items-center gap-2 rounded-md border border-border-default bg-surface-card px-3 py-1.5 text-sm hover:bg-surface-hover transition-colors max-w-xs shadow-depth1">
+                <span className="truncate font-medium text-text-primary">Demo League One</span>
+                <ChevronDown className="h-4 w-4 text-text-muted" />
               </button>
             </div>
 
             <div className="flex items-center gap-x-4">
-              <button className="relative p-2 text-neutral-midnight/40 hover:text-neutral-midnight/60 transition-colors" data-testid="notifications-button">
+              <button className="relative p-2 text-text-muted hover:text-text-primary transition-colors" data-testid="notifications-button">
                 <Bell className="h-5 w-5" />
                 {unreadCount > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 h-4 w-4 rounded-full bg-brand-teal text-xs text-neutral-white flex items-center justify-center">
+                  <span className="absolute -top-0.5 -right-0.5 h-4 w-4 rounded-full bg-brand-teal text-xs text-white flex items-center justify-center shadow-glow">
                     {unreadCount}
                   </span>
                 )}
               </button>
 
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-brand-teal rounded-full flex items-center justify-center">
-                  <span className="text-sm font-semibold text-neutral-white">DU</span>
+                <div className="w-8 h-8 bg-brand-teal rounded-full flex items-center justify-center shadow-glow">
+                  <span className="text-sm font-semibold text-white">DU</span>
                 </div>
-                <span className="text-sm font-medium text-neutral-midnight hidden sm:block">Demo User</span>
+                <span className="text-sm font-medium text-text-primary hidden sm:block">Demo User</span>
               </div>
             </div>
           </div>

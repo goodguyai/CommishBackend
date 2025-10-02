@@ -11,14 +11,18 @@ export function MatchupsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Matchups</h1>
-        <p className="text-neutral-midnight/60">Weekly projections and analysis</p>
+        <h1 className="text-2xl font-bold text-text-primary mb-1">Matchups</h1>
+        <p className="text-text-secondary">Weekly projections and analysis</p>
       </div>
 
-      <Tabs defaultValue="4">
-        <TabsList>
+      <Tabs defaultValue="4" className="bg-surface-base">
+        <TabsList className="bg-surface-elevated border border-border-subtle">
           {[1, 2, 3, 4, 5].map((w) => (
-            <TabsTrigger key={w} value={String(w)}>
+            <TabsTrigger 
+              key={w} 
+              value={String(w)}
+              className="data-[state=active]:bg-brand-teal data-[state=active]:text-white text-text-secondary"
+            >
               Week {w}
             </TabsTrigger>
           ))}
@@ -27,20 +31,20 @@ export function MatchupsPage() {
         <TabsContent value="4">
           <div className="grid gap-4">
             {matchups.map((m, i) => (
-              <Card key={i}>
+              <Card key={i} className="bg-surface-card border-border-subtle shadow-depth2">
                 <CardContent className="pt-6">
                   <div className="grid grid-cols-3 gap-4 items-center">
                     <div className="text-right">
-                      <div className="font-medium text-neutral-midnight">{m.home}</div>
+                      <div className="font-medium text-text-primary">{m.home}</div>
                       <div className="text-2xl font-bold text-brand-teal mt-1">{m.homeProj}</div>
                     </div>
-                    <div className="text-center text-neutral-midnight/40">vs</div>
+                    <div className="text-center text-text-muted">vs</div>
                     <div>
-                      <div className="font-medium text-neutral-midnight">{m.away}</div>
+                      <div className="font-medium text-text-primary">{m.away}</div>
                       <div className="text-2xl font-bold text-brand-teal mt-1">{m.awayProj}</div>
                     </div>
                   </div>
-                  <div className="mt-4 text-sm text-neutral-midnight/60 border-t pt-3">
+                  <div className="mt-4 text-sm text-text-secondary border-t border-border-subtle pt-3">
                     Coach Note: {m.note}
                   </div>
                 </CardContent>

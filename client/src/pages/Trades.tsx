@@ -32,42 +32,42 @@ export function TradesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Trades</h1>
-          <p className="text-neutral-midnight/60">Active offers and opportunities</p>
+          <h1 className="text-2xl font-bold text-text-primary mb-1">Trades</h1>
+          <p className="text-text-secondary">Active offers and opportunities</p>
         </div>
-        <Button data-testid="button-create-trade">
+        <Button data-testid="button-create-trade" className="bg-gradient-cta text-white shadow-depth1 hover:shadow-depth2">
           Create Offer
         </Button>
       </div>
 
-      <Card>
+      <Card className="bg-surface-card border-border-subtle shadow-depth2">
         <CardHeader>
-          <CardTitle>Trade Opportunities</CardTitle>
+          <CardTitle className="text-text-primary">Trade Opportunities</CardTitle>
         </CardHeader>
         <CardContent>
           {oppsLoading ? (
             <div className="space-y-4">
               {[1, 2].map((i) => (
-                <Skeleton key={i} className="h-24 w-full" />
+                <Skeleton key={i} className="h-24 w-full bg-surface-hover" />
               ))}
             </div>
           ) : (
             <div className="space-y-4">
               {opportunities?.map((opp) => (
-                <div key={opp.id} className="p-4 border border-neutral-panel rounded-lg">
+                <div key={opp.id} className="p-4 border border-border-subtle rounded-lg bg-surface-elevated shadow-depth1">
                   <div className="flex items-center justify-between mb-2">
-                    <div className="font-medium text-neutral-midnight">Trade with Team {opp.targetTeamId}</div>
-                    <Button size="sm" variant="ghost" data-testid={`button-propose-${opp.id}`}>
+                    <div className="font-medium text-text-primary">Trade with Team {opp.targetTeamId}</div>
+                    <Button size="sm" variant="ghost" data-testid={`button-propose-${opp.id}`} className="text-brand-teal hover:bg-surface-hover">
                       Propose
                     </Button>
                   </div>
-                  <div className="text-sm text-neutral-midnight/60 mb-1">
-                    Give: <span className="font-medium">{opp.give.join(', ')}</span>
+                  <div className="text-sm text-text-secondary mb-1">
+                    Give: <span className="font-medium text-text-primary">{opp.give.join(', ')}</span>
                   </div>
-                  <div className="text-sm text-neutral-midnight/60 mb-2">
-                    Get: <span className="font-medium">{opp.get.join(', ')}</span>
+                  <div className="text-sm text-text-secondary mb-2">
+                    Get: <span className="font-medium text-text-primary">{opp.get.join(', ')}</span>
                   </div>
-                  <div className="text-xs text-neutral-midnight/60">{opp.rationale}</div>
+                  <div className="text-xs text-text-muted">{opp.rationale}</div>
                 </div>
               ))}
             </div>
@@ -75,31 +75,34 @@ export function TradesPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="bg-surface-card border-border-subtle shadow-depth2">
         <CardHeader>
-          <CardTitle>Pending Trades</CardTitle>
+          <CardTitle className="text-text-primary">Pending Trades</CardTitle>
         </CardHeader>
         <CardContent>
           {pendingLoading ? (
             <div className="space-y-4">
               {[1].map((i) => (
-                <Skeleton key={i} className="h-20 w-full" />
+                <Skeleton key={i} className="h-20 w-full bg-surface-hover" />
               ))}
             </div>
           ) : (
             <div className="space-y-4">
               {pending?.filter(t => t.status === 'pending').map((trade) => (
-                <div key={trade.id} className="p-4 border border-neutral-panel rounded-lg">
+                <div key={trade.id} className="p-4 border border-border-subtle rounded-lg bg-surface-elevated shadow-depth1">
                   <div className="flex items-center justify-between mb-2">
-                    <div className="font-medium text-neutral-midnight">
+                    <div className="font-medium text-text-primary">
                       {trade.teams[0]} ↔ {trade.teams[1]}
                     </div>
-                    <Badge variant={trade.fairnessScore >= 80 ? 'success' : 'warning'}>
+                    <Badge 
+                      variant={trade.fairnessScore >= 80 ? 'success' : 'warning'}
+                      className={trade.fairnessScore >= 80 ? 'bg-brand-teal/20 text-brand-teal border-brand-teal/30' : 'bg-brand-gold/20 text-brand-gold border-brand-gold/30'}
+                    >
                       Fairness: {trade.fairnessScore}%
                     </Badge>
                   </div>
                   <div className="flex gap-2 mt-3">
-                    <Button size="sm" variant="secondary" data-testid={`button-review-${trade.id}`}>
+                    <Button size="sm" variant="secondary" data-testid={`button-review-${trade.id}`} className="bg-surface-hover text-text-primary hover:bg-surface-overlay">
                       Review
                     </Button>
                   </div>

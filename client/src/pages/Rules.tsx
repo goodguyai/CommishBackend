@@ -13,10 +13,10 @@ export function RulesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Rules</h1>
-          <p className="text-neutral-midnight/60">League constitution and policies</p>
+          <h1 className="text-2xl font-bold text-text-primary mb-1">Rules</h1>
+          <p className="text-text-secondary">League constitution and policies</p>
         </div>
-        <Button data-testid="button-add-rule">
+        <Button data-testid="button-add-rule" className="bg-gradient-cta text-white shadow-depth1 hover:shadow-depth2">
           <Plus className="w-4 h-4 mr-2" />
           Add Rule
         </Button>
@@ -24,13 +24,13 @@ export function RulesPage() {
 
       <div className="grid gap-4">
         {rules.map((rule) => (
-          <Card key={rule.id}>
+          <Card key={rule.id} className="bg-surface-card border-border-subtle shadow-depth2">
             <CardHeader>
-              <CardTitle className="text-base">{rule.title}</CardTitle>
+              <CardTitle className="text-base text-text-primary">{rule.title}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-neutral-midnight/60">{rule.body}</p>
-              <Button size="sm" variant="ghost" className="mt-3" data-testid={`button-edit-${rule.id}`}>
+              <p className="text-sm text-text-secondary">{rule.body}</p>
+              <Button size="sm" variant="ghost" className="mt-3 text-brand-teal hover:bg-surface-hover" data-testid={`button-edit-${rule.id}`}>
                 Edit
               </Button>
             </CardContent>

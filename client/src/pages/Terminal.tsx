@@ -18,25 +18,25 @@ export function TerminalPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Terminal</h1>
-        <p className="text-neutral-midnight/60">Advanced command interface</p>
+        <h1 className="text-2xl font-bold text-text-primary mb-1">Terminal</h1>
+        <p className="text-text-secondary">Advanced command interface</p>
       </div>
 
-      <Card className="h-[600px] flex flex-col">
-        <CardHeader className="border-b">
-          <CardTitle className="flex items-center gap-2">
+      <Card className="h-[600px] flex flex-col bg-surface-card border-border-subtle shadow-depth2">
+        <CardHeader className="border-b border-border-subtle">
+          <CardTitle className="flex items-center gap-2 text-text-primary">
             <TerminalIcon className="w-5 h-5" />
             Command Line
           </CardTitle>
         </CardHeader>
-        <CardContent className="flex-1 overflow-y-auto p-6 bg-gray-900 font-mono text-sm">
+        <CardContent className="flex-1 overflow-y-auto p-6 bg-[#0a0a0a] font-mono text-sm">
           <div className="space-y-1">
             {output.map((line, i) => (
-              <div key={i} className="text-green-400">{line}</div>
+              <div key={i} className="text-brand-teal">{line}</div>
             ))}
           </div>
         </CardContent>
-        <div className="border-t p-4 bg-gray-900">
+        <div className="border-t border-border-subtle p-4 bg-[#0a0a0a]">
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -51,10 +51,10 @@ export function TerminalPage() {
             <Input
               name="cmd"
               placeholder="Enter command..."
-              className="bg-gray-800 border-gray-700 text-green-400 placeholder:text-gray-500"
+              className="bg-surface-elevated border-border-default text-brand-teal placeholder:text-text-muted"
               data-testid="input-command"
             />
-            <Button type="submit" size="sm" data-testid="button-execute">
+            <Button type="submit" size="sm" data-testid="button-execute" className="bg-brand-teal text-white hover:bg-brand-teal/90">
               Execute
             </Button>
           </form>
