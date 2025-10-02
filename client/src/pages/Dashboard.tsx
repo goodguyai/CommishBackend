@@ -39,23 +39,23 @@ export function DashboardPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">Dashboard</h1>
-        <p className="text-gray-600">Week 4 overview and key insights</p>
+        <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Dashboard</h1>
+        <p className="text-neutral-midnight/60">Week 4 overview and key insights</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: 'Teams', value: '12', icon: Users, color: 'text-blue-600' },
-          { label: 'Active Trades', value: '3', icon: TrendingUp, color: 'text-green-600' },
-          { label: 'Waiver Claims', value: '8', icon: Users, color: 'text-purple-600' },
-          { label: 'Start/Sit Alerts', value: '5', icon: AlertTriangle, color: 'text-orange-600' },
+          { label: 'Teams', value: '12', icon: Users, color: 'text-brand-teal' },
+          { label: 'Active Trades', value: '3', icon: TrendingUp, color: 'text-brand-teal' },
+          { label: 'Waiver Claims', value: '8', icon: Users, color: 'text-brand-gold' },
+          { label: 'Start/Sit Alerts', value: '5', icon: AlertTriangle, color: 'text-cta-coral' },
         ].map((stat, i) => (
           <Card key={i}>
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-600">{stat.label}</p>
-                  <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
+                  <p className="text-sm text-neutral-midnight/60">{stat.label}</p>
+                  <p className="text-2xl font-bold text-neutral-midnight mt-1">{stat.value}</p>
                 </div>
                 <stat.icon className={`w-8 h-8 ${stat.color}`} />
               </div>
@@ -79,18 +79,18 @@ export function DashboardPage() {
             ) : (
               <div className="space-y-3">
                 {injuries?.entries.slice(0, 3).map((injury, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div key={i} className="flex items-center justify-between p-3 bg-neutral-panel rounded-lg">
                     <div>
-                      <div className="font-medium text-gray-900">{injury.player}</div>
-                      <div className="text-sm text-gray-500">{injury.team} - {injury.status}</div>
+                      <div className="font-medium text-neutral-midnight">{injury.player}</div>
+                      <div className="text-sm text-neutral-midnight/60">{injury.team} - {injury.status}</div>
                     </div>
                     <span
                       className={`text-xs px-2 py-1 rounded-full ${
                         injury.impact === 'High'
-                          ? 'bg-red-100 text-red-800'
+                          ? 'bg-cta-coral/10 text-cta-coral'
                           : injury.impact === 'Medium'
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : 'bg-green-100 text-green-800'
+                          ? 'bg-brand-gold/10 text-brand-gold'
+                          : 'bg-brand-teal/10 text-brand-teal'
                       }`}
                     >
                       {injury.impact}
@@ -116,14 +116,14 @@ export function DashboardPage() {
             ) : (
               <div className="space-y-3">
                 {waivers?.slice(0, 3).map((waiver, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div key={i} className="flex items-center justify-between p-3 bg-neutral-panel rounded-lg">
                     <div>
-                      <div className="font-medium text-gray-900">{waiver.player}</div>
-                      <div className="text-sm text-gray-500">{waiver.team}</div>
+                      <div className="font-medium text-neutral-midnight">{waiver.player}</div>
+                      <div className="text-sm text-neutral-midnight/60">{waiver.team}</div>
                     </div>
                     <div className="text-sm">
-                      <span className="font-semibold text-[#009898]">${waiver.suggestFaab}</span>
-                      <span className="text-gray-500 ml-1">FAAB</span>
+                      <span className="font-semibold text-brand-teal">${waiver.suggestFaab}</span>
+                      <span className="text-neutral-midnight/60 ml-1">FAAB</span>
                     </div>
                   </div>
                 ))}
@@ -151,10 +151,10 @@ export function DashboardPage() {
                   <input
                     type="checkbox"
                     checked={item.done}
-                    className="w-4 h-4 rounded border-gray-300 text-[#009898]"
+                    className="w-4 h-4 rounded border-neutral-panel text-brand-teal"
                     readOnly
                   />
-                  <span className={item.done ? 'text-gray-400 line-through' : 'text-gray-900'}>
+                  <span className={item.done ? 'text-neutral-midnight/40 line-through' : 'text-neutral-midnight'}>
                     {item.text}
                   </span>
                 </div>
