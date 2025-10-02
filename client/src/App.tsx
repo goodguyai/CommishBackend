@@ -16,6 +16,8 @@ import { SettingsPage } from './pages/Settings';
 import { TerminalPage } from './pages/Terminal';
 import { OnboardingPage } from './pages/Onboarding';
 import { LandingPage } from './pages/Landing';
+import StyleGuide from './pages/StyleGuide';
+import PreviewDashboard from './pages/PreviewDashboard';
 
 function AppRouter() {
   const [location] = useLocation();
@@ -49,6 +51,8 @@ function AppRouter() {
     <Switch>
       <Route path="/" component={LandingPage} />
       <Route path="/onboarding" component={OnboardingPage} />
+      <Route path="/style-guide" component={StyleGuide} />
+      <Route path="/preview-dashboard" component={PreviewDashboard} />
       <Route>
         <div className="min-h-screen flex items-center justify-center bg-gray-50">
           <div className="text-center">
