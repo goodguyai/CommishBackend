@@ -8,8 +8,18 @@ export async function startMockServiceWorker() {
     return;
   }
 
-  return worker.start({
-    onUnhandledRequest: 'bypass',
-    quiet: false,
-  });
+  if (!('serviceWorker' in navigator)) {
+    console.warn('[MSW] Service Worker not supported in this environment. Mock API disabled.');
+    return;
+  }
+
+  try {
+    return await worker.start({
+      onUnhandledRequest: 'bypass',
+      quiet: false,
+    });
+  } catch (error) {
+    console.error('[MSW] Failed to start service worker:', error);
+    return;
+  }
 }

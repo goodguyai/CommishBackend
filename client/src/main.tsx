@@ -12,10 +12,14 @@ async function enableMocking() {
   return Promise.resolve();
 }
 
-enableMocking().then(() => {
-  createRoot(document.getElementById('root')!).render(
-    <StrictMode>
-      <App />
-    </StrictMode>
-  );
-});
+enableMocking()
+  .catch((error) => {
+    console.error('[App] Failed to initialize mocking:', error);
+  })
+  .finally(() => {
+    createRoot(document.getElementById('root')!).render(
+      <StrictMode>
+        <App />
+      </StrictMode>
+    );
+  });
