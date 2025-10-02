@@ -1,0 +1,353 @@
+You are an expert TypeScript engineer working in a monorepo with:
+- frontend: Vite + React + TypeScript
+- backend: Express (Discord bot, Sleeper API, RAG system)
+- shared: types + Drizzle ORM models (do NOT touch DB; we’re in MOCK MODE)
+
+PRIMARY GOAL
+Create a fully clickable, demo-ready UI for “The Commish” within the existing Vite/React frontend using MSW fixtures.
+Keep Express backend, Discord bot, and RAG intact. All frontend data flows use MSW while FEATURES.MOCK_MODE is true.
+Emphasize a clean, plain, friendly UX (light, approachable, accessible).
+
+------------------------------------------------------------
+# 0) HOUSEKEEPING & DESIGN SYSTEM
+- Add Tailwind if missing; configure neutral, soft theme (see Tailwind config at the end).
+- Add file: frontend/src/lib/config.ts
+  export const FEATURES = {
+    MOCK_MODE: true,
+    ENABLE_PERSONAS: true,
+    ENABLE_CHAT: true,
+    ENABLE_TERMINAL: true,
+    ENABLE_POWERS: true            // commissioner-only tools
+  } as const;
+
+- Add file: frontend/src/lib/ui-tokens.ts
+  export const TOKENS = {
+    color: { bg: "#f9fafb", text: "#0f172a", accent: "#009898", gold: "#FFB100" },
+    radius: { sm: "6px", md: "8px", lg: "12px" },
+    shadow: { card: "0 1px 2px rgba(0,0,0,0.06), 0 1px 1px rgba(0,0,0,0.04)" }
+  } as const;
+
+- Typography: system-ui stack; sentence-case headings; minimal bold.
+- Accessibility: visible focus rings, high-contrast text, ARIA labels on nav and buttons.
+
+Packages (frontend):
+- msw, @mswjs/data
+- react-router-dom
+- zustand
+- @tanstack/react-query
+- react-hook-form, zod
+- class-variance-authority, clsx
+- date-fns
+- lucide-react
+- (optional) tailwindcss + postcss + autoprefixer if missing
+
+------------------------------------------------------------
+# 1) ROUTING & APP SHELL
+Use React Router. Routes:
+- /                (marketing-lite: short hero, “Enter App”)
+- /onboarding      (wizard)
+- /app             (shell: left sidebar, topbar with league switcher + notifications + command palette)
+  - /app/dashboard
+  - /app/waivers
+  - /app/trades
+  - /app/matchups
+  - /app/reports
+  - /app/rules
+  - /app/chat
+  - /app/settings
+  - /app/terminal
+
+Sidebar: Dashboard · Waivers · Trades · Matchups · Reports · Rules · Chat · Settings · Terminal  
+Topbar: League switcher (fixtures), Notifications bell (mock count), “Command” button (⌘K).
+
+Command Palette (plain dialog with input + list):
+- “Go to Dashboard”, “Create waiver claim”, “Propose trade”, “Generate Week Report”, “Open Terminal”, “Post to Chat”, “Add rule section”.
+
+------------------------------------------------------------
+# 2) MSW + FIXTURES
+Create folder: frontend/src/mocks
+- fixtures.ts           (demo leagues, teams, rosters, matchups, waivers, trades, rules, personas, chat)
+- injuryApocalypse2025.ts (Week 1–4 notable injuries list; mock statuses/ETAs)
+- handlers.ts           (REST handlers for /api/*)
+- browser.ts            (MSW setup)
+
+Wire MSW in main.tsx:
+- If FEATURES.MOCK_MODE true → await MSW start before rendering.
+
+API namespace (frontend/src/api/*.ts):
+- leagues.ts, users.ts, waivers.ts, trades.ts, matchups.ts, reports.ts, rules.ts, personas.ts, chat.ts
+- Each uses fetch('/api/...') and returns typed results.
+
+------------------------------------------------------------
+# 3) STATE
+zustand store (frontend/src/store/useAppStore.ts):
+- selectedLeagueId: string
+- currentWeek: number
+- userPersona: "Neutral" | "Sassy" | "Batman" | "Yoda"
+- waiverQueue: WaiverItem[]
+- tradeDraft: { withTeamId?: string; items: TradeItem[] }
+- notifications: { id:string; text:string; read:boolean }[]
+- commissioner: { showCoachMarks: boolean; }
+
+React Query for server data; skeletons for loading; friendly toasts on mutate.
+
+------------------------------------------------------------
+# 4) PAGES (CLEAN, PLAIN, FRIENDLY UX)
+General UI:
+- Light background (#f9fafb), muted grays, accent teal/gold sparingly.
+- Cards with padding 16–24, radius 8, soft shadow TOKENS.shadow.card.
+- Friendly microcopy and helpful empty states (actionable CTA).
+
+A) /onboarding (wizard)
+Steps: Platform → League ID or “Use Demo League” → Scoring → Invite Managers → Review.
+- zod validation per step.
+- “Use Demo League” creates fixture-based league and routes to /app/dashboard.
+- Microcopy: short, friendly (“You can change this later.”)
+
+B) /app/dashboard
+Cards (grid):
+- Injury Heatmap: filter by position + week; clicking opens Drawer with details from injuryApocalypse2025 fixtures.
+- Waiver Radar: 6 suggested adds with short rationale, “Queue” button.
+- Trade Opportunities: 3 targets per team-needs; “Propose trade” CTA pre-fills draft.
+- Start/Sit Alerts: lineup warnings; “Open matchup” link.
+- Commissioner Tasks: checklist; show progress and “Mark done”.
+
+C) /app/waivers
+- Table: Player, Pos, Team, Priority, FAAB Suggestion, Notes.
+- Controls: ↑/↓ reorder, “Queue” adds, “Simulate Results” (side panel with mock probabilities).
+- Empty state: “No claims yet. Add your first claim.”
+
+D) /app/trades
+- “Create Offer” modal (team selector, players/picks chooser, rationale textarea).
+- “Fairness meter” (mock score 0–100).  
+- Log of pending/approved/denied trades with timestamps and comments.
+- Commissioner switch to mark “veto policy” (from rules fixtures).
+
+E) /app/matchups
+- Week tabs 1–5. Per matchup: projected pts, volatility pill, concise “coach’s note”.
+- “Explain” accordion: 3–5 bullet reasons from fixtures.
+
+F) /app/reports
+- Generate “Week X: The Commish Report”: headlines, best/worst moves, injury watch, waiver wins, trade tracker, power rankings.
+- Buttons: “Copy Markdown”, “Post to Chat”.
+
+G) /app/rules
+- Left tree: sections; right pane: editor (react-hook-form) with preview.
+- Template gallery: common clauses (Keepers, FAAB, Veto).
+- “Ask The Commish” mini-Q&A (stub): input → 1–2 suggested clauses → “Insert”.
+
+H) /app/chat
+- Calm Slack-lite: channels (general, waivers, trades, smack-talk).
+- Messages, reactions, threads; typing/presence mocked.
+- Bot posts: waiver summary, injury alerts, weekly report.
+- Slash commands (stub): /report, /poll, /rules
+
+I) /app/settings
+- Personas (Neutral, Sassy, Batman, Yoda): simple radio with description lines.  
+- League prefs: default week, scoring view, notifications toggles.
+
+J) /app/terminal
+- Monospaced textarea + Run; shows JSON + human summary.  
+- Commands: league status | generate report week <n> | propose trade <A> <B> | set rule "<title>" | export constitution
+
+------------------------------------------------------------
+# 5) COMMISH EXPERIENCE FUNCTIONS (NEW)
+Add these user-facing features (mocked):
+
+1) **Weekly Cadence Panel** (Dashboard → widget + /app/reports):
+   - Checklist for each week: “Injuries reviewed”, “Waivers set”, “Trades reviewed”, “Report posted to chat”.
+   - A single “Do this for me” button pre-fills waivers → generates report → posts to chat (all mocked).
+
+2) **Dispute & Veto Center** (/app/trades):
+   - Start a dispute (short form).  
+   - Show votes (mock users), deadline timer (countdown), final outcome.
+
+3) **Polls & Announcements** (/app/chat):
+   - Create poll modal → posts to chat.  
+   - Announcement banner (temporary, dismissible) set by commissioner.
+
+4) **Schedule & Key Dates** (Settings):
+   - Editable list: trade deadline, keeper lock, playoffs start.  
+   - Reminder toggles (just creates notifications entries).
+
+5) **Audit Log** (Settings → “Activity Log”):
+   - Immutable list of actions (created trade, edited rule, posted report).
+
+6) **Exports** (Rules, Reports):
+   - Export Markdown / Print-friendly view.
+
+7) **Onboarding Coach-Marks** (first run):
+   - 5 bubble tips: League Switcher → Dashboard cards → Waivers → Trades → Chat.  
+   - “Don’t show again” saved in zustand/localStorage.
+
+8) **Keyboard Shortcuts**:
+   - “?” opens shortcut sheet.  
+   - ⌘K palette, “g d” Dashboard, “g w” Waivers, “g t” Trades, “g r” Reports, “/” focus search.
+
+9) **Persona Copy Styles** (applied to Bot messages & Reports only):
+   - Neutral: plain, concise.  
+   - Sassy: playful, a bit cheeky, never rude.  
+   - Batman: terse, vigilant, metaphorical.  
+   - Yoda: inverted syntax sparingly; short.
+
+------------------------------------------------------------
+# 6) COMPONENT KIT (shadcn-like, Tailwind)
+Create /components/ui:
+- Button.tsx: sizes (sm, md), variants (primary, secondary, ghost). Primary uses accent teal; disabled is muted gray.
+- Card.tsx: rounded-md, soft shadow, padding utilities.
+- Table.tsx: compact rows, hover bg, clear headers.
+- Drawer.tsx, Dialog.tsx, Tabs.tsx, Tooltip.tsx, Toast.tsx (simple, friendly).
+- EmptyState.tsx (icon optional, title, subtitle, primary CTA).
+- Skeleton.tsx (animated pulse).
+- PersonaTag.tsx (small badge with persona label).
+- PresenceDot.tsx (green dot, aria-label).
+- MarkdownViewer.tsx (safe render, friendly print CSS).
+
+Keep props minimal and accessible.
+
+------------------------------------------------------------
+# 7) SAMPLE FIXTURES (add to frontend/src/mocks/)
+Create **fixtures.ts** with types + minimal data:
+
+export const demoLeagues = [
+  {
+    id: "lg_demo_1",
+    name: "Demo League One",
+    platform: "Sleeper",
+    scoring: "Half-PPR",
+    teams: [
+      { id: "t1", name: "Birds of Prey", owner: "alice@example.com", faab: 67 },
+      { id: "t2", name: "Gridiron Geeks", owner: "bob@example.com", faab: 45 },
+      // ... up to 12
+    ],
+    weeks: [1,2,3,4,5],
+    currentWeek: 4
+  }
+];
+
+export const waiverSuggestions = [
+  { id: "w1", player: "RB J. Rookie", team: "BUF", pos: "RB", suggestFaab: 18, note: "Lead back while starter recovers." },
+  { id: "w2", player: "WR T. Breakout", team: "LAC", pos: "WR", suggestFaab: 12, note: "Targets rising 3 weeks straight." }
+];
+
+export const tradeOpportunities = [
+  { id: "trg1", targetTeamId: "t2", give: ["RB BenchGuy"], get: ["WR T. Breakout"], rationale: "They’re RB rich, WR needy." }
+];
+
+export const matchups = [
+  { week: 4, homeTeamId: "t1", awayTeamId: "t2", homeProj: 122.4, awayProj: 116.7, volatility: "Medium",
+    coachNote: "Consider safer WR3 due to weather." }
+];
+
+export const startSitAlerts = [
+  { id: "al1", teamId: "t1", msg: "Starting a player on BYE at TE." },
+  { id: "al2", teamId: "t2", msg: "High injury risk flagged for RB2." }
+];
+
+export const rules = [
+  { id: "r1", title: "Trade Veto Policy", body: "Trades require 4 veto votes within 24 hours to be overturned." },
+  { id: "r2", title: "FAAB Budget", body: "Season-long FAAB of 100. Ties broken by reverse standings." }
+];
+
+export const chatThreads = [
+  { id: "c1", channel: "general", author: "The Commish", text: "Week 4 report posted.", ts: Date.now() - 3600_000 },
+  { id: "c2", channel: "waivers", author: "alice", text: "Queued WR T. Breakout for 12 FAAB.", ts: Date.now() - 1800_000 }
+];
+
+export const personas = [
+  { id: "neutral", name: "Neutral", desc: "Plain, concise updates." },
+  { id: "sassy", name: "Sassy", desc: "Playful tone—light sarcasm." },
+  { id: "batman", name: "Batman", desc: "Terse, vigilant metaphors." },
+  { id: "yoda", name: "Yoda", desc: "Inverted syntax, keep it brief." }
+];
+
+export const notifications = [
+  { id: "n1", text: "3 waiver claims simulated for Week 4.", read: false }
+];
+
+Create **injuryApocalypse2025.ts** (purely mock, no medical claims):
+
+export const injuryApocalypse = {
+  weekRange: "Weeks 1–4",
+  notes: "Demonstration dataset for UI only.",
+  entries: [
+    { player: "QB J. Star", team: "CIN", status: "Out (foot)", eta: "TBD", impact: "Major", blurb: "Managers pivoting to streamers." },
+    { player: "WR M. RookiePhenom", team: "NYG", status: "Knee – week-to-week", eta: "2–4 weeks", impact: "High", blurb: "Targets to redistribute." },
+    { player: "RB J. Veteran", team: "ARI", status: "Ankle – IR (designated to return)", eta: "4+ weeks", impact: "High", blurb: "Backup elevated." },
+    { player: "RB T. RookiePower", team: "ARI", status: "Hamstring – day-to-day", eta: "Unclear", impact: "Medium", blurb: "Monitor practice reps." }
+  ]
+};
+
+Create **handlers.ts**:
+- Use msw REST handlers for:
+  GET /api/leagues → demoLeagues
+  POST /api/leagues/create → returns new demo league
+  GET /api/waivers/suggestions → waiverSuggestions
+  POST /api/waivers/queue → OK
+  POST /api/waivers/simulate → returns probabilities and outcomes
+  GET /api/trades/opportunities → tradeOpportunities
+  POST /api/trades/create → returns pending trade
+  POST /api/trades/dispute → returns dispute object
+  GET /api/matchups?week= → matchups filtered
+  GET /api/reports/generate?week= → composite object (headlines, moves, injuries, power ranks) from fixtures
+  GET/POST /api/rules → list/create
+  POST /api/rules/insert-clause → returns updated section
+  GET/POST /api/chat → list/create messages
+  GET /api/personas → personas
+  GET/POST /api/notifications → list/mark-read
+  GET /api/audit → returns action audit log
+
+Create **browser.ts**:
+- Setup MSW; export async function startMocks() { const { worker } = await import("./browserWorker"); await worker.start(); }
+
+In main.tsx:
+- If FEATURES.MOCK_MODE: await startMocks(); then render app.
+
+------------------------------------------------------------
+# 8) DISPUTE/VETO FLOWS (DETAIL)
+- Trade detail page/view: “Open dispute” (textarea reason) → creates dispute with deadline (e.g., 24h).
+- Show vote chips (mocked users), live countdown, and a resulting status badge: Pending / Upheld / Overturned.
+
+------------------------------------------------------------
+# 9) EMPTY STATES (COPY)
+- Dashboard: “No data yet. Connect a league or use a demo league.”
+- Waivers: “No claims yet. Add your first claim.”
+- Trades: “No active trades. Propose an offer.”
+- Chat: “Say hello or run /report to post your weekly summary.”
+- Rules: “Start with a template or add a new section.”
+
+Each has one primary CTA that moves the user forward.
+
+------------------------------------------------------------
+# 10) KEYBOARD + SHORTCUT SHEET
+- Implement a simple modal at “?” listing:
+  - ⌘K — Command palette
+  - g d — Dashboard
+  - g w — Waivers
+  - g t — Trades
+  - g r — Reports
+  - / — Focus search
+
+------------------------------------------------------------
+# 11) EXPORTS & PRINT
+- Reports and Rules get “Export Markdown” and a print stylesheet (A4/Letter; simple margins).
+
+------------------------------------------------------------
+# 12) SMOKE PATH (optional, but try)
+- A Playwright or Vitest+RTL flow:
+  Onboarding → Demo league → Dashboard loads
+  Queue a waiver → Simulate → Create trade → Open dispute → Generate report → Post to chat
+
+------------------------------------------------------------
+# 13) README
+- “MOCK MODE DEMO” section:
+  1) Install deps
+  2) pnpm dev (or npm/yarn)
+  3) MSW starts automatically with FEATURES.MOCK_MODE = true
+  4) Where to toggle OFF later
+  5) Notes: backend untouched; DB not required
+
+Deliver:
+- File tree diffs
+- New files
+- How to run Mock Mode
