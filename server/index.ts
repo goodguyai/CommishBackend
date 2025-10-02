@@ -104,6 +104,15 @@ app.use((req, res, next) => {
     next();
   });
 
+  // Add JSON parsing for ALL routes EXCEPT Discord interactions
+  const jsonParser = express.json();
+  app.use((req, res, next) => {
+    if (req.path === "/api/discord/interactions") {
+      return next(); // Skip JSON parsing for Discord webhook
+    }
+    jsonParser(req, res, next);
+  });
+
   // CRITICAL: Register all API endpoints and WAIT for completion
   const server = await registerRoutes(app);
 
