@@ -37,7 +37,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   
   const unreadCount = notifications.filter(n => !n.read).length;
 
-  const SidebarContent = () => (
+  const SidebarContent = ({ onNavigate }: { onNavigate?: () => void }) => (
     <div className="flex h-full flex-col bg-surface-elevated">
       <div className="flex h-16 items-center px-6 border-b border-border-subtle">
         <div className="flex items-center gap-3">
@@ -57,6 +57,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             return (
               <Link key={item.name} href={item.href}>
                 <a
+                  onClick={onNavigate}
                   className={clsx(
                     'group flex items-center gap-x-3 rounded-md px-3 py-2 text-sm font-medium transition-all',
                     isActive
@@ -93,7 +94,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       {/* Mobile Drawer */}
       <Drawer open={mobileMenuOpen} onClose={() => setMobileMenuOpen(false)} position="left">
-        <SidebarContent />
+        <SidebarContent onNavigate={() => setMobileMenuOpen(false)} />
       </Drawer>
 
       <div className="lg:pl-64">

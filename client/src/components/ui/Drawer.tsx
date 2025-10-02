@@ -24,7 +24,7 @@ export function Drawer({ open, onClose, title, children, position = 'right' }: D
           leaveFrom="opacity-100"
           leaveTo="opacity-0"
         >
-          <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" aria-hidden="true" />
         </Transition.Child>
 
         <div className="fixed inset-0 overflow-hidden">
@@ -44,22 +44,22 @@ export function Drawer({ open, onClose, title, children, position = 'right' }: D
                   position === 'left' ? 'pr-0' : 'pl-0'
                 )}
               >
-                <div className="flex h-full flex-col bg-white shadow-xl">
+                <div className="flex h-full flex-col bg-surface-elevated border-r border-border-subtle shadow-depth2">
                   {title && (
-                    <div className="flex items-center justify-between px-6 py-4 border-b">
-                      <HeadlessDialog.Title className="text-lg font-semibold text-gray-900">
+                    <div className="flex items-center justify-between px-6 py-4 border-b border-border-subtle">
+                      <HeadlessDialog.Title className="text-lg font-semibold text-text-primary">
                         {title}
                       </HeadlessDialog.Title>
                       <button
                         onClick={onClose}
-                        className="text-gray-400 hover:text-gray-600 transition-colors"
+                        className="text-text-muted hover:text-text-primary transition-colors"
                         data-testid="drawer-close"
                       >
                         <X className="w-5 h-5" />
                       </button>
                     </div>
                   )}
-                  <div className="relative flex-1 overflow-y-auto px-6 py-6">{children}</div>
+                  <div className="relative flex-1 overflow-y-auto">{children}</div>
                 </div>
               </HeadlessDialog.Panel>
             </Transition.Child>
