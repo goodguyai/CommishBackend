@@ -14,8 +14,8 @@ export function SettingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">Settings</h1>
-        <p className="text-gray-600">Personalize your experience</p>
+        <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Settings</h1>
+        <p className="text-neutral-midnight/60">Personalize your experience</p>
       </div>
 
       <Card>
@@ -30,13 +30,13 @@ export function SettingsPage() {
                 onClick={() => setUserPersona(p.id)}
                 className={`w-full p-4 border-2 rounded-lg text-left transition-colors ${
                   userPersona === p.id
-                    ? 'border-[#009898] bg-[#009898]/5'
-                    : 'border-gray-200 hover:border-gray-300'
+                    ? 'border-brand-teal bg-brand-teal/5'
+                    : 'border-neutral-panel hover:border-neutral-panel/80'
                 }`}
                 data-testid={`persona-${p.id}`}
               >
-                <div className="font-medium text-gray-900">{p.name}</div>
-                <div className="text-sm text-gray-600 mt-1">{p.desc}</div>
+                <div className="font-medium text-neutral-midnight">{p.name}</div>
+                <div className="text-sm text-neutral-midnight/60 mt-1">{p.desc}</div>
               </button>
             ))}
           </div>
@@ -51,11 +51,11 @@ export function SettingsPage() {
           <div className="space-y-3">
             {['Waiver alerts', 'Trade proposals', 'Lineup warnings', 'Weekly reports'].map((item, i) => (
               <div key={i} className="flex items-center justify-between py-2">
-                <span className="text-gray-900">{item}</span>
+                <span className="text-neutral-midnight">{item}</span>
                 <input
                   type="checkbox"
                   defaultChecked
-                  className="w-4 h-4 rounded border-gray-300 text-[#009898]"
+                  className="w-4 h-4 rounded border-neutral-panel text-brand-teal"
                 />
               </div>
             ))}

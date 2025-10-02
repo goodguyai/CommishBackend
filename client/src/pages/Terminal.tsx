@@ -18,8 +18,8 @@ export function TerminalPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">Terminal</h1>
-        <p className="text-gray-600">Advanced command interface</p>
+        <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Terminal</h1>
+        <p className="text-neutral-midnight/60">Advanced command interface</p>
       </div>
 
       <Card className="h-[600px] flex flex-col">

@@ -11,8 +11,8 @@ export function MatchupsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">Matchups</h1>
-        <p className="text-gray-600">Weekly projections and analysis</p>
+        <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Matchups</h1>
+        <p className="text-neutral-midnight/60">Weekly projections and analysis</p>
       </div>
 
       <Tabs defaultValue="4">
@@ -31,16 +31,16 @@ export function MatchupsPage() {
                 <CardContent className="pt-6">
                   <div className="grid grid-cols-3 gap-4 items-center">
                     <div className="text-right">
-                      <div className="font-medium text-gray-900">{m.home}</div>
-                      <div className="text-2xl font-bold text-[#009898] mt-1">{m.homeProj}</div>
+                      <div className="font-medium text-neutral-midnight">{m.home}</div>
+                      <div className="text-2xl font-bold text-brand-teal mt-1">{m.homeProj}</div>
                     </div>
-                    <div className="text-center text-gray-400">vs</div>
+                    <div className="text-center text-neutral-midnight/40">vs</div>
                     <div>
-                      <div className="font-medium text-gray-900">{m.away}</div>
-                      <div className="text-2xl font-bold text-[#009898] mt-1">{m.awayProj}</div>
+                      <div className="font-medium text-neutral-midnight">{m.away}</div>
+                      <div className="text-2xl font-bold text-brand-teal mt-1">{m.awayProj}</div>
                     </div>
                   </div>
-                  <div className="mt-4 text-sm text-gray-600 border-t pt-3">
+                  <div className="mt-4 text-sm text-neutral-midnight/60 border-t pt-3">
                     Coach Note: {m.note}
                   </div>
                 </CardContent>

@@ -13,8 +13,8 @@ export function RulesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">Rules</h1>
-          <p className="text-gray-600">League constitution and policies</p>
+          <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Rules</h1>
+          <p className="text-neutral-midnight/60">League constitution and policies</p>
         </div>
         <Button data-testid="button-add-rule">
           <Plus className="w-4 h-4 mr-2" />
@@ -29,7 +29,7 @@ export function RulesPage() {
               <CardTitle className="text-base">{rule.title}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-gray-600">{rule.body}</p>
+              <p className="text-sm text-neutral-midnight/60">{rule.body}</p>
               <Button size="sm" variant="ghost" className="mt-3" data-testid={`button-edit-${rule.id}`}>
                 Edit
               </Button>

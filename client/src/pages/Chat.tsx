@@ -16,8 +16,8 @@ export function ChatPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">Chat</h1>
-        <p className="text-gray-600">League discussions and bot updates</p>
+        <h1 className="text-2xl font-bold text-neutral-midnight mb-1">Chat</h1>
+        <p className="text-neutral-midnight/60">League discussions and bot updates</p>
       </div>
 
       <Card className="h-[600px] flex flex-col">
@@ -36,17 +36,17 @@ export function ChatPage() {
           <div className="space-y-4">
             {messages.map((msg) => (
               <div key={msg.id} className="flex gap-3">
-                <div className="w-8 h-8 bg-[#009898] rounded-full flex items-center justify-center shrink-0">
-                  <span className="text-xs font-semibold text-white">
+                <div className="w-8 h-8 bg-brand-teal rounded-full flex items-center justify-center shrink-0">
+                  <span className="text-xs font-semibold text-neutral-white">
                     {msg.author[0].toUpperCase()}
                   </span>
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="font-medium text-gray-900">{msg.author}</span>
-                    <span className="text-xs text-gray-500">{msg.time}</span>
+                    <span className="font-medium text-neutral-midnight">{msg.author}</span>
+                    <span className="text-xs text-neutral-midnight/60">{msg.time}</span>
                   </div>
-                  <p className="text-sm text-gray-700">{msg.text}</p>
+                  <p className="text-sm text-neutral-midnight/80">{msg.text}</p>
                 </div>
               </div>
             ))}
