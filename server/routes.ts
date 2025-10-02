@@ -1273,6 +1273,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // V2 routes (cache-busting namespace)
+  app.get("/api/v2/leagues/:leagueId", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      const league = await storage.getLeague(leagueId);
+      
+      if (!league) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+      }
+
+      res.json(league);
+    } catch (error) {
+      console.error("Failed to get league:", error);
+      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get league" } });
+    }
+  });
+
+  app.patch("/api/v2/leagues/:leagueId", async (req, res) => {
+    const startTime = Date.now();
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    try {
+      const { leagueId } = req.params;
+      const updateData = z.object({
+        featureFlags: z.record(z.unknown()).optional(),
+        tone: z.string().optional(),
+        timezone: z.string().optional(),
+      }).parse(req.body);
+
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+      }
+
+      await storage.updateLeague(leagueId, updateData);
+      const updatedLeague = await storage.getLeague(leagueId);
+
+      const latency = Date.now() - startTime;
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId,
+        payload: { command: "league_settings_updated", updates: Object.keys(updateData) },
+        requestId,
+        latency,
+      });
+
+      res.json({ success: true, league: updatedLeague });
+    } catch (error) {
+      console.error("Failed to update league:", error);
+      const latency = Date.now() - startTime;
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        payload: { error: String(error), endpoint: "/api/v2/leagues/:leagueId" },
+        requestId,
+        latency,
+      });
+      res.status(500).json({ error: { code: "UPDATE_FAILED", message: "Failed to update league" } });
+    }
+  });
+
   // Sleeper integration routes
   app.get("/api/sleeper/league/:leagueId", async (req, res) => {
     try {
@@ -1821,6 +1881,96 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createEvent({
         type: "ERROR_OCCURRED",
         payload: { error: String(error), endpoint: "/api/polls" },
+        requestId,
+        latency: Date.now() - startTime,
+      });
+    }
+  });
+
+  // V2 POST /api/v2/polls - Create poll (cache-busting namespace)
+  app.post("/api/v2/polls", async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 12)}`;
+    const startTime = Date.now();
+    try {
+      const { leagueId, question, options, expiresAt, createdBy } = req.body;
+
+      if (!leagueId || !question || !options || !Array.isArray(options) || options.length < 2 || !createdBy) {
+        return res.status(400).json({ 
+          error: { 
+            code: "INVALID_INPUT", 
+            message: "leagueId, question, options (min 2), and createdBy are required" 
+          } 
+        });
+      }
+
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
+        return;
+      }
+
+      if (!league.channelId) {
+        return res.status(400).json({ 
+          error: { code: "NO_CHANNEL", message: "League has no Discord channel configured" } 
+        });
+      }
+
+      const pollId = await storage.createPoll({
+        leagueId,
+        question,
+        options,
+        createdBy,
+        expiresAt: expiresAt ? new Date(expiresAt) : null,
+      });
+
+      try {
+        const emojiNumbers = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+        const pollEmbed = {
+          title: `📊 ${question}`,
+          description: options.map((opt: string, idx: number) => `${emojiNumbers[idx]} ${opt}`).join('\n'),
+          color: 0x5865F2,
+          footer: { text: `React with the corresponding number to vote${expiresAt ? ` • Expires ${new Date(expiresAt).toLocaleString()}` : ''}` }
+        };
+
+        const messageId = await discordService.postMessage(league.channelId, {
+          embeds: [pollEmbed]
+        });
+
+        for (let i = 0; i < Math.min(options.length, 10); i++) {
+          await discordService.addReaction(league.channelId, messageId, emojiNumbers[i]);
+        }
+
+        await storage.updatePoll(pollId, { discordMessageId: messageId });
+
+        res.json({ 
+          success: true, 
+          pollId,
+          discordMessageId: messageId,
+          message: "Poll created and posted to Discord" 
+        });
+
+        await storage.createEvent({
+          type: "COMMAND_EXECUTED",
+          leagueId,
+          payload: { command: "poll_created", pollId, question },
+          requestId,
+          latency: Date.now() - startTime,
+        });
+      } catch (discordError) {
+        console.error("Failed to post poll to Discord:", discordError);
+        res.json({ 
+          success: true, 
+          pollId,
+          message: "Poll created but failed to post to Discord",
+          warning: "Discord posting failed"
+        });
+      }
+    } catch (error) {
+      console.error("Failed to create poll:", error);
+      res.status(500).json({ error: { code: "CREATE_FAILED", message: "Failed to create poll" } });
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        payload: { error: String(error), endpoint: "/api/v2/polls" },
         requestId,
         latency: Date.now() - startTime,
       });
