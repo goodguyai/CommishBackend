@@ -1,0 +1,402 @@
+Perfect. Here’s a drop-in MASTER PROMPT tailored for your current stack (Tailwind + shadcn/ui) and limited to Phases 1–2 only (non-breaking): it adds a foundational design system (tokens) and two reference pages (/style-guide, /preview-dashboard) without touching your 11 demo pages or existing components.
+
+Paste this into Replit Agent v2 and let it execute as-is.
+
+⸻
+
+MASTER PROMPT — Phases 1–2 Only (Keep Tailwind + shadcn/ui)
+
+ROLE
+
+You are my Senior Frontend Architect. Augment the existing Vite/React app that already uses Tailwind + shadcn/ui. Do not remove Tailwind or shadcn. Add a non-breaking design tokens layer and two reference pages:
+	•	/style-guide (living style guide)
+	•	/preview-dashboard (Commissioner-first preview)
+
+NON-NEGOTIABLES
+	•	No breaking changes to existing pages/components.
+	•	Tailwind stays; we layer CSS variables and map them into tailwind.config.js.
+	•	Brand tokens (teal + pink/coral) are additive; keep the current Inter font globally for now (we can show Archivo/Lato in the style guide only).
+
+⸻
+
+BRAND CONTEXT
+	•	Product: THE COMMISH — AI co-commissioner for fantasy leagues.
+	•	Tone: modern, confident, playful snark; GitHub-clean.
+	•	Primary palette: teal #009898, deep slate #042E2E, hot-pink→coral gradient for CTAs (hero).
+	•	Marketing tagline: Play Nice.
+
+⸻
+
+TASKS (Phases 1–2 ONLY)
+
+1) Add Design Tokens (JSON + CSS variables)
+
+Create the following files (merge if present, do not overwrite existing styles):
+
+src/styles/tokens.json
+
+{
+  "brand": {
+    "teal": "#009898",
+    "slate": "#042E2E",
+    "ctaPink": "#FF4D6D",
+    "ctaCoral": "#FF7A59",
+    "gold": "#FFB100"
+  },
+  "neutral": {
+    "white": "#F8F8F8",
+    "ink": "#0B0B0D",
+    "g600": "#6B7280",
+    "g900": "#111827",
+    "panel": "#121619"
+  },
+  "typography": {
+    "display": "'Archivo Black', system-ui, sans-serif",
+    "body": "'Lato', system-ui, sans-serif",
+    "scale": {
+      "h00": "4.75rem",
+      "h1": "3.25rem",
+      "h2": "2.125rem",
+      "h3": "1.5rem",
+      "lead": "1.125rem",
+      "body": "1rem",
+      "caption": "0.875rem",
+      "micro": "0.75rem"
+    }
+  },
+  "radii": { "xs": "6px", "sm": "10px", "md": "12px", "lg": "16px", "xl": "20px", "pill": "999px" },
+  "spacing": { "1": "0.25rem", "2": "0.5rem", "3": "0.75rem", "4": "1rem", "6": "1.5rem", "8": "2rem", "12": "3rem", "16": "4rem" },
+  "shadow": {
+    "card": "0 2px 8px rgba(0,0,0,0.12)",
+    "elevated": "0 4px 16px rgba(0,0,0,0.18)",
+    "button": "0 2px 6px rgba(0,0,0,0.2)"
+  },
+  "motion": { "fast": "180ms", "normal": "300ms", "ease": "cubic-bezier(0.4, 0, 0.2, 1)" }
+}
+
+src/styles/tokens.css (additive; import it from your root stylesheet)
+
+:root {
+  /* Brand */
+  --brand-teal: #009898;
+  --brand-slate: #042E2E;
+  --brand-cta-pink: #FF4D6D;
+  --brand-cta-coral: #FF7A59;
+  --brand-gold: #FFB100;
+
+  /* Neutral */
+  --neutral-white: #F8F8F8;
+  --neutral-ink: #0B0B0D;
+  --neutral-g600: #6B7280;
+  --neutral-g900: #111827;
+  --neutral-panel: #121619;
+
+  /* Typography */
+  --font-display: 'Archivo Black', system-ui, sans-serif;
+  --font-body: 'Lato', system-ui, sans-serif;
+
+  --fs-h00: 4.75rem;
+  --fs-h1: 3.25rem;
+  --fs-h2: 2.125rem;
+  --fs-h3: 1.5rem;
+  --fs-lead: 1.125rem;
+  --fs-body: 1rem;
+  --fs-caption: 0.875rem;
+  --fs-micro: 0.75rem;
+
+  /* Radii */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* Shadows */
+  --shadow-card: 0 2px 8px rgba(0,0,0,0.12);
+  --shadow-elevated: 0 4px 16px rgba(0,0,0,0.18);
+  --shadow-button: 0 2px 6px rgba(0,0,0,0.2);
+
+  /* Motion */
+  --motion-fast: 180ms;
+  --motion-normal: 300ms;
+  --motion-ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Derived */
+  --cta-gradient: linear-gradient(90deg, var(--brand-cta-pink), var(--brand-cta-coral));
+}
+
+Hook up tokens in your global/index CSS
+	•	Import tokens.css at the top of your global stylesheet (e.g., src/index.css or src/app/globals.css):
+
+@import './styles/tokens.css';
+
+:root { color-scheme: dark; }
+body { background: var(--neutral-ink); color: var(--neutral-white); }
+
+Keep Inter as the app font. We’ll only demo Archivo/Lato inside the style guide so nothing else changes.
+
+⸻
+
+2) Map tokens into Tailwind (non-breaking)
+
+Update tailwind.config.js (extend, don’t replace):
+
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  darkMode: ['class'],
+  content: ['./index.html','./src/**/*.{ts,tsx,js,jsx}'],
+  theme: {
+    extend: {
+      colors: {
+        brand: {
+          teal: 'var(--brand-teal)',
+          slate: 'var(--brand-slate)',
+          gold: 'var(--brand-gold)'
+        },
+        cta: {
+          pink: 'var(--brand-cta-pink)',
+          coral: 'var(--brand-cta-coral)'
+        },
+        neutral: {
+          ink: 'var(--neutral-ink)',
+          panel: 'var(--neutral-panel)',
+          g600: 'var(--neutral-g600)',
+          g900: 'var(--neutral-g900)',
+          white: 'var(--neutral-white)'
+        }
+      },
+      borderRadius: {
+        xs: 'var(--radius-xs)',
+        sm: 'var(--radius-sm)',
+        md: 'var(--radius-md)',
+        lg: 'var(--radius-lg)',
+        xl: 'var(--radius-xl)',
+        pill: 'var(--radius-pill)'
+      },
+      boxShadow: {
+        card: 'var(--shadow-card)',
+        elevated: 'var(--shadow-elevated)',
+        button: 'var(--shadow-button)'
+      },
+      transitionTimingFunction: {
+        brand: 'var(--motion-ease)'
+      },
+      transitionDuration: {
+        fast: 'var(--motion-fast)',
+        normal: 'var(--motion-normal)'
+      }
+    }
+  },
+  plugins: []
+}
+
+Now in Tailwind you can do bg-[color:var(--brand-teal)], or just text-brand-teal, bg-neutral-panel, etc.
+
+⸻
+
+3) Add demo-only fonts (style guide scoped)
+
+In the style guide page only, import fonts so the rest of the app remains Inter:
+
+/* put this at top of the style guide page's module css or inside the page via <style> */
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Lato:wght@300;400;700&display=swap');
+
+
+⸻
+
+4) Components for the style guide (non-breaking)
+
+src/components/guide/CodeBlock.tsx
+
+import { useState } from 'react';
+
+export function CodeBlock({ title, code }:{ title:string; code:string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="rounded-lg shadow-card bg-neutral-panel p-4">
+      <div className="flex items-center justify-between mb-2">
+        <strong>{title}</strong>
+        <button
+          onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(()=>setCopied(false),1500); }}
+          className="px-3 py-1 rounded-pill border border-white/10 hover:bg-white/5 transition duration-fast ease-brand"
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre className="overflow-x-auto text-sm leading-relaxed">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+src/components/guide/ColorSwatch.tsx
+
+export function ColorSwatch({ name, value, varName, desc }:{
+  name:string; value:string; varName?:string; desc?:string;
+}) {
+  return (
+    <div className="rounded-lg shadow-card bg-neutral-panel p-4 flex gap-4 items-center">
+      <div className="w-12 h-12 rounded-lg shadow-card" style={{ background:value }} />
+      <div>
+        <div className="font-bold">{name}</div>
+        <div className="text-white/80">{value}{varName ? ` – ${varName}` : ''}</div>
+        {desc && <div className="text-white/60">{desc}</div>}
+      </div>
+    </div>
+  );
+}
+
+
+⸻
+
+5) /style-guide page
+
+src/pages/StyleGuide.tsx
+
+import { ColorSwatch } from '@/components/guide/ColorSwatch';
+import { CodeBlock } from '@/components/guide/CodeBlock';
+
+const TOKENS_SNIPPET = `/* see src/styles/tokens.css */\n:root { --brand-teal: #009898; --brand-cta-pink:#FF4D6D; ... }`;
+
+export default function StyleGuide(){
+  return (
+    <div className="mx-auto max-w-6xl p-6">
+      <header className="mb-6">
+        <h1
+          className="text-4xl font-black uppercase"
+          style={{ fontFamily: "Archivo Black, system-ui, sans-serif",
+                   background: "var(--cta-gradient)", WebkitBackgroundClip: "text", color: "transparent" }}>
+          GoodGuy AI / THE COMMISH — Style Guide
+        </h1>
+        <p className="text-white/80 mt-2">Foundational tokens and patterns (non-breaking).</p>
+      </header>
+
+      <section className="space-y-3 mb-8">
+        <h2 className="text-2xl font-bold">Color Palette</h2>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <ColorSwatch name="Teal Core" value="#009898" varName="--brand-teal" />
+          <ColorSwatch name="Deep Slate" value="#042E2E" varName="--brand-slate" />
+          <ColorSwatch name="CTA Pink" value="#FF4D6D" varName="--brand-cta-pink" />
+          <ColorSwatch name="CTA Coral" value="#FF7A59" varName="--brand-cta-coral" />
+          <ColorSwatch name="Gold" value="#FFB100" varName="--brand-gold" />
+          <ColorSwatch name="Panel" value="#121619" varName="--neutral-panel" />
+        </div>
+      </section>
+
+      <section className="space-y-3 mb-8">
+        <h2 className="text-2xl font-bold">Typography (demo-only fonts)</h2>
+        <p className="text-white/80">App stays on Inter; these fonts demo the future brand.</p>
+        <div className="rounded-lg shadow-card bg-neutral-panel p-4 space-y-2">
+          <div style={{ fontFamily: "Archivo Black, system-ui, sans-serif" }}
+               className="text-4xl uppercase">THE COMMISH</div>
+          <div style={{ fontFamily: "Lato, system-ui, sans-serif" }}
+               className="text-lg">Lato body text sample—clean, modern, legible.</div>
+        </div>
+      </section>
+
+      <section className="space-y-3 mb-8">
+        <h2 className="text-2xl font-bold">Tokens (copy)</h2>
+        <CodeBlock title="src/styles/tokens.css" code={TOKENS_SNIPPET} />
+      </section>
+
+      <footer className="text-white/60 mt-10">© GoodGuy AI — Play Nice.</footer>
+    </div>
+  );
+}
+
+
+⸻
+
+6) /preview-dashboard (Commissioner-first demo)
+
+src/pages/PreviewDashboard.tsx
+
+function Item({ icon, title, desc, count=0 }:{
+  icon: React.ReactNode; title:string; desc:string; count?:number;
+}){
+  return (
+    <div className="bg-neutral-panel shadow-card rounded-lg p-4 flex items-center gap-4 hover:shadow-elevated transition duration-fast ease-brand">
+      <div className="w-12 h-12 rounded-lg grid place-items-center"
+           style={{ background:'color-mix(in srgb, var(--brand-teal) 20%, transparent)' }}>
+        {icon}
+      </div>
+      <div className="flex-1">
+        <div className="font-extrabold">{title}</div>
+        <div className="text-white/80">{desc}</div>
+      </div>
+      {count>0 && <span className="px-2 py-1 rounded-pill border border-white/10 text-sm"> {count} </span>}
+    </div>
+  );
+}
+
+export default function PreviewDashboard(){
+  return (
+    <div className="mx-auto max-w-3xl p-6">
+      <h1 className="text-3xl font-black uppercase mb-2"
+          style={{ background: "var(--cta-gradient)", WebkitBackgroundClip: "text", color: "transparent" }}>
+        Commissioner Console
+      </h1>
+      <p className="text-white/80 mb-4">What needs your decision right now?</p>
+
+      <div className="space-y-3">
+        <Item icon={<span>⚡</span>} title="League Actions (Inbox)" desc="Trades, waivers, rule issues waiting for review" count={3}/>
+        <Item icon={<span>📊</span>} title="Transaction Review" desc="Approve/deny moves with an audit log"/>
+        <Item icon={<span>🏆</span>} title="Fairness Review" desc="Evidence packs + constitution precedent"/>
+        <Item icon={<span>📰</span>} title="League Reports" desc="Auto-generated weekly commissioner recap"/>
+        <Item icon={<span>💬</span>} title="ChatOps" desc="Moderate disputes via Discord; track escalations"/>
+      </div>
+    </div>
+  );
+}
+
+
+⸻
+
+7) Routing
+
+Register routes without touching existing ones. If you use React Router, add:
+
+{/* add non-breaking routes */}
+<Route path="/style-guide" element={<StyleGuide />} />
+<Route path="/preview-dashboard" element={<PreviewDashboard />} />
+
+
+⸻
+
+ACCEPTANCE CRITERIA (Phases 1–2)
+	•	tokens.css is imported globally (no visual regression to current pages).
+	•	Tailwind config exposes text-brand-teal, bg-neutral-panel, etc.
+	•	/style-guide renders color swatches, tokens copy block, and shows Archivo/Lato only on that page.
+	•	/preview-dashboard shows the 5 Commissioner cards and uses CSS variables via Tailwind.
+	•	No changes to existing 11 demo pages or shadcn/ui imports.
+	•	Build and MSW demos remain fully functional.
+
+⸻
+
+RUN CHECKLIST
+	1.	Install (if needed) new files only; don’t remove Tailwind/shadcn.
+	2.	Import src/styles/tokens.css in the global CSS.
+	3.	Update tailwind.config.js (extend) and restart dev server.
+	4.	Visit /style-guide and /preview-dashboard to verify.
+
+⸻
+
+NOTES / ROOM FOR DISAGREEMENT
+	•	If you later choose to rebrand globally (Phase 3), we’ll map the same CSS variables into Tailwind theme (already done) and switch app fonts.
+	•	If you decide to migrate off Tailwind (Phase 4), these tokens already live as CSS vars—no rewrite of values.
+
+⸻
+
+That’s it. This keeps your working app intact, adds a foundational design system, and gives you two living reference pages to socialize with advisors without risking regressions.

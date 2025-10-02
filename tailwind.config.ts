@@ -9,8 +9,27 @@ export default {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+        xs: "var(--radius-xs)",
+        xl: "var(--radius-xl)",
+        pill: "var(--radius-pill)",
       },
       colors: {
+        brand: {
+          teal: "var(--brand-teal)",
+          slate: "var(--brand-slate)",
+          gold: "var(--brand-gold)",
+        },
+        cta: {
+          pink: "var(--brand-cta-pink)",
+          coral: "var(--brand-cta-coral)",
+        },
+        neutral: {
+          ink: "var(--neutral-ink)",
+          panel: "var(--neutral-panel)",
+          g600: "var(--neutral-g600)",
+          g900: "var(--neutral-g900)",
+          white: "var(--neutral-white)",
+        },
         background: "var(--background)",
         foreground: "var(--foreground)",
         card: {
@@ -88,6 +107,18 @@ export default {
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+      },
+      boxShadow: {
+        card: "var(--shadow-card)",
+        elevated: "var(--shadow-elevated)",
+        button: "var(--shadow-button)",
+      },
+      transitionTimingFunction: {
+        brand: "var(--motion-ease)",
+      },
+      transitionDuration: {
+        fast: "var(--motion-fast)",
+        normal: "var(--motion-normal)",
       },
     },
   },
