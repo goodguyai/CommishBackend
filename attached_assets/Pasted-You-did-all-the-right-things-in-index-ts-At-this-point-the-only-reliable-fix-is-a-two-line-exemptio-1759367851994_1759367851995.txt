@@ -1,0 +1,124 @@
+You did all the right things in index.ts. At this point the only reliable fix is a two-line exemption in server/vite.ts so Vite’s SPA catch-all stops swallowing /api/*. Express always respects registration order, but Vite’s file currently installs a * handler that still grabs your API requests. We’ll gate that handler.
+
+Below is a surgical, low-risk patch you can paste to Replit. It doesn’t touch your DB, schema, or Discord security. It just tells Vite: “skip anything under /api/.”
+
+⸻
+
+Work order: Finalize routing fix by exempting /api/* in Vite
+
+Guardrails (don’t change)
+	•	Keep Supabase + env-service usage exactly as is.
+	•	Keep Discord interactions route using express.raw(...) with Ed25519 verification.
+	•	Do not modify DB schema or migrations.
+	•	Keep all API endpoints in server/routes.ts on their original /api/... paths.
+
+⸻
+
+1) Patch server/vite.ts (skip /api)
+
+Open server/vite.ts. You’ll see a catch-all similar to:
+
+// (example)
+app.use("*", async (req, res, next) => {
+  // Vite HTML transform + send index.html
+});
+
+Replace that one app.use("*", ...) with a guarded version:
+
+- app.use("*", async (req, res, next) => {
++ app.use((req, res, next) => {
++   // Hard skip API: never let Vite handle /api/*
++   if (req.path?.startsWith("/api/")) return next();
++   return next();
++ });
++
++ // Keep the original Vite catch-all immediately AFTER the guard:
++ app.use("*", async (req, res, next) => {
+    try {
+      // your existing code that reads index.html, runs vite.transformIndexHtml, and sends it
+      // e.g.
+      // let template = fs.readFileSync(indexHtmlPath, "utf-8");
+      // template = await vite.transformIndexHtml(req.originalUrl, template);
+      // const html = template.replace("<!--app-html-->", "");
+      // res.status(200).set({ "Content-Type": "text/html" }).end(html);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+If your file has two catch-alls (e.g., one for dev HMR and one for static), apply the same guard before each: a tiny app.use((req,res,next)=>{ if (req.path?.startsWith('/api/')) return next(); next(); }) right above each catch-all.
+
+Why this works: Express evaluates middleware in order. The guard runs first and passes /api/* through untouched. The SPA catch-all only runs for non-API paths, so /api can never be intercepted.
+
+⸻
+
+2) (Optional) Add no-cache header for /api
+
+This prevents any upstream proxy from caching JSON responses:
+
+// in server/index.ts, before calling registerRoutes(app, services)
+app.use("/api", (_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
+This is safe and won’t affect Discord’s raw route.
+
+⸻
+
+3) Keep server/index.ts ordering as you have it
+	•	Register routes before Vite is mounted.
+	•	Keep your /api JSON 404 after your routes but before Vite, e.g.:
+
+registerRoutes(app, services);
+
+// API JSON 404
+app.use("/api", (req, res) => res.status(404).json({ error: "Not Found", path: req.path }));
+
+// now mount Vite (after)
+const { setupVite } = await import("./vite");
+setupVite(app);
+
+Do not add a global express.json() before the Discord interactions route (you already avoided that—good).
+
+⸻
+
+4) Test (live)
+
+Run these against your Replit URL:
+
+# Health — JSON (never HTML)
+curl -s https://thecommish.replit.app/api/health | jq
+
+# Events — JSON array
+curl -s "https://thecommish.replit.app/api/events?limit=3" | jq
+
+# League GET — JSON (use a real leagueId if you have one)
+curl -s "https://thecommish.replit.app/api/leagues/<LEAGUE_ID>" | jq
+
+# League PATCH — JSON
+curl -s -X PATCH "https://thecommish.replit.app/api/leagues/<LEAGUE_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"featureFlags":{"autoMeme":true}}' | jq
+
+# Polls create — JSON
+curl -s -X POST "https://thecommish.replit.app/api/polls" \
+  -H "Content-Type: application/json" \
+  -d '{"guildId":"<GID>","question":"Who wins Week 5?","options":["A","B"]}' | jq
+
+If any return HTML, re-open server/vite.ts and ensure every SPA catch-all has the /api guard immediately before it.
+
+⸻
+
+5) Rollback (if needed)
+	•	Revert the small guard(s) in server/vite.ts.
+	•	No other files changed, no schema changes — rollback is trivial.
+
+⸻
+
+What went wrong before
+	•	Your API routes and 404 were mounted correctly, but Vite’s app.use("*") still intercepted them. Without modifying vite.ts, Express had no way to stop the SPA handler from catching /api/*. The tiny guard is the only deterministic fix.
+
+⸻
+
+Ping me once this is in. If anything else is still flaky, paste the current server/vite.ts and I’ll give you an exact diff line-by-line.

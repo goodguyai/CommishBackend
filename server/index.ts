@@ -94,48 +94,57 @@ app.use((req, res, next) => {
   next();
 });
 
-// Validate environment variables first - fail fast if missing
-validateEnvironment();
-
-// Register all API endpoints on app (this returns a Promise<Server>)
-const serverPromise = registerRoutes(app);
-
-// Initialize global cleanup job for expired wizard sessions
-scheduler.scheduleGlobalCleanup();
-
-// Error handler middleware
-app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
-  const status = err.status || err.statusCode || 500;
-  const message = err.message || "Internal Server Error";
-  const requestId = (req as any).requestId || 'unknown';
-
-  console.error(`[${requestId}] Error ${status}:`, err);
-  
-  res.status(status).json({ 
-    message,
-    requestId,
-    ...(app.get("env") === "development" && { stack: err.stack })
-  });
-});
-
-// CRITICAL: API 404 JSON fallback - MUST be before Vite
-app.use("/api", (req, res) => {
-  res.status(404).json({ error: "Not Found", path: req.path });
-});
-
-// Mount Vite/static AFTER API is fully established (separate async context)
 (async () => {
+  // Validate environment variables first - fail fast if missing
+  validateEnvironment();
+
+  // Prevent caching of API responses
+  app.use("/api", (_req, res, next) => {
+    res.set("Cache-Control", "no-store");
+    next();
+  });
+
+  // CRITICAL: Register all API endpoints and WAIT for completion
+  const server = await registerRoutes(app);
+
+  // Initialize global cleanup job for expired wizard sessions
+  scheduler.scheduleGlobalCleanup();
+
+  // Error handler middleware
+  app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+    const status = err.status || err.statusCode || 500;
+    const message = err.message || "Internal Server Error";
+    const requestId = (req as any).requestId || 'unknown';
+
+    console.error(`[${requestId}] Error ${status}:`, err);
+    
+    res.status(status).json({ 
+      message,
+      requestId,
+      ...(app.get("env") === "development" && { stack: err.stack })
+    });
+  });
+
+  // CRITICAL: Hard-stop for /api - prevent Vite from ever seeing API routes
+  // This catches ANY /api/* request that didn't match a registered route
+  app.use((req, res, next) => {
+    // If this is an API request, it means no route matched - return JSON 404
+    if (req.path.startsWith("/api/")) {
+      return res.status(404).json({ error: "Not Found", path: req.path });
+    }
+    // Otherwise, continue to Vite/static
+    next();
+  });
+
+  // Mount Vite/static ONLY AFTER all API routes are registered
   if (app.get("env") === "development") {
     const { setupVite } = await import("./vite");
-    const server = await serverPromise;
     await setupVite(app, server);
   } else {
     serveStatic(app);
   }
-})();
 
-// Start server (await the promise from registerRoutes)
-serverPromise.then((server) => {
+  // Start server
   const port = parseInt(process.env.PORT || '5000', 10);
   server.listen({
     port,
@@ -144,4 +153,4 @@ serverPromise.then((server) => {
   }, () => {
     log(`serving on port ${port}`);
   });
-});
+})();
