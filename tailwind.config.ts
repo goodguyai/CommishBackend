@@ -14,21 +14,50 @@ export default {
         pill: "var(--radius-pill)",
       },
       colors: {
+        surface: {
+          base: "var(--surface-base)",
+          elevated: "var(--surface-elevated)",
+          overlay: "var(--surface-overlay)",
+          card: "var(--surface-card)",
+          hover: "var(--surface-hover)",
+        },
+        text: {
+          primary: "var(--text-primary)",
+          secondary: "var(--text-secondary)",
+          muted: "var(--text-muted)",
+          inverse: "var(--text-inverse)",
+        },
+        border: {
+          subtle: "var(--border-subtle)",
+          default: "var(--border-default)",
+          emphasis: "var(--border-emphasis)",
+        },
         brand: {
-          teal: "var(--brand-teal)",
-          slate: "var(--brand-slate)",
-          gold: "var(--brand-gold)",
-        },
-        cta: {
-          pink: "var(--brand-cta-pink)",
-          coral: "var(--brand-cta-coral)",
-        },
-        neutral: {
-          ink: "var(--neutral-ink)",
-          panel: "var(--neutral-panel)",
-          g600: "var(--neutral-g600)",
-          g900: "var(--neutral-g900)",
-          white: "var(--neutral-white)",
+          teal: {
+            400: "var(--brand-teal-400)",
+            500: "var(--brand-teal-500)",
+            600: "var(--brand-teal-600)",
+            700: "var(--brand-teal-700)",
+            DEFAULT: "var(--brand-teal)",
+          },
+          coral: {
+            400: "var(--brand-coral-400)",
+            500: "var(--brand-coral-500)",
+            600: "var(--brand-coral-600)",
+            DEFAULT: "var(--brand-coral-500)",
+          },
+          gold: {
+            400: "var(--brand-gold-400)",
+            500: "var(--brand-gold-500)",
+            600: "var(--brand-gold-600)",
+            DEFAULT: "var(--brand-gold-500)",
+          },
+          pink: {
+            400: "var(--brand-pink-400)",
+            500: "var(--brand-pink-500)",
+            600: "var(--brand-pink-600)",
+            DEFAULT: "var(--brand-pink-500)",
+          },
         },
         background: "var(--background)",
         foreground: "var(--foreground)",
@@ -60,7 +89,6 @@ export default {
           DEFAULT: "var(--destructive)",
           foreground: "var(--destructive-foreground)",
         },
-        border: "var(--border)",
         input: "var(--input)",
         ring: "var(--ring)",
         chart: {
@@ -85,6 +113,8 @@ export default {
         sans: ["var(--font-sans)"],
         serif: ["var(--font-serif)"],
         mono: ["var(--font-mono)"],
+        display: ["var(--font-display)"],
+        body: ["var(--font-body)"],
       },
       keyframes: {
         "accordion-down": {
@@ -109,16 +139,26 @@ export default {
         "accordion-up": "accordion-up 0.2s ease-out",
       },
       boxShadow: {
-        card: "var(--shadow-card)",
-        elevated: "var(--shadow-elevated)",
-        button: "var(--shadow-button)",
+        depth1: "var(--shadow-depth1)",
+        depth2: "var(--shadow-depth2)",
+        depth3: "var(--shadow-depth3)",
+        glow: "var(--shadow-glow)",
+        glowStrong: "var(--shadow-glow-strong)",
+      },
+      backgroundImage: {
+        "gradient-teal-radial": "var(--gradient-teal-radial)",
+        "gradient-teal-angle": "var(--gradient-teal-angle)",
+        "gradient-hero-angle": "var(--gradient-hero-angle)",
+        "gradient-cta": "var(--gradient-cta)",
       },
       transitionTimingFunction: {
         brand: "var(--motion-ease)",
+        spring: "var(--motion-spring)",
       },
       transitionDuration: {
         fast: "var(--motion-fast)",
         normal: "var(--motion-normal)",
+        slow: "var(--motion-slow)",
       },
     },
   },

@@ -1,17 +1,43 @@
 :root {
-  /* Brand */
-  --brand-teal: #009898;
-  --brand-slate: #042E2E;
-  --brand-cta-pink: #FF4D6D;
-  --brand-cta-coral: #FF7A59;
-  --brand-gold: #FFB100;
+  /* Surfaces (Dark Theme) */
+  --surface-base: #050607;
+  --surface-elevated: #0B1014;
+  --surface-overlay: #111820;
+  --surface-card: #0D1117;
+  --surface-hover: #161B22;
 
-  /* Neutral */
-  --neutral-white: #F8F8F8;
-  --neutral-ink: #0B0B0D;
-  --neutral-g600: #6B7280;
-  --neutral-g900: #111827;
-  --neutral-panel: #121619;
+  /* Text (High Contrast) */
+  --text-primary: #F5F7FA;
+  --text-secondary: #C5CED6;
+  --text-muted: #8A97A5;
+  --text-inverse: #0A0D10;
+
+  /* Borders */
+  --border-subtle: #1A232E;
+  --border-default: #2D3748;
+  --border-emphasis: #3D4A5A;
+
+  /* Brand - Teal */
+  --brand-teal-400: #00C5C5;
+  --brand-teal-500: #009898;
+  --brand-teal-600: #007A7A;
+  --brand-teal-700: #005C5C;
+  --brand-teal: #009898; /* Alias for legacy */
+
+  /* Brand - Coral */
+  --brand-coral-400: #FF7A95;
+  --brand-coral-500: #FF5F82;
+  --brand-coral-600: #E54770;
+
+  /* Brand - Gold */
+  --brand-gold-400: #FFD685;
+  --brand-gold-500: #FFC75F;
+  --brand-gold-600: #E5AD45;
+
+  /* Brand - Pink */
+  --brand-pink-400: #FF6B8A;
+  --brand-pink-500: #FF4D6D;
+  --brand-pink-600: #E5335D;
 
   /* Typography */
   --font-display: 'Archivo Black', system-ui, sans-serif;
@@ -21,6 +47,7 @@
   --fs-h1: 3.25rem;
   --fs-h2: 2.125rem;
   --fs-h3: 1.5rem;
+  --fs-h4: 1.25rem;
   --fs-lead: 1.125rem;
   --fs-body: 1rem;
   --fs-caption: 0.875rem;
@@ -39,21 +66,37 @@
   --space-2: 0.5rem;
   --space-3: 0.75rem;
   --space-4: 1rem;
+  --space-5: 1.25rem;
   --space-6: 1.5rem;
   --space-8: 2rem;
+  --space-10: 2.5rem;
   --space-12: 3rem;
   --space-16: 4rem;
+  --space-20: 5rem;
 
-  /* Shadows */
-  --shadow-card: 0 2px 8px rgba(0,0,0,0.12);
-  --shadow-elevated: 0 4px 16px rgba(0,0,0,0.18);
-  --shadow-button: 0 2px 6px rgba(0,0,0,0.2);
+  /* Shadows (Deep & Pronounced) */
+  --shadow-depth1: 0 8px 20px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-depth2: 0 18px 50px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-depth3: 0 24px 70px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --shadow-glow: 0 0 20px rgba(0, 152, 152, 0.4);
+  --shadow-glow-strong: 0 0 30px rgba(0, 152, 152, 0.6);
+
+  /* Gradients */
+  --gradient-teal-radial: radial-gradient(circle at 20% 20%, rgba(0, 152, 152, 0.25), rgba(5, 6, 7, 0));
+  --gradient-teal-angle: linear-gradient(135deg, #032E2F 0%, #004B53 60%, #021415 100%);
+  --gradient-hero-angle: linear-gradient(135deg, #050607 0%, #0B1014 50%, #050607 100%);
+  --gradient-cta: linear-gradient(90deg, #FF5F82 0%, #FF7A59 100%);
 
   /* Motion */
   --motion-fast: 180ms;
   --motion-normal: 300ms;
+  --motion-slow: 450ms;
   --motion-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
 
-  /* Derived */
-  --cta-gradient: linear-gradient(90deg, var(--brand-cta-pink), var(--brand-cta-coral));
+/* Global dark theme base */
+body {
+  background-color: var(--surface-base);
+  color: var(--text-primary);
 }
