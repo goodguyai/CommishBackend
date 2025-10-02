@@ -17,11 +17,11 @@ export function OnboardingPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#f9fafb] py-12">
+    <div className="min-h-screen bg-surface-base py-12">
       <div className="max-w-3xl mx-auto px-4">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Welcome to THE COMMISH</h1>
-          <p className="text-gray-600">Let's set up your league in a few quick steps</p>
+          <h1 className="text-3xl font-bold text-text-primary mb-2">Welcome to THE COMMISH</h1>
+          <p className="text-text-secondary">Let's set up your league in a few quick steps</p>
         </div>
 
         <div className="mb-8">
@@ -32,21 +32,21 @@ export function OnboardingPage() {
                   <div
                     className={`w-8 h-8 rounded-full flex items-center justify-center ${
                       s.completed
-                        ? 'bg-green-500'
+                        ? 'bg-brand-teal shadow-glow'
                         : step === s.id
-                        ? 'bg-[#009898]'
-                        : 'bg-gray-300'
+                        ? 'bg-brand-teal shadow-glow'
+                        : 'bg-surface-hover'
                     }`}
                   >
                     {s.completed ? (
-                      <CheckCircle className="w-5 h-5 text-white" />
+                      <CheckCircle className="w-5 h-5 text-text-primary" />
                     ) : (
-                      <span className="text-sm font-medium text-white">{s.id}</span>
+                      <span className="text-sm font-medium text-text-primary">{s.id}</span>
                     )}
                   </div>
-                  <span className="text-sm font-medium text-gray-700">{s.name}</span>
+                  <span className="text-sm font-medium text-text-secondary">{s.name}</span>
                 </div>
-                {i < steps.length - 1 && <div className="w-12 h-px bg-gray-300 mx-2" />}
+                {i < steps.length - 1 && <div className="w-12 h-px bg-border-subtle mx-2" />}
               </div>
             ))}
           </div>
@@ -64,12 +64,12 @@ export function OnboardingPage() {
           <CardContent>
             {step === 1 && (
               <div className="space-y-3">
-                <button className="w-full p-4 border-2 border-[#009898] rounded-lg bg-[#009898]/5 hover:bg-[#009898]/10 transition-colors text-left">
-                  <div className="font-medium">Sleeper</div>
-                  <div className="text-sm text-gray-600">Connect your Sleeper league</div>
+                <button className="w-full p-4 border-2 border-brand-teal rounded-lg bg-brand-teal/10 hover:bg-brand-teal/20 transition-colors text-left shadow-depth1">
+                  <div className="font-medium text-text-primary">Sleeper</div>
+                  <div className="text-sm text-text-secondary">Connect your Sleeper league</div>
                 </button>
-                <button className="w-full p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-left" disabled>
-                  <div className="font-medium text-gray-400">ESPN (Coming Soon)</div>
+                <button className="w-full p-4 border border-border-subtle rounded-lg hover:bg-surface-hover transition-colors text-left" disabled>
+                  <div className="font-medium text-text-muted">ESPN (Coming Soon)</div>
                 </button>
               </div>
             )}
@@ -77,7 +77,7 @@ export function OnboardingPage() {
             {step === 2 && (
               <div>
                 <Input placeholder="Enter your Sleeper League ID" className="mb-2" />
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-text-muted">
                   Find this in your Sleeper league settings or URL
                 </p>
               </div>
@@ -86,25 +86,25 @@ export function OnboardingPage() {
             {step === 3 && (
               <div className="space-y-2">
                 <div className="flex justify-between py-2">
-                  <span className="text-gray-700">Scoring:</span>
-                  <span className="font-medium">Half-PPR</span>
+                  <span className="text-text-secondary">Scoring:</span>
+                  <span className="font-medium text-text-primary">Half-PPR</span>
                 </div>
                 <div className="flex justify-between py-2">
-                  <span className="text-gray-700">Teams:</span>
-                  <span className="font-medium">12</span>
+                  <span className="text-text-secondary">Teams:</span>
+                  <span className="font-medium text-text-primary">12</span>
                 </div>
                 <div className="flex justify-between py-2">
-                  <span className="text-gray-700">Playoffs:</span>
-                  <span className="font-medium">6 teams, Weeks 15-17</span>
+                  <span className="text-text-secondary">Playoffs:</span>
+                  <span className="font-medium text-text-primary">6 teams, Weeks 15-17</span>
                 </div>
               </div>
             )}
 
             {step === 4 && (
               <div className="text-center py-4">
-                <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-                <h3 className="text-lg font-semibold mb-2">All Set!</h3>
-                <p className="text-gray-600 mb-4">Your league is ready to go</p>
+                <CheckCircle className="w-16 h-16 text-brand-teal mx-auto mb-4 drop-shadow-glow" />
+                <h3 className="text-lg font-semibold mb-2 text-text-primary">All Set!</h3>
+                <p className="text-text-secondary mb-4">Your league is ready to go</p>
               </div>
             )}
 

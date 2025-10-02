@@ -38,8 +38,8 @@ function AppRouter() {
           <Route path="/app/terminal" component={TerminalPage} />
           <Route>
             <div className="text-center py-12">
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">404</h1>
-              <p className="text-gray-600">Page not found</p>
+              <h1 className="text-2xl font-bold text-text-primary mb-2">404</h1>
+              <p className="text-text-secondary">Page not found</p>
             </div>
           </Route>
         </Switch>
@@ -54,10 +54,10 @@ function AppRouter() {
       <Route path="/style-guide" component={StyleGuide} />
       <Route path="/preview-dashboard" component={PreviewDashboard} />
       <Route>
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="min-h-screen flex items-center justify-center bg-surface-base">
           <div className="text-center">
-            <h1 className="text-4xl font-bold text-gray-900 mb-2">404</h1>
-            <p className="text-gray-600">Page not found</p>
+            <h1 className="text-4xl font-bold text-text-primary mb-2">404</h1>
+            <p className="text-text-secondary">Page not found</p>
           </div>
         </div>
       </Route>
