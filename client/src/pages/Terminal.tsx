@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Terminal as TerminalIcon } from 'lucide-react';
 import { apiRequest } from '@/lib/queryClient';
+import { toast } from 'sonner';
 
 interface TerminalOutput {
   command: string;
@@ -38,6 +39,9 @@ export function TerminalPage() {
         },
       ]);
       setCommandInput('');
+      toast.success('Command executed', {
+        description: data.summary || 'Command completed successfully',
+      });
     },
     onError: (error, command) => {
       setOutputs([
@@ -48,6 +52,9 @@ export function TerminalPage() {
           timestamp: new Date().toLocaleTimeString(),
         },
       ]);
+      toast.error('Command failed', {
+        description: error instanceof Error ? error.message : 'An error occurred',
+      });
     },
   });
 

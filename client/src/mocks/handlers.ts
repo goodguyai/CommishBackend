@@ -15,6 +15,23 @@ import {
 } from './fixtures';
 import { injuryApocalypse } from './injuryApocalypse2025';
 
+// Stateful stores for session persistence (using localStorage)
+function getRulesStore() {
+  const stored = localStorage.getItem('msw_rules');
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return [...rules];
+    }
+  }
+  return [...rules];
+}
+
+function setRulesStore(newRules: any[]) {
+  localStorage.setItem('msw_rules', JSON.stringify(newRules));
+}
+
 export const handlers = [
   // Leagues
   http.get('/api/mock/leagues', () => {
@@ -166,14 +183,46 @@ export const handlers = [
     return HttpResponse.json(report);
   }),
 
-  // Rules
+  // Rules (stateful with localStorage persistence)
   http.get('/api/mock/rules', () => {
-    return HttpResponse.json(rules);
+    return HttpResponse.json(getRulesStore());
   }),
 
   http.post('/api/mock/rules/save', async ({ request }) => {
-    const body = await request.json();
-    return HttpResponse.json({ success: true, rule: body });
+    const body = await request.json() as any;
+    const currentRules = getRulesStore();
+    let savedRule;
+    
+    if (body.id) {
+      // Update existing rule
+      const index = currentRules.findIndex((r: any) => r.id === body.id);
+      if (index !== -1) {
+        currentRules[index] = body;
+        savedRule = body;
+      }
+    } else {
+      // Create new rule with generated ID
+      const newRule = {
+        ...body,
+        id: `r${Date.now()}`,
+      };
+      currentRules.push(newRule);
+      savedRule = newRule;
+    }
+    
+    setRulesStore(currentRules);
+    return HttpResponse.json({ success: true, rule: savedRule });
+  }),
+
+  http.delete('/api/mock/rules/:id', async ({ params }) => {
+    const { id } = params;
+    const currentRules = getRulesStore();
+    const index = currentRules.findIndex((r: any) => r.id === id);
+    if (index !== -1) {
+      currentRules.splice(index, 1);
+      setRulesStore(currentRules);
+    }
+    return HttpResponse.json({ success: true });
   }),
 
   http.get('/api/mock/rules/templates', () => {

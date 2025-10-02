@@ -1,28 +1,74 @@
 import { useState } from 'react';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Dialog } from '@/components/ui/Dialog';
 import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
+import { apiRequest, queryClient } from '@/lib/queryClient';
 
 interface Rule {
-  id: number;
+  id: string;
   title: string;
   body: string;
 }
 
 export function RulesPage() {
-  const [rules, setRules] = useState<Rule[]>([
-    { id: 1, title: 'Trade Veto Policy', body: 'Trades require 4 veto votes within 24 hours...' },
-    { id: 2, title: 'FAAB Budget', body: 'Season-long FAAB of 100. Ties broken by reverse standings...' },
-    { id: 3, title: 'Keeper Rules', body: 'Keep up to 2 players. Cost is 1 round earlier than drafted...' },
-  ]);
-
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
   const [ruleTitle, setRuleTitle] = useState('');
   const [ruleBody, setRuleBody] = useState('');
+
+  const { data: rules = [], isLoading } = useQuery<Rule[]>({
+    queryKey: ['/api/mock/rules'],
+    queryFn: async () => {
+      const response = await apiRequest('GET', '/api/mock/rules', undefined);
+      return response.json();
+    },
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async (rule: Partial<Rule>) => {
+      const response = await apiRequest('POST', '/api/mock/rules/save', rule);
+      return response.json();
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/mock/rules'] });
+      const action = variables.id ? 'updated' : 'added';
+      toast.success(`Rule ${action}`, {
+        description: `${action === 'added' ? 'Created' : 'Updated'}: ${variables.title}`,
+      });
+      setIsEditorOpen(false);
+      setEditingRule(null);
+      setRuleTitle('');
+      setRuleBody('');
+    },
+    onError: (error) => {
+      toast.error('Failed to save rule', {
+        description: error instanceof Error ? error.message : 'An error occurred',
+      });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (ruleId: string) => {
+      const response = await apiRequest('DELETE', `/api/mock/rules/${ruleId}`, undefined);
+      return response.json();
+    },
+    onSuccess: (_, ruleId) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/mock/rules'] });
+      const rule = rules.find(r => r.id === ruleId);
+      toast.success('Rule deleted', {
+        description: `Removed: ${rule?.title}`,
+      });
+    },
+    onError: (error) => {
+      toast.error('Failed to delete rule', {
+        description: error instanceof Error ? error.message : 'An error occurred',
+      });
+    },
+  });
 
   const handleAddRule = () => {
     setEditingRule(null);
@@ -46,41 +92,79 @@ export function RulesPage() {
       return;
     }
 
+    const ruleData: Partial<Rule> = {
+      title: ruleTitle,
+      body: ruleBody,
+    };
+
     if (editingRule) {
-      // Update existing rule
-      setRules(rules.map(r => 
-        r.id === editingRule.id 
-          ? { ...r, title: ruleTitle, body: ruleBody }
-          : r
-      ));
-      toast.success('Rule updated', {
-        description: `Updated: ${ruleTitle}`,
-      });
-    } else {
-      // Add new rule
-      const newRule = {
-        id: Math.max(...rules.map(r => r.id), 0) + 1,
-        title: ruleTitle,
-        body: ruleBody,
-      };
-      setRules([...rules, newRule]);
-      toast.success('Rule added', {
-        description: `Created: ${ruleTitle}`,
-      });
+      ruleData.id = editingRule.id;
     }
 
-    setIsEditorOpen(false);
-    setEditingRule(null);
-    setRuleTitle('');
-    setRuleBody('');
+    saveMutation.mutate(ruleData);
   };
 
-  const handleDeleteRule = (ruleId: number) => {
-    const rule = rules.find(r => r.id === ruleId);
-    setRules(rules.filter(r => r.id !== ruleId));
-    toast.success('Rule deleted', {
-      description: `Removed: ${rule?.title}`,
-    });
+  const handleDeleteRule = (ruleId: string) => {
+    deleteMutation.mutate(ruleId);
+  };
+
+  const renderContent = () => {
+    if (isLoading) {
+      return (
+        <div className="grid gap-4">
+          {[1, 2, 3].map((i) => (
+            <Card key={i} className="bg-surface-card border-border-subtle shadow-depth2">
+              <CardHeader>
+                <div className="h-5 w-48 bg-surface-hover animate-pulse rounded" />
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  <div className="h-4 w-full bg-surface-hover animate-pulse rounded" />
+                  <div className="h-4 w-3/4 bg-surface-hover animate-pulse rounded" />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid gap-4">
+        {rules.map((rule) => (
+          <Card key={rule.id} className="bg-surface-card border-border-subtle shadow-depth2">
+            <CardHeader>
+              <CardTitle className="text-base text-text-primary">{rule.title}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-text-secondary">{rule.body}</p>
+              <div className="flex gap-2 mt-3">
+                <Button 
+                  size="sm" 
+                  variant="ghost" 
+                  onClick={() => handleEditRule(rule)}
+                  disabled={saveMutation.isPending || deleteMutation.isPending}
+                  className="text-brand-teal hover:bg-surface-hover" 
+                  data-testid={`button-edit-${rule.id}`}
+                >
+                  Edit
+                </Button>
+                <Button 
+                  size="sm" 
+                  variant="ghost" 
+                  onClick={() => handleDeleteRule(rule.id)}
+                  disabled={saveMutation.isPending || deleteMutation.isPending}
+                  className="text-brand-coral hover:bg-surface-hover" 
+                  data-testid={`button-delete-${rule.id}`}
+                >
+                  Delete
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
   };
 
   return (
@@ -100,38 +184,7 @@ export function RulesPage() {
         </Button>
       </div>
 
-      <div className="grid gap-4">
-        {rules.map((rule) => (
-          <Card key={rule.id} className="bg-surface-card border-border-subtle shadow-depth2">
-            <CardHeader>
-              <CardTitle className="text-base text-text-primary">{rule.title}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-text-secondary">{rule.body}</p>
-              <div className="flex gap-2 mt-3">
-                <Button 
-                  size="sm" 
-                  variant="ghost" 
-                  onClick={() => handleEditRule(rule)}
-                  className="text-brand-teal hover:bg-surface-hover" 
-                  data-testid={`button-edit-${rule.id}`}
-                >
-                  Edit
-                </Button>
-                <Button 
-                  size="sm" 
-                  variant="ghost" 
-                  onClick={() => handleDeleteRule(rule.id)}
-                  className="text-brand-coral hover:bg-surface-hover" 
-                  data-testid={`button-delete-${rule.id}`}
-                >
-                  Delete
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {renderContent()}
 
       <Dialog 
         open={isEditorOpen} 
@@ -173,6 +226,7 @@ export function RulesPage() {
             <Button 
               variant="secondary" 
               onClick={() => setIsEditorOpen(false)}
+              disabled={saveMutation.isPending}
               data-testid="button-cancel"
               className="border border-border-default hover:bg-surface-hover"
             >
@@ -180,10 +234,11 @@ export function RulesPage() {
             </Button>
             <Button 
               onClick={handleSaveRule}
+              disabled={saveMutation.isPending}
               data-testid="button-save-rule"
               className="bg-brand-teal text-white hover:bg-brand-teal/90"
             >
-              {editingRule ? 'Update Rule' : 'Create Rule'}
+              {saveMutation.isPending ? 'Saving...' : (editingRule ? 'Update Rule' : 'Create Rule')}
             </Button>
           </div>
         </div>
