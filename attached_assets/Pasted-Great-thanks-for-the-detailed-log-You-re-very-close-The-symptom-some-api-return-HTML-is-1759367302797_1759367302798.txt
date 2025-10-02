@@ -1,0 +1,193 @@
+Great — thanks for the detailed log. You’re very close. The symptom (“some /api/... return HTML”) is classic SPA catch-all intercepting API. You already found two app.use("*", …) handlers in vite.ts. Since that file is “protected,” the safest fix is to force Express to route all /api/* requests through an early, dedicated lane and finish them before Vite can ever see them.
+
+Below is a surgical, low-risk patch that:
+	•	Keeps Supabase + env-service invariants intact
+	•	Leaves all existing /api/... handlers in server/routes.ts unchanged
+	•	Requires zero edits to vite.ts
+	•	Fixes the router crash you saw (“reading ‘apply’”) by not passing undefined routers around
+	•	Gives you a dedicated /api 404 to guarantee JSON instead of HTML
+
+Copy/paste this to Replit Agent as a work order.
+
+⸻
+
+Work Order: Finish the routing fix (no schema changes, Supabase only)
+
+Guardrails (do NOT change)
+	•	Keep APP_BASE_URL=https://thecommish.replit.app (no trailing slash).
+	•	Supabase only. Do not reintroduce Neon/Replit DB code or server/db.ts.
+	•	Centralized env service only (no new process.env.* reads in routes).
+	•	Keep Discord interactions route using raw body + Ed25519.
+	•	Do not modify database schema or migrations in this task.
+
+⸻
+
+1) Revert any partial “apiRouter” experiments
+
+If we previously created an apiRouter or changed route prefixes, revert server/routes.ts so all endpoints are defined as they originally were, e.g.:
+
+app.post("/api/discord/interactions", ...)
+app.get("/api/health", ...)
+app.get("/api/events", ...)
+app.get("/api/leagues/:leagueId", ...)
+app.patch("/api/leagues/:leagueId", ...)
+app.post("/api/polls", ...)
+...etc
+
+No /api removal inside routes. We’ll fix order in index.ts only.
+
+⸻
+
+2) Hard-stop lane for /api/* in server/index.ts
+
+Goal: Ensure /api/* is captured before Vite’s catch-all and that unmatched /api/* returns JSON (not HTML).
+
+Edit server/index.ts:
+	1.	Mount an early API prelude (a no-op gate for /api) before calling registerRoutes(...).
+	2.	Call registerRoutes(app, services) — keep using app directly.
+	3.	Mount an API 404 handler (JSON) — still before Vite.
+	4.	Dynamically import and run setupVite(app) after the API lane is established. This avoids any top-level side effects in vite.ts mounting before your routes.
+
+Here’s the minimal diff (adapt to your file, keep your logging/typing as-is):
+
+// server/index.ts
+-import express from "express";
+-import { registerRoutes } from "./routes";
+-import { setupVite } from "./vite";
+-import { buildServices } from "./services";
++import express from "express";
++import { registerRoutes } from "./routes";
++import { buildServices } from "./services";
+// NOTE: we will dynamically import setupVite AFTER API is mounted
++// import { setupVite } from "./vite";
+
+const app = express();
+const services = buildServices();
+
+// IMPORTANT: Do NOT mount global express.json() before Discord interactions.
+// The interactions route uses express.raw() at route level inside routes.ts.
+// If you need JSON, mount it per-route or under "/api" only in routes.ts.
+
+// --- [NEW] 1) Early API lane to ensure /api is claimed before Vite ---
++app.use("/api", (req, _res, next) => {
++  // marker/header for debug (optional)
++  // _res.setHeader("X-API-Lane", "1");
++  next();
++});
+
+// --- Existing: register all API endpoints on `app` ---
+const handles = registerRoutes(app, services);
+
+// --- [NEW] 2) API 404 JSON fallback BEFORE Vite ---
++app.use("/api", (req, res) => {
++  res.status(404).json({ error: "Not Found", path: req.path });
++});
+
+// --- [NEW] 3) Mount Vite/static AFTER API is fully mounted ---
++(async () => {
++  const { setupVite } = await import("./vite");
++  setupVite(app); // must not steal /api routes now
++})();
+
+// Existing listen code stays the same
+const httpServer = app.listen(process.env.PORT || 5000, () => {
+  console.log("Server listening...");
+});
+
+// (keep any existing graceful shutdown or export code unchanged)
+
+Why this works:
+	•	The early app.use("/api", ...) ensures /api/* enters API middleware chain first.
+	•	Your real /api/... routes are registered next and will handle matches.
+	•	If none match, the API 404 handler responds with JSON; Vite never sees it.
+	•	Vite is mounted after — its catch-all can’t intercept /api.
+
+Note: We intentionally did not mount express.json() globally to avoid breaking the Discord interactions raw-body verification. Your route-level express.raw({ type: "*/*" }) for /api/discord/interactions remains correct.
+
+⸻
+
+3) Sanity check for Discord interactions route (unchanged)
+
+Confirm in server/routes.ts you still have route-level raw body:
+
+app.post(
+  "/api/discord/interactions",
+  express.raw({ type: "*/*" }),
+  verifyDiscordSignature(env.discord.publicKey),
+  handleDiscordInteraction(services)
+);
+
+Do not add express.json() before this route.
+
+⸻
+
+4) Verify middleware order (optional debugging)
+
+While debugging, you can print the stack to ensure /api is mounted before Vite:
+
+// TEMP debug near the end of index.ts (remove later)
+const dump = (label: string) => {
+  // @ts-ignore
+  const stack = app._router?.stack || [];
+  console.log(`\n[MW STACK] ${label}`);
+  stack.forEach((l: any, i: number) => {
+    const path = l?.route?.path || l?.regexp || l?.name || "(anon)";
+    console.log(`[${i}]`, path);
+  });
+};
+dump("after setup");
+
+You should see entries for /api before any * or SPA regex entries.
+
+⸻
+
+5) Test the fix (live)
+
+Use live URL (not localhost):
+
+# Health — should be JSON and "database":"connected"
+curl -s https://thecommish.replit.app/api/health | jq
+
+# Events — must return JSON array, not HTML
+curl -s "https://thecommish.replit.app/api/events?limit=3" | jq
+
+# League GET — JSON
+curl -s "https://thecommish.replit.app/api/leagues/<LEAGUE_ID>" | jq
+
+# League PATCH — JSON (toggle a feature flag)
+curl -s -X PATCH "https://thecommish.replit.app/api/leagues/<LEAGUE_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"featureFlags":{"autoMeme":true}}' | jq
+
+# Polls create — JSON (not HTML)
+curl -s -X POST "https://thecommish.replit.app/api/polls" \
+  -H "Content-Type: application/json" \
+  -d '{"guildId":"<GID>","question":"Who wins Week 5?","options":["A","B"]}' | jq
+
+If any of those return HTML, the API lane wasn’t mounted before Vite — re-check step order in index.ts.
+
+⸻
+
+6) What not to change
+	•	Do not move /api endpoints out of routes.ts.
+	•	Do not add global express.json() before the Discord interactions route.
+	•	Do not touch vite.ts in this pass (we solved it without modifying it).
+	•	Do not alter migrations/schema.
+
+⸻
+
+7) Success criteria
+	•	All /api/* endpoints return JSON (never HTML).
+	•	/api/discord/interactions keeps working (signature verify OK).
+	•	/api/leagues/:leagueId and /api/polls behave normally via UI + curl.
+	•	Health endpoint: status ok, database connected.
+
+⸻
+
+Why your earlier attempt failed
+	•	Mounting a Router and passing it into a function that expects an Express app can easily create an undefined middleware chain (hence “reading ‘apply’”). This patch avoids that — we keep using app for routes and only adjust order in index.ts.
+	•	The “guard not logging” meant your guard was mounted after Vite or never matched. The early /api lane + API 404 ensures /api never falls through to Vite, regardless of what vite.ts does.
+
+⸻
+
+If anything still acts up, paste the current server/index.ts and server/routes.ts and I’ll give you exact line-by-line diffs.
