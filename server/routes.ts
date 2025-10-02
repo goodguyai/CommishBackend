@@ -33,9 +33,6 @@ function getSessionId(req: any): string {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Create API router to prevent fallthrough to Vite catch-all
-  const apiRouter = express.Router();
-  
   // Initialize services after environment validation
   ragService = new RAGService(storage);
   eventBus = new EventBus(storage);
@@ -1216,7 +1213,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  apiRouter.get("/leagues/:leagueId", async (req, res) => {
+  app.get("/leagues/:leagueId", async (req, res) => {
     try {
       const { leagueId } = req.params;
       const league = await storage.getLeague(leagueId);
@@ -1232,7 +1229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  apiRouter.patch("/leagues/:leagueId", async (req, res) => {
+  app.patch("/leagues/:leagueId", async (req, res) => {
     const startTime = Date.now();
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
@@ -1736,7 +1733,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // POST /api/polls - Create a new poll and post to Discord
-  apiRouter.post("/polls", async (req, res) => {
+  app.post("/polls", async (req, res) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 12)}`;
     const startTime = Date.now();
     try {
@@ -1829,9 +1826,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
   });
-
-  // Mount API router to prevent fallthrough to Vite catch-all
-  app.use('/api', apiRouter);
 
   const httpServer = createServer(app);
   return httpServer;

@@ -7,13 +7,22 @@ import { generateRequestId } from "./lib/crypto";
 
 const app = express();
 
-// Use conditional JSON parsing to preserve raw body for Discord webhooks
-app.use((req, res, next) => {
-  if (req.path === "/api/discord/interactions") {
-    return next(); // Skip JSON parsing for Discord route
+// CRITICAL: Create API router and add JSON parsing TO IT
+const apiRouter = express.Router();
+const jsonParser = express.json();
+
+// Add JSON parsing to router (skip for Discord interactions)
+apiRouter.use((req, res, next) => {
+  if (req.path === "/discord/interactions") {
+    return next(); // Skip JSON for Discord webhook
   }
-  express.json()(req, res, next);
+  jsonParser(req, res, next);
 });
+
+// Mount API router at /api BEFORE any other app-level middleware
+app.use("/api", apiRouter);
+
+// Now add other middleware for non-API routes
 app.use(express.urlencoded({ extended: false }));
 
 // Observability middleware: requestId, duration, outcome tracking
@@ -102,7 +111,7 @@ app.use((req, res, next) => {
   // Validate environment variables first - fail fast if missing
   validateEnvironment();
   
-  const server = await registerRoutes(app);
+  const server = await registerRoutes(apiRouter as any);
 
   // Initialize global cleanup job for expired wizard sessions
   scheduler.scheduleGlobalCleanup();
@@ -119,6 +128,18 @@ app.use((req, res, next) => {
       requestId,
       ...(app.get("env") === "development" && { stack: err.stack })
     });
+  });
+
+  // CRITICAL: Add guard before Vite to prevent /api interception
+  app.use((req, res, next) => {
+    // Let API routes pass through - they were already registered above
+    if (req.path.startsWith("/api")) {
+      // If we reach here, no API route matched - return 404 JSON
+      console.log(`[GUARD] Caught unmatched API route: ${req.method} ${req.path}`);
+      return res.status(404).json({ error: "API endpoint not found" });
+    }
+    console.log(`[GUARD] Passing non-API route to Vite: ${req.method} ${req.path}`);
+    next();
   });
 
   // importantly only setup vite in development and after

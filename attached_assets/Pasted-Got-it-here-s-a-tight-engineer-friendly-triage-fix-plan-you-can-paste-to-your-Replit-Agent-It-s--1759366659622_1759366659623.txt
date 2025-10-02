@@ -1,0 +1,239 @@
+Got it—here’s a tight, engineer-friendly triage + fix plan you can paste to your Replit Agent. It’s based on your log and zeroes in on the two real blockers you hit:
+	1.	Some API routes return HTML instead of JSON (Vite catch-all swallowing /api)
+	2.	Occasional port conflicts / double server (duplicate listen / hot reload order)
+
+I’ll give you (A) a quick diagnosis, (B) surgical code patches (exact files/blocks), and (C) a verification script so you can prove it’s fixed. Then I add small cleanups that prevent this from regressing.
+
+⸻
+
+🔧 MASTER BUGFIX WORK ORDER (paste into Replit)
+
+Guardrails (do not change)
+	•	Keep Supabase as the only DB. No Neon/Replit DB. No schema drift outside explicit migrations.
+	•	Keep APP_BASE_URL=https://thecommish.replit.app (no localhost).
+	•	Keep Discord /api/discord/interactions using raw body & Ed25519 verification.
+	•	Read env via server/services/env.ts only.
+	•	If a change would violate a guardrail: STOP and print a one-liner alternate.
+
+⸻
+
+0) Snapshot + quick sanity
+	•	Print current APP_BASE_URL, DATABASE_URL source, and the order of Express middlewares & routers at boot.
+	•	Grep the tree for any app.use("*" or “catch-all” that might hit /api.
+
+Accept:
+	•	A startup log that lists: middlewares order, routers order, and the file/line of any wildcard middleware.
+
+⸻
+
+1) Fix API → HTML problem (Vite intercept)
+
+Diagnosis: Vite’s SPA catch-all (or a static fallback) is mounted before API routes, so /api/* is served as the SPA HTML. We will (a) mount an API router early, and (b) ensure Vite’s catch-all skips /api.
+
+1.1 Create a dedicated API router and mount it first
+
+File: server/index.ts
+	•	Ensure the order is:
+	1.	security & tiny logging
+	2.	API router for /api
+	3.	Vite/static SPA fallback
+	4.	HTTP server listen
+
+Patch (illustrative – adapt paths/imports to project):
+
+// server/index.ts
+import express from "express";
+import { registerRoutes } from "./routes";     // already exists
+import { setupVite } from "./vite";            // your vite dev/prod handler
+import { env } from "./services/env";
+
+const app = express();
+
+// --- SECURITY/LIMITERS/LOGGING (keep light here) ---
+app.disable("x-powered-by");
+
+// IMPORTANT: Mount /api before any SPA middleware
+const apiRouter = express.Router();
+registerRoutes(apiRouter);          // <-- move all existing route registrations into this router
+app.use("/api", apiRouter);         // <-- FIRST: /api
+
+// Now mount Vite/static for everything else (non-/api only)
+setupVite(app);                     // <-- must not intercept /api
+
+// Single http server
+const port = Number(process.env.PORT || 5000);
+const server = app.listen(port, () => {
+  console.log(`[server] listening on ${port} (${env.app.baseUrl})`);
+});
+
+export { app, server };
+
+If registerRoutes currently consumes an app: Express, keep the signature but pass the router. The actual handler code doesn’t care whether it’s an app or router as long as it’s an express.Application | express.Router.
+
+1.2 Make Vite skip /api (dev + prod)
+
+File: server/vite.ts (or wherever you register the SPA fallback)
+	•	Replace any app.use("*", ...) or unconditional catch-all with a guard:
+
+// server/vite.ts
+export function setupVite(app: express.Application) {
+  // ... your vite middleware setup ...
+  // IMPORTANT: never handle /api here
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api")) return next();
+    return next(); // allow other vite middlewares/static to run
+  });
+
+  // Final SPA fallback: only non-/api
+  app.use(async (req, res, next) => {
+    if (req.path.startsWith("/api")) return next();
+    // serve index.html via vite or static build
+    try {
+      // ... existing logic to render index.html ...
+    } catch (err) {
+      next(err);
+    }
+  });
+}
+
+If this file is “protected”, don’t edit it; instead, wrap its mount in index.ts with a guard: call setupVite(app) only after the /api router is mounted (1.1), and ensure any app.use("*"... in Vite comes after /api.
+
+1.3 Ensure your routes are actually registered before any return
+
+File: server/routes.ts
+	•	Verify there isn’t a premature return before the last routes.
+	•	If you found late routes (e.g. /api/polls, /api/leagues/:leagueId) placed after a return, move them above.
+
+Mini check: rg -n "return .*registerRoutes|module.exports" and eyeball following routes.
+
+Accept:
+	•	curl -i $APP_BASE_URL/api/health returns Content-Type: application/json (not HTML).
+	•	curl -i $APP_BASE_URL/api/leagues/<someId> returns JSON status (even 404 JSON is fine).
+	•	curl -i $APP_BASE_URL/api/polls (POST with dummy body) returns JSON error (e.g., 401/admin-key) – still JSON.
+
+⸻
+
+2) Kill port conflicts / double listen
+	•	Make sure we only call app.listen once.
+	•	No second listen in test harnesses, Vite, or hot reload wrappers.
+
+Actions:
+	•	Grep for .listen( across server:
+	•	If found in multiple files, refactor so only server/index.ts calls it.
+	•	Ensure PORT is respected (Replit sets it); no hard-coded ports.
+
+Accept:
+	•	rg -n "\.listen\(" server | wc -l returns 1.
+
+⸻
+
+3) Verify Discord raw-body route ordering (don’t regress)
+	•	The Discord interactions route must be mounted with express.raw({ type: 'application/json' }) before any global express.json().
+	•	With the router change, keep your earlier fix: either mount the Discord path inside the /api router with raw body, or mount it directly on app before JSON middleware.
+
+Accept:
+	•	Sending a bogus interaction with headers returns signature error (400/401), not a JSON parse error.
+
+⸻
+
+4) Re-enable the 3 “broken” endpoints (the ones that returned HTML)
+
+From your log:
+	•	GET /api/leagues/:leagueId
+	•	PATCH /api/leagues/:leagueId (feature flags like features.autoMeme)
+	•	POST /api/polls (admin-key-guarded)
+
+Checklist:
+	•	Confirm the three routes are inside registerRoutes(apiRouter) now.
+	•	Confirm they return JSON always (even failures).
+	•	Confirm admin routes check X-Admin-Key === env.app.adminKey.
+
+Accept (run exactly):
+
+# JSON, not HTML
+curl -s -i "$APP_BASE_URL/api/leagues/bogus" | head -n 10
+
+# Expect 401 JSON (no admin key):
+curl -s -i -X POST "$APP_BASE_URL/api/polls" -H "Content-Type: application/json" -d '{}' | head -n 10
+
+# Expect JSON (404 or ok); prove PATCH returns JSON
+curl -s -i -X PATCH "$APP_BASE_URL/api/leagues/bogus" -H "Content-Type: application/json" -d '{"features":{"autoMeme":true}}' | head -n 10
+
+
+⸻
+
+5) Add a tiny route-tracer to prove ordering (remove after)
+
+File: server/index.ts (top, after app creation)
+
+app.use((req, _res, next) => {
+  if (req.path.startsWith("/api")) {
+    console.log(`[trace] API → ${req.method} ${req.path}`);
+  }
+  next();
+});
+
+Accept: server logs show [trace] API → GET /api/health when you hit it.
+
+⸻
+
+6) Regression tests (script)
+
+Create qa-route-regression.sh and run it:
+
+set -e
+
+BASE="$APP_BASE_URL"
+
+echo "== Health"
+curl -s -i "$BASE/api/health" | grep -i 'content-type: application/json'
+
+echo "== Non-existent league still JSON"
+curl -s -i "$BASE/api/leagues/does-not-exist" | grep -i 'content-type: application/json'
+
+echo "== Polls admin-guard returns JSON"
+curl -s -i -X POST "$BASE/api/polls" -H "Content-Type: application/json" -d '{}' | grep -i 'content-type: application/json'
+
+Accept: All three greps pass; none show HTML.
+
+⸻
+
+7) Small cleanups (make this durable)
+	•	Router shape: keep all API definitions inside registerRoutes(apiRouter); do not define API routes after it returns.
+	•	Vite guard: in setupVite, never match /api (no app.use("*"...) unless guarded).
+	•	Content-Type: every API path must set JSON (use res.json and never res.send string HTML).
+	•	One server: only index.ts calls listen.
+	•	Logs: keep the [trace] middleware for a bit while we test.
+
+⸻
+
+8) (Optional) Add a self-check endpoint for routing
+
+Add GET /api/_routing that returns the name/order of the last middlewares you mounted and the fact that /api router exists. It helps when Vite regresses.
+
+⸻
+
+✅ When done, paste back:
+	1.	A short diff/summary of what you changed (files + key lines).
+	2.	Output from:
+	•	rg -n "\.listen\(" server | wc -l
+	•	bash qa-route-regression.sh
+	3.	One health call and one failing (401) admin call showing JSON Content-Type.
+	4.	A note confirming Discord interactions still verify signatures (your quick “invalid signature” test).
+
+⸻
+
+Why this will fix it
+	•	Mounting an API router first guarantees Express short-circuits API requests before Vite’s SPA fallback.
+	•	Guarding the Vite catch-all from /api prevents accidental HTML responses when new API routes are added.
+	•	Enforcing a single listen call prevents port contention and phantom instances serving stale middleware.
+
+⸻
+
+If something still returns HTML
+
+Print the Express middleware stack order at runtime (names of functions in order), and show which handler produced the response. 99% it will be an unguarded app.use("*"... or a static file handler preceding /api.
+
+⸻
+
+When the Agent finishes, send me the outputs from step 7 so I can give a quick ✅/🪲 and we’ll move on to the next set (owner mapping flow + digest QA).
