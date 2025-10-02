@@ -39,12 +39,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const SidebarContent = () => (
     <div className="flex h-full flex-col">
-      <div className="flex h-16 items-center px-6 border-b border-gray-200">
+      <div className="flex h-16 items-center px-6 border-b border-neutral-panel">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-[#009898] rounded-lg flex items-center justify-center">
-            <span className="text-white font-bold text-sm">TC</span>
+          <div className="w-8 h-8 bg-brand-teal rounded-lg flex items-center justify-center">
+            <span className="text-neutral-white font-bold text-sm">TC</span>
           </div>
-          <span className="font-semibold text-gray-900">THE COMMISH</span>
+          <span className="font-semibold text-neutral-midnight">THE COMMISH</span>
         </div>
       </div>
 
@@ -60,8 +60,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                   className={clsx(
                     'group flex items-center gap-x-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
                     isActive
-                      ? 'bg-[#009898] text-white'
-                      : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                      ? 'bg-brand-teal text-neutral-white'
+                      : 'text-neutral-midnight/80 hover:bg-neutral-panel hover:text-neutral-midnight'
                   )}
                   data-testid={`nav-${item.name.toLowerCase()}`}
                 >
@@ -74,19 +74,19 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
       </div>
 
-      <div className="border-t border-gray-200 p-4">
-        <div className="text-xs text-gray-500">
-          Mode: <span className="font-medium text-[#009898]">Demo</span>
+      <div className="border-t border-neutral-panel p-4">
+        <div className="text-xs text-neutral-midnight/60">
+          Mode: <span className="font-medium text-brand-teal">Demo</span>
         </div>
       </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-[#f9fafb]">
+    <div className="min-h-screen bg-neutral-panel">
       {/* Desktop Sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
-        <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-white border-r border-gray-200">
+        <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-neutral-white border-r border-neutral-panel">
           <SidebarContent />
         </div>
       </div>
@@ -98,7 +98,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="lg:pl-64">
         {/* Topbar */}
-        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6">
+        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-neutral-panel bg-neutral-white px-4 shadow-sm sm:gap-x-6 sm:px-6">
           <Button
             variant="ghost"
             size="sm"
@@ -111,27 +111,27 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <div className="flex flex-1 gap-x-4 self-stretch items-center">
             <div className="flex items-center gap-2 min-w-0 flex-1">
-              <button className="flex items-center gap-2 rounded-md border border-gray-200 px-3 py-1.5 text-sm hover:bg-gray-50 transition-colors max-w-xs">
-                <span className="truncate font-medium">Demo League One</span>
-                <ChevronDown className="h-4 w-4 text-gray-400" />
+              <button className="flex items-center gap-2 rounded-md border border-neutral-panel px-3 py-1.5 text-sm hover:bg-neutral-panel transition-colors max-w-xs">
+                <span className="truncate font-medium text-neutral-midnight">Demo League One</span>
+                <ChevronDown className="h-4 w-4 text-neutral-midnight/40" />
               </button>
             </div>
 
             <div className="flex items-center gap-x-4">
-              <button className="relative p-2 text-gray-400 hover:text-gray-600 transition-colors" data-testid="notifications-button">
+              <button className="relative p-2 text-neutral-midnight/40 hover:text-neutral-midnight/60 transition-colors" data-testid="notifications-button">
                 <Bell className="h-5 w-5" />
                 {unreadCount > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 h-4 w-4 rounded-full bg-[#009898] text-xs text-white flex items-center justify-center">
+                  <span className="absolute -top-0.5 -right-0.5 h-4 w-4 rounded-full bg-brand-teal text-xs text-neutral-white flex items-center justify-center">
                     {unreadCount}
                   </span>
                 )}
               </button>
 
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-[#009898] rounded-full flex items-center justify-center">
-                  <span className="text-sm font-semibold text-white">DU</span>
+                <div className="w-8 h-8 bg-brand-teal rounded-full flex items-center justify-center">
+                  <span className="text-sm font-semibold text-neutral-white">DU</span>
                 </div>
-                <span className="text-sm font-medium text-gray-900 hidden sm:block">Demo User</span>
+                <span className="text-sm font-medium text-neutral-midnight hidden sm:block">Demo User</span>
               </div>
             </div>
           </div>
