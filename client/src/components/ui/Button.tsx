@@ -16,7 +16,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
           'disabled:opacity-50 disabled:pointer-events-none',
           {
-            'bg-brand-teal text-white hover:bg-brand-teal/90 focus-visible:ring-brand-teal shadow-depth1':
+            'bg-brand-teal text-text-primary hover:bg-brand-teal/90 focus-visible:ring-brand-teal shadow-depth1':
               variant === 'primary',
             'bg-surface-hover text-text-primary hover:bg-surface-overlay focus-visible:ring-brand-teal border border-border-subtle':
               variant === 'secondary',
