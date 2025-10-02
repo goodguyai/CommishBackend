@@ -270,6 +270,141 @@ export const handlers = [
     return HttpResponse.json(injuryApocalypse);
   }),
 
+  // Dashboard Stats
+  http.get('/api/mock/dashboard/stats', () => {
+    return HttpResponse.json({
+      activeLeagues: 0,
+      rulesQueries: 127,
+      upcomingDeadlines: 5,
+      aiTokensUsed: '2.1K',
+    });
+  }),
+
+  http.get('/api/mock/integrations/discord', () => {
+    return HttpResponse.json({
+      botName: 'Fantasy Football League',
+      server: 'Dynasty League • 247 members',
+      online: true,
+      permissions: 'Configured',
+      slashCommands: 'Registered',
+      webhookVerification: 'Active',
+    });
+  }),
+
+  http.get('/api/mock/integrations/sleeper', () => {
+    return HttpResponse.json({
+      leagueName: 'Dynasty League 2024',
+      leagueId: '1234567890',
+      season: 2024,
+      week: 14,
+      lastSync: '2 min ago',
+      cacheStatus: 'Fresh',
+      apiCalls: '23/1000',
+    });
+  }),
+
+  http.get('/api/mock/slash-commands', () => {
+    return HttpResponse.json([
+      {
+        command: '/rules',
+        access: 'Public',
+        description: 'Query league rules and constitution',
+        features: ['RAG-powered responses', 'Context references', 'Define follow-up pattern'],
+      },
+      {
+        command: '/deadlines',
+        access: 'Public',
+        description: 'View upcoming league deadlines',
+        features: ['Timeline-aware', 'Countdown display', 'Exportable responses'],
+      },
+      {
+        command: '/scoring',
+        access: 'Public',
+        description: 'Display current scoring settings',
+        features: ['Simpler syntax', 'Formatted tables', 'Quick reference'],
+      },
+      {
+        command: '/config',
+        access: 'Commish Only',
+        description: 'Configure bot settings',
+        features: ['Feature flags', 'Channel settings', 'Permission controls'],
+      },
+      {
+        command: '/remind',
+        access: 'Commish Only',
+        description: 'Set league RAG reminders',
+        features: ['Force embedding refresh', 'Completion parsing', 'Progress tracking'],
+      },
+      {
+        command: '/help',
+        access: 'Public',
+        description: 'Show command help',
+        features: ['Command examples', 'Quick reference', 'Support links'],
+      },
+    ]);
+  }),
+
+  http.get('/api/mock/rag/status', () => {
+    return HttpResponse.json({
+      constitutionVersion: 'v2.1',
+      uploadedAgo: '3 days ago',
+      sections: 47,
+      embeddings: 312,
+      vectorDim: 1536,
+      avgSimilarity: 0.84,
+      recentQueries: [
+        'What happens if someone misses the draft?',
+        'Trade deadline rules for this year?',
+        'Playoff seeding tiebreakers?',
+      ],
+    });
+  }),
+
+  http.get('/api/mock/ai/status', () => {
+    return HttpResponse.json({
+      model: 'deepseek-chat',
+      functionCalling: 'Enabled',
+      requestsToday: 89,
+      avgResponse: '1.2s',
+      cacheHit: 67,
+      tokensUsed: 2147,
+      tokenUsagePercent: 21,
+    });
+  }),
+
+  http.get('/api/mock/activity', () => {
+    return HttpResponse.json([
+      {
+        id: 'a1',
+        icon: '🏈',
+        text: 'Sleeper sync completed',
+        details: 'Dynasty League 2024 • 5 minutes ago',
+        timestamp: '200ms',
+      },
+      {
+        id: 'a2',
+        icon: '⚡',
+        text: '/rules command executed',
+        details: 'John (@blitznblitz) • Jan 2, 8 minutes ago',
+        timestamp: '1.1s',
+      },
+      {
+        id: 'a3',
+        icon: '📊',
+        text: 'Weekly digest generated',
+        details: 'Sent to #general channel • about 1 hour ago',
+        timestamp: '1.4s',
+      },
+      {
+        id: 'a4',
+        icon: '📚',
+        text: 'Constitution reindexed',
+        details: '312 embeddings updated • about 3 hours ago',
+        timestamp: '43.0s',
+      },
+    ]);
+  }),
+
   // Terminal
   http.post('/api/mock/terminal/execute', async ({ request }) => {
     const body = await request.json() as any;
