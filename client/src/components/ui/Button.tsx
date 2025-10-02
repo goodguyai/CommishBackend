@@ -12,15 +12,15 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         ref={ref}
         className={clsx(
-          'inline-flex items-center justify-center rounded-md font-medium transition-colors',
+          'inline-flex items-center justify-center rounded-md font-medium transition-all',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
           'disabled:opacity-50 disabled:pointer-events-none',
           {
-            'bg-[#009898] text-white hover:bg-[#007878] focus-visible:ring-[#009898]':
+            'bg-brand-teal text-white hover:bg-brand-teal/90 focus-visible:ring-brand-teal shadow-depth1':
               variant === 'primary',
-            'bg-gray-100 text-gray-900 hover:bg-gray-200 focus-visible:ring-gray-500':
+            'bg-surface-hover text-text-primary hover:bg-surface-overlay focus-visible:ring-brand-teal border border-border-subtle':
               variant === 'secondary',
-            'hover:bg-gray-100 hover:text-gray-900 focus-visible:ring-gray-500':
+            'hover:bg-surface-hover hover:text-text-primary text-text-secondary focus-visible:ring-brand-teal':
               variant === 'ghost',
             'text-sm px-3 py-1.5': size === 'sm',
             'text-base px-4 py-2': size === 'md',

@@ -10,9 +10,9 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
         type={type}
         ref={ref}
         className={clsx(
-          'flex h-10 w-full rounded-md border border-gray-200 bg-white px-3 py-2',
-          'text-sm text-gray-900 placeholder:text-gray-400',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#009898] focus-visible:ring-offset-0',
+          'flex h-10 w-full rounded-md border border-border-default bg-surface-elevated px-3 py-2',
+          'text-sm text-text-primary placeholder:text-text-muted',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal focus-visible:ring-offset-0',
           'disabled:cursor-not-allowed disabled:opacity-50',
           className
         )}
@@ -32,9 +32,9 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
       <textarea
         ref={ref}
         className={clsx(
-          'flex min-h-[80px] w-full rounded-md border border-gray-200 bg-white px-3 py-2',
-          'text-sm text-gray-900 placeholder:text-gray-400',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#009898] focus-visible:ring-offset-0',
+          'flex min-h-[80px] w-full rounded-md border border-border-default bg-surface-elevated px-3 py-2',
+          'text-sm text-text-primary placeholder:text-text-muted',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal focus-visible:ring-offset-0',
           'disabled:cursor-not-allowed disabled:opacity-50',
           className
         )}
