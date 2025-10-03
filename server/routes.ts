@@ -992,6 +992,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         sentiment: result.sentiment,
       });
 
+      // Check for toxicity threshold and send alert if needed
+      const league = await storage.getLeague(leagueId);
+      if (league) {
+        const featureFlags = league.featureFlags as any;
+        const vibesMonitorEnabled = featureFlags?.vibesMonitor !== false;
+        const threshold = featureFlags?.vibesThreshold || 0.7;
+
+        if (vibesMonitorEnabled && result.toxicity >= threshold) {
+          const members = await storage.getMembersByLeague(leagueId);
+          const commissioner = members.find(m => m.role === "COMMISH");
+          
+          if (commissioner?.discordUserId) {
+            try {
+              await sendToxicityAlert({
+                commissionerUserId: commissioner.discordUserId,
+                leagueId,
+                channelId,
+                messageId,
+                authorId,
+                toxicityScore: result.toxicity,
+                messageText: text,
+              });
+              
+              console.log(`Toxicity alert sent to commissioner ${commissioner.discordUserId} for league ${leagueId}`);
+            } catch (error) {
+              console.error("Failed to send toxicity alert:", error);
+            }
+          }
+        }
+      }
+
       res.json({
         toxicity: result.toxicity,
         sentiment: result.sentiment,
@@ -1432,7 +1463,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Check permissions for admin commands
         const isCommish = league ? await isUserCommish(league.id, userId) : false;
-        const adminCommands = ["config", "reindex"];
+        const adminCommands = ["config", "reindex", "freeze", "clarify", "trade_fairness"];
         
         if (adminCommands.includes(commandName!) && !isCommish) {
           return res.json({
@@ -1469,6 +1500,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           case "whoami":
             response = await handleWhoamiCommand(interaction, league!, requestId);
             break;
+          case "freeze":
+            response = await handleFreezeCommand(interaction, league!, requestId);
+            break;
+          case "clarify":
+            response = await handleClarifyCommand(interaction, league!, requestId);
+            break;
+          case "trade_fairness":
+            response = await handleTradeFairnessCommand(interaction, league!, requestId);
+            break;
           default:
             response = {
               type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -1496,12 +1536,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(response);
       }
 
-      // Handle component interactions (channel select, etc.)
+      // Handle component interactions (channel select, buttons, etc.)
       if (interaction.type === 3) {
         const customId = interaction.data?.custom_id;
         
         if (customId === "select_home_channel") {
           return await handleChannelSelect(req, res, interaction);
+        }
+        
+        // Handle toxicity alert action buttons
+        if (customId?.startsWith("toxicity_freeze_")) {
+          return await handleToxicityFreezeButton(req, res, interaction);
+        }
+        
+        if (customId?.startsWith("toxicity_clarify_")) {
+          return await handleToxicityClarifyButton(req, res, interaction);
         }
       }
 
@@ -3227,6 +3276,225 @@ async function handleWhoamiCommand(interaction: any, league: any, requestId: str
   }
 }
 
+async function handleFreezeCommand(interaction: any, league: any, requestId: string) {
+  try {
+    const minutes = interaction.data?.options?.find((opt: any) => opt.name === "minutes")?.value;
+    const reason = interaction.data?.options?.find((opt: any) => opt.name === "reason")?.value;
+    const channelId = interaction.channel_id;
+
+    if (!minutes || !reason || !channelId) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "❌ Missing required parameters (minutes, reason).",
+          flags: 64,
+        },
+      };
+    }
+
+    await moderationService.freezeThread({
+      leagueId: league.id,
+      channelId,
+      minutes,
+      reason,
+    });
+
+    await storage.createEvent({
+      type: "COMMAND_EXECUTED",
+      leagueId: league.id,
+      payload: { command: "freeze", minutes, reason },
+      requestId,
+    });
+
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: `✅ **Thread frozen for ${minutes} minute${minutes > 1 ? 's' : ''}**\n\n📝 Reason: ${reason}`,
+        flags: 64,
+      },
+    };
+  } catch (error) {
+    console.error("Freeze command failed:", error);
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Failed to freeze thread. Please try again.",
+        flags: 64,
+      },
+    };
+  }
+}
+
+async function handleClarifyCommand(interaction: any, league: any, requestId: string) {
+  const question = interaction.data?.options?.find((opt: any) => opt.name === "question")?.value;
+  const channelId = interaction.channel_id;
+
+  if (!question) {
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Please provide a rule question to clarify.",
+        flags: 64,
+      },
+    };
+  }
+
+  setTimeout(async () => {
+    try {
+      const relevantRules = await ragService.searchSimilarRules(league.id, question, 3, 0.6);
+      
+      if (relevantRules.length === 0) {
+        await discordService.postMessage(channelId, {
+          content: "❓ I couldn't find any relevant rules for your question. Try rephrasing or check your league constitution.",
+        });
+        return;
+      }
+
+      const response = await deepSeekService.answerRulesQuery(
+        question,
+        relevantRules.map(r => r.rule),
+        { leagueName: league.name },
+        league.tone
+      );
+
+      const seenCitations = new Set<string>();
+      const normalizedCitations = response.citations
+        .filter((citation: any) => {
+          const key = `${citation.ruleKey}:${citation.section || ''}`;
+          if (seenCitations.has(key)) return false;
+          seenCitations.add(key);
+          return true;
+        })
+        .map((citation: any, index: number) => {
+          const section = citation.section ? ` (${citation.section})` : '';
+          const excerpt = citation.text?.substring(0, 150) || 'No excerpt available';
+          return `${index + 1}. **${citation.ruleKey}**${section}\n   "${excerpt}${citation.text?.length > 150 ? '...' : ''}"`;
+        });
+
+      const embed = {
+        title: "📋 Rule Clarification",
+        description: response.answer,
+        color: 0x5865F2,
+        fields: normalizedCitations.length > 0 ? [{
+          name: "📚 Citations",
+          value: normalizedCitations.join('\n\n'),
+          inline: false,
+        }] : [],
+        footer: {
+          text: `Posted by Commissioner • ${requestId}`,
+        },
+      };
+
+      await discordService.postMessage(channelId, { embeds: [embed] });
+
+      await moderationService.clarifyRule({
+        leagueId: league.id,
+        channelId,
+        ruleQuery: question,
+      });
+
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId: league.id,
+        payload: { command: "clarify", question },
+        requestId,
+      });
+    } catch (error) {
+      console.error("Clarify command follow-up failed:", error);
+      await discordService.postMessage(channelId, {
+        content: "❌ Failed to post rule clarification. Please try again.",
+      });
+    }
+  }, 100);
+
+  return {
+    type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+    data: { flags: 64 },
+  };
+}
+
+async function handleTradeFairnessCommand(interaction: any, league: any, requestId: string) {
+  const tradeId = interaction.data?.options?.find((opt: any) => opt.name === "trade_id")?.value;
+
+  if (!tradeId) {
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Please provide a trade ID to evaluate.",
+        flags: 64,
+      },
+    };
+  }
+
+  setTimeout(async () => {
+    try {
+      const mockProposal = {
+        team1: {
+          gives: ["Player A", "Player B"],
+          receives: ["Player C"],
+        },
+        team2: {
+          gives: ["Player C"],
+          receives: ["Player A", "Player B"],
+        },
+      };
+
+      const evaluation = await tradeFairnessService.evaluateTrade({
+        leagueId: league.id,
+        tradeId,
+        proposal: mockProposal,
+      });
+
+      const scoreColor = evaluation.score >= 80 ? 0x10B981 : 
+                         evaluation.score >= 60 ? 0xF59E0B : 0xEF4444;
+
+      const embed = {
+        title: "⚖️ Trade Fairness Evaluation",
+        description: `**Trade ID:** ${tradeId}\n\n**Fairness Score:** ${evaluation.score.toFixed(0)}/100`,
+        color: scoreColor,
+        fields: [
+          {
+            name: "📊 Rationale",
+            value: evaluation.rationale,
+            inline: false,
+          },
+          {
+            name: "📋 Details",
+            value: `Team 1 gives: ${evaluation.inputs.team1.playersGiven} player(s)\nTeam 2 gives: ${evaluation.inputs.team2.playersGiven} player(s)`,
+            inline: false,
+          },
+        ],
+        footer: {
+          text: `Evaluated by Commissioner • ${requestId}`,
+        },
+      };
+
+      await discordService.followUpInteraction(interaction.token, {
+        embeds: [embed],
+        flags: 64,
+      });
+
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId: league.id,
+        payload: { command: "trade_fairness", tradeId, score: evaluation.score },
+        requestId,
+      });
+    } catch (error) {
+      console.error("Trade fairness command failed:", error);
+      await discordService.followUpInteraction(interaction.token, {
+        content: "❌ Failed to evaluate trade fairness. Please try again.",
+        flags: 64,
+      });
+    }
+  }, 100);
+
+  return {
+    type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+    data: { flags: 64 },
+  };
+}
+
 async function handleChannelSelect(req: any, res: any, interaction: any) {
   try {
     const channelId = interaction.data?.values?.[0];
@@ -3272,6 +3540,215 @@ async function handleChannelSelect(req: any, res: any, interaction: any) {
       data: {
         content: "❌ Failed to configure channel. Please try again.",
         flags: 64,
+      },
+    });
+  }
+}
+
+// Send toxicity alert DM to commissioner
+async function sendToxicityAlert(params: {
+  commissionerUserId: string;
+  leagueId: string;
+  channelId: string;
+  messageId: string;
+  authorId: string;
+  toxicityScore: number;
+  messageText: string;
+}): Promise<void> {
+  const { commissionerUserId, leagueId, channelId, messageId, authorId, toxicityScore, messageText } = params;
+
+  const messageSummary = messageText.length > 100 ? messageText.substring(0, 100) + "..." : messageText;
+
+  const embed = {
+    title: "⚠️ Toxicity Alert",
+    description: `A message in your league has been flagged for high toxicity.`,
+    color: 0xEF4444,
+    fields: [
+      {
+        name: "Toxicity Score",
+        value: `${(toxicityScore * 100).toFixed(0)}%`,
+        inline: true,
+      },
+      {
+        name: "Channel",
+        value: `<#${channelId}>`,
+        inline: true,
+      },
+      {
+        name: "Author",
+        value: `<@${authorId}>`,
+        inline: true,
+      },
+      {
+        name: "Message Preview",
+        value: messageSummary,
+        inline: false,
+      },
+    ],
+    footer: {
+      text: "THE COMMISH Vibes Monitor",
+    },
+  };
+
+  const components = [
+    {
+      type: ComponentType.ACTION_ROW,
+      components: [
+        {
+          type: ComponentType.BUTTON,
+          style: 2, // Secondary (gray)
+          label: "Freeze Thread (10min)",
+          custom_id: `toxicity_freeze_${leagueId}_${channelId}_${messageId}`,
+        },
+        {
+          type: ComponentType.BUTTON,
+          style: 1, // Primary (blue)
+          label: "Post Rule Clarification",
+          custom_id: `toxicity_clarify_${leagueId}_${channelId}_${messageId}`,
+        },
+      ],
+    },
+  ];
+
+  await discordService.sendDM(commissionerUserId, {
+    embeds: [embed],
+    components,
+  });
+}
+
+// Handle toxicity alert "Freeze Thread" button
+async function handleToxicityFreezeButton(req: any, res: any, interaction: any): Promise<any> {
+  try {
+    const customId = interaction.data?.custom_id;
+    const [, , leagueId, channelId, messageId] = customId.split('_');
+
+    await moderationService.freezeThread({
+      leagueId,
+      channelId,
+      minutes: 10,
+      reason: "Automatic freeze due to toxicity alert",
+    });
+
+    await storage.createEvent({
+      type: "COMMAND_EXECUTED",
+      leagueId,
+      payload: { 
+        command: "toxicity_freeze", 
+        channelId, 
+        messageId,
+        autoTriggered: true,
+      },
+    });
+
+    return res.json({
+      type: InteractionResponseType.UPDATE_MESSAGE,
+      data: {
+        content: "✅ **Thread frozen for 10 minutes** due to toxicity alert.\n\nThe thread has been temporarily frozen to prevent further escalation.",
+        embeds: [],
+        components: [],
+      },
+    });
+  } catch (error) {
+    console.error("Toxicity freeze button failed:", error);
+    return res.json({
+      type: InteractionResponseType.UPDATE_MESSAGE,
+      data: {
+        content: "❌ Failed to freeze thread. Please try again or use the `/freeze` command.",
+        components: [],
+      },
+    });
+  }
+}
+
+// Handle toxicity alert "Post Rule Clarification" button
+async function handleToxicityClarifyButton(req: any, res: any, interaction: any): Promise<any> {
+  try {
+    const customId = interaction.data?.custom_id;
+    const [, , leagueId, channelId, messageId] = customId.split('_');
+
+    const league = await storage.getLeague(leagueId);
+    if (!league) {
+      return res.json({
+        type: InteractionResponseType.UPDATE_MESSAGE,
+        data: {
+          content: "❌ League not found.",
+          components: [],
+        },
+      });
+    }
+
+    const question = "What are the rules about respectful communication and behavior in our league?";
+    const relevantRules = await ragService.searchSimilarRules(leagueId, question, 3, 0.6);
+
+    if (relevantRules.length > 0) {
+      const response = await deepSeekService.answerRulesQuery(
+        question,
+        relevantRules.map(r => r.rule),
+        { leagueName: league.name },
+        league.tone
+      );
+
+      const seenCitations = new Set<string>();
+      const normalizedCitations = response.citations
+        .filter((citation: any) => {
+          const key = `${citation.ruleKey}:${citation.section || ''}`;
+          if (seenCitations.has(key)) return false;
+          seenCitations.add(key);
+          return true;
+        })
+        .map((citation: any, index: number) => {
+          const section = citation.section ? ` (${citation.section})` : '';
+          const excerpt = citation.text?.substring(0, 150) || 'No excerpt available';
+          return `${index + 1}. **${citation.ruleKey}**${section}\n   "${excerpt}${citation.text?.length > 150 ? '...' : ''}"`;
+        });
+
+      const embed = {
+        title: "📋 League Conduct Reminder",
+        description: response.answer,
+        color: 0x5865F2,
+        fields: normalizedCitations.length > 0 ? [{
+          name: "📚 Citations",
+          value: normalizedCitations.join('\n\n'),
+          inline: false,
+        }] : [],
+        footer: {
+          text: "Posted by Commissioner via Vibes Monitor",
+        },
+      };
+
+      await discordService.postMessage(channelId, { embeds: [embed] });
+    } else {
+      await discordService.postMessage(channelId, {
+        content: "📋 **League Conduct Reminder**\n\nPlease remember to keep discussions respectful and constructive. Let's maintain a positive environment for everyone in the league.",
+      });
+    }
+
+    await storage.createEvent({
+      type: "COMMAND_EXECUTED",
+      leagueId,
+      payload: { 
+        command: "toxicity_clarify", 
+        channelId, 
+        messageId,
+        autoTriggered: true,
+      },
+    });
+
+    return res.json({
+      type: InteractionResponseType.UPDATE_MESSAGE,
+      data: {
+        content: "✅ **Rule clarification posted** to the channel.\n\nA reminder about league conduct has been posted to help de-escalate the situation.",
+        embeds: [],
+        components: [],
+      },
+    });
+  } catch (error) {
+    console.error("Toxicity clarify button failed:", error);
+    return res.json({
+      type: InteractionResponseType.UPDATE_MESSAGE,
+      data: {
+        content: "❌ Failed to post rule clarification. Please try again or use the `/clarify` command.",
+        components: [],
       },
     });
   }

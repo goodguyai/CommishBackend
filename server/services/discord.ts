@@ -310,6 +310,49 @@ export class DiscordService {
     }
   }
 
+  // Send DM to user
+  async sendDM(userId: string, content: any): Promise<string> {
+    try {
+      // First, create a DM channel with the user
+      const createDMResponse = await fetch(`${this.baseUrl}/users/@me/channels`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${this.botToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          recipient_id: userId,
+        }),
+      });
+
+      if (!createDMResponse.ok) {
+        throw new Error(`Failed to create DM channel: ${createDMResponse.statusText}`);
+      }
+
+      const dmChannel = await createDMResponse.json();
+
+      // Then, send the message to that DM channel
+      const sendMessageResponse = await fetch(`${this.baseUrl}/channels/${dmChannel.id}/messages`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${this.botToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(content),
+      });
+
+      if (!sendMessageResponse.ok) {
+        throw new Error(`Failed to send DM: ${sendMessageResponse.statusText}`);
+      }
+
+      const message = await sendMessageResponse.json();
+      return message.id;
+    } catch (error) {
+      console.error("Failed to send DM:", error);
+      throw error;
+    }
+  }
+
   // Standard slash commands
   getSlashCommands(): any[] {
     return [
@@ -444,6 +487,50 @@ export class DiscordService {
       {
         name: "whoami",
         description: "Show your member info and role in the league",
+      },
+      {
+        name: "freeze",
+        description: "Freeze thread to prevent escalation (Commissioner only)",
+        options: [
+          {
+            name: "minutes",
+            description: "Duration in minutes (1-1440)",
+            type: 4, // INTEGER
+            required: true,
+            min_value: 1,
+            max_value: 1440,
+          },
+          {
+            name: "reason",
+            description: "Why freezing the thread",
+            type: 3, // STRING
+            required: true,
+          },
+        ],
+      },
+      {
+        name: "clarify",
+        description: "Post rule clarification in channel (Commissioner only)",
+        options: [
+          {
+            name: "question",
+            description: "Rule question to clarify",
+            type: 3, // STRING
+            required: true,
+          },
+        ],
+      },
+      {
+        name: "trade_fairness",
+        description: "Evaluate trade fairness (Commissioner only)",
+        options: [
+          {
+            name: "trade_id",
+            description: "Trade ID to evaluate",
+            type: 3, // STRING
+            required: true,
+          },
+        ],
       },
     ];
   }
