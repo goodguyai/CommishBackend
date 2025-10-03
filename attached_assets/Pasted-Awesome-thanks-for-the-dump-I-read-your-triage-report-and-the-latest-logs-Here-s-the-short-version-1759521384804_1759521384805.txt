@@ -1,0 +1,237 @@
+Awesome—thanks for the dump. I read your triage report and the latest logs. Here’s the short version of what’s going on and a clear, “paste-this-to-Replit” work order to get you unblocked and finish the polish pass.
+
+⸻
+
+What’s happening
+	•	Your /api endpoints are fine (health/events return JSON).
+	•	The frontend HTML for key pages is being served from cache (CDN / proxy) and still reflects an older build—so the new data-testids and other UI fixes don’t show up in the DOM.
+	•	You already added the Vite guard for /api/*; this is confirmed OK. The blocker is HTML caching for the index.html fallback and static HTML routes.
+
+⸻
+
+What to do (copy/paste to Replit Agent)
+
+Guardrails (do not change):
+	•	Keep APP_BASE_URL=https://thecommish.replit.app (no trailing slash).
+	•	Database stays Supabase. Do not introduce Neon/Replit PG.
+	•	Read env only via the centralized env service (no new process.env reads in routes).
+	•	Keep Discord /api/discord/interactions on express.raw + Ed25519 verification.
+	•	Keep the /api-before-Vite router order & existing Vite /api/* guards intact.
+	•	No schema changes outside migrations.
+
+⸻
+
+0) Confirm we’re on the latest code, then rebuild & deploy
+	1.	Hard rebuild the client and restart the server:
+
+npm run build --silent || npm run build
+pkill -f node || true
+npm start &
+
+
+	2.	Hit these (no cache) to confirm the HTML is still stale:
+
+curl -s -H 'Cache-Control: no-cache' 'https://thecommish.replit.app/?cb='$(date +%s) | head -n 20
+curl -s 'https://thecommish.replit.app/setup?cb='$(date +%s) | head -n 20
+
+If you still don’t see the new data-testid attributes in the HTML, proceed to step 1.
+
+⸻
+
+1) Kill stale HTML caching for the SPA (no impact to assets)
+
+Goal: Serve index.html and SPA fallbacks with no-store so the CDN can’t reuse stale HTML, while still allowing hashed assets to be cached normally.
+
+1A) server/vite.ts (dev middleware) — ensure HTML is no-store
+
+Replace the catch-all block with this exact version (keeps your nanoid() for live reload, just adds headers):
+
+// DEV: Vite middlewares first
+app.use(vite.middlewares);
+
+// DEV: Serve index.html with NO STORE so CDN never caches HTML
+app.use("*", async (req, res, next) => {
+  // let /api pass
+  if (req.originalUrl.startsWith("/api")) return next();
+
+  try {
+    const clientTemplate = path.resolve(import.meta.dirname, "..", "client", "index.html");
+    let template = await fs.promises.readFile(clientTemplate, "utf-8");
+
+    // force a new main.tsx query param each render in dev
+    template = template.replace(
+      `src="/src/main.tsx"`,
+      `src="/src/main.tsx?v=${nanoid()}"`,
+    );
+
+    const page = await vite.transformIndexHtml(req.originalUrl, template);
+
+    res
+      .status(200)
+      .set({
+        "Content-Type": "text/html",
+        // kill HTML caching at every layer
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "Surrogate-Control": "no-store",
+      })
+      .end(page);
+  } catch (e) {
+    vite.ssrFixStacktrace(e as Error);
+    next(e);
+  }
+});
+
+1B) server/vite.ts (prod serveStatic) — set no-store for HTML fallback
+
+In export function serveStatic(app: Express), just before res.sendFile(...), add the same headers:
+
+// fall through to index.html if the file doesn't exist
+app.use("*", (_req, res) => {
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+    "Surrogate-Control": "no-store",
+  });
+  res.sendFile(path.resolve(distPath, "index.html"));
+});
+
+Note: We are not disabling caching for hashed JS/CSS assets from /dist—only for the HTML shell. That solves your stale DOM while keeping performance.
+
+1C) Add a build-version header (optional but helpful)
+
+In server/index.ts, right after you create app, add:
+
+const BUILD_VERSION = process.env.BUILD_VERSION || new Date().toISOString();
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api")) {
+    res.setHeader("X-Asset-Version", BUILD_VERSION);
+  }
+  next();
+});
+
+Then set a new BUILD_VERSION in Replit Secrets (any new value) whenever you deploy.
+
+⸻
+
+2) Redeploy & force fresh HTML
+	1.	Rebuild & restart:
+
+npm run build
+pkill -f node || true
+npm start &
+
+
+	2.	Hit with cache-buster and verify new HTML shows your data-testids:
+
+curl -s 'https://thecommish.replit.app/?cb='$(date +%s) | grep -o 'data-testid="cta-try-demo"' | wc -l
+curl -s 'https://thecommish.replit.app/setup?cb='$(date +%s) | head -n 40
+
+
+	3.	If your Replit deployment has a CDN purge button, click it once. If not, the new headers + cb query param are enough.
+
+⸻
+
+3) Re-run the automated UX crawl (Playwright) and capture output
+
+Run the suite against the live URL with a cache-buster on navigation:
+
+npx playwright test --config=playwright.config.ts
+
+# or directly:
+npx playwright test tests/e2e/*.spec.ts --workers=2
+
+	•	Ensure your tests navigate with something like:
+
+await page.goto(`${APP_BASE_URL}/?cb=${Date.now()}`);
+
+
+	•	Confirm screenshots and console logs land under playwright-report or test-results/.
+
+⸻
+
+4) Fix any remaining test failures in this order
+	1.	Any route returning HTML instead of JSON
+	•	Verify /api/* guards in vite.ts.
+	•	Ensure no global express.json() is mounted before Discord interactions route (keep raw for that one only).
+	•	Ensure /api router is mounted before Vite middlewares.
+	2.	CSRF failures on POST/PATCH in browser tests
+	•	Confirm your CSRF token middleware is applied to /api/v2/ only and that the client automatically includes it (you said this was added—just double-check it’s present on the failing requests).
+	3.	Discord post reliability
+	•	Use your idempotent post wrapper; check rate-limit logging (should backoff 1s/2s/4s).
+	•	Test via admin endpoint:
+
+curl -s -X POST "$APP_BASE_URL/api/discord/post-test" \
+  -H "X-Admin-Key: $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"guildId":"<GID>","channelId":"<CID>","message":"Test from post-test"}' | jq
+
+
+	4.	Setup Wizard step issues
+	•	Test Step 1: Discord → login → guild list → channel list → save
+
+curl -s "$APP_BASE_URL/api/v2/discord/channels?guildId=<GID>" | jq '.channels[0]'
+
+
+	•	Test Step 2: Sleeper:
+
+curl -s "$APP_BASE_URL/api/v2/sleeper/leagues?username=<handle>&season=$(date +%Y)" | jq '.[0]'
+
+
+	•	Test Step 3: Index rules:
+
+curl -s -X POST "$APP_BASE_URL/api/rag/index/<LEAGUE_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"Section 1...","contentType":"text/plain","title":"Rules","version":"beta-1"}' | jq
+
+
+
+⸻
+
+5) Quick UX polish pass (super high ROI)
+
+Once tests are green, do these micro-polish items:
+	•	Buttons / busy states
+Ensure every primary action (Save, Continue, Activate) shows a spinner and disables during fetch, and shows a success toast.
+	•	Owner mapping page
+	•	Add “Unmapped” vs “Mapped” columns.
+	•	Add a search box for Discord users list.
+	•	Add a one-tap “Auto-map by username similarity (preview)” button that suggests matches (no write until user confirms).
+	•	Digest controls (Dashboard)
+	•	Dropdown (Daily / Weekly / Off); “Run now” kicks /api/digest/run-now?leagueId=... (admin-key guarded in dev).
+	•	Bot personality
+	•	Radio group (Neutral / Sassy / Formal / Meme-y) with 1-line live preview that changes.
+	•	Empty states
+	•	Cards for Polls, Highlights, Rivalries: show “Nothing yet—generate a highlight from last week” CTA, which calls your compute endpoint.
+
+These are fast changes that make it feel “real” and will pass your “feels complete” bar.
+
+⸻
+
+6) Sanity checks (paste & run)
+
+# Health
+curl -s "$APP_BASE_URL/api/health" | jq
+
+# Events (should be JSON)
+curl -s "$APP_BASE_URL/api/events?limit=5" | jq
+
+# A known JSON route that was flaky (should NOT be HTML)
+curl -I "$APP_BASE_URL/api/leagues/00000000-0000-0000-0000-000000000000?cb=$(date +%s)"
+
+# Playwright run
+npx playwright test --reporter=list
+
+
+⸻
+
+Why this works
+	•	No-store for HTML only fixes the stale DOM problem while keeping asset caching fast (Vite’s hashed files are fine to cache).
+	•	Cache-buster on navigation guarantees your test runner sees the new HTML even if a CDN edge still holds an old copy.
+	•	We didn’t touch your API/Discord guardrails, Supabase, or env service usage.
+
+⸻
+
+If you paste the work order above into Replit and run it straight, your Playwright suite should flip from “blocked” to green. From there, we can keep layering the commissioner QoL features you want (owner auto-map, reminder presets, digest previews, etc.).

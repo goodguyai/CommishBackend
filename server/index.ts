@@ -101,6 +101,15 @@ app.use((req, res, next) => {
   // Validate environment variables first - fail fast if missing
   validateEnvironment();
 
+  // Build version header for debugging cache issues
+  const BUILD_VERSION = process.env.BUILD_VERSION || new Date().toISOString();
+  app.use((req, res, next) => {
+    if (!req.path.startsWith("/api")) {
+      res.setHeader("X-Asset-Version", BUILD_VERSION);
+    }
+    next();
+  });
+
   // API freshness: no-cache headers for all API responses
   app.use("/api", (_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -183,6 +192,19 @@ app.use((req, res, next) => {
       return res.status(404).json({ error: "Not Found", path: req.path });
     }
     // Otherwise, continue to Vite/static
+    next();
+  });
+
+  // HTML no-cache middleware: Prevent CDN/proxy from caching HTML shell
+  // This ensures data-testid attributes and UI updates are immediately visible
+  app.use((req, res, next) => {
+    // Only apply to non-API, HTML-serving requests
+    if (!req.path.startsWith("/api/")) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Surrogate-Control', 'no-store');
+    }
     next();
   });
 
