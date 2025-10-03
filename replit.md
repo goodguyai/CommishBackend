@@ -6,6 +6,48 @@ THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrate
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes
+
+**Phase 1 Co-Commissioner Features (October 2025):**
+- **Owner Mapping System**: Dashboard UI for mapping Discord users to Sleeper team owners
+  - Interactive table showing Discord↔Sleeper mappings
+  - "Map Owner" dialog for creating/updating mappings
+  - Consolidated members table with owner_mappings as compatibility view
+  - API: GET/POST /api/leagues/:id/members
+
+- **Reminder Management**: Automated reminder scheduling and configuration
+  - Visual reminder cards with enable/disable toggles
+  - Create/edit/delete reminders via UI
+  - Support for reminder types: lineup_lock, waivers, trade_deadline, bye_week, custom
+  - Cron-based scheduling with timezone support
+  - API: GET/POST /api/leagues/:id/reminders, PATCH/DELETE /api/reminders/:id
+
+- **League Settings Panel**: Centralized configuration UI
+  - Tone preference (Professional, Casual, Roast Mode)
+  - Timezone selection
+  - Feature flag toggles (auto-digest, polls, trade-insights)
+  - API: PATCH /api/leagues/:id/settings
+
+- **Database Schema Updates**: Migration 0005_co_commish_phase1.sql
+  - Added tables: reminders, votes, sentiment_logs, trade_insights
+  - Enhanced members table with discordUsername field
+  - Enhanced polls table with anonymous and status fields
+  - Migrated owner_mappings to view for backward compatibility
+
+- **Demo/Testing Endpoints**: Development-only endpoints for testing without auth
+  - GET /api/demo/leagues - fetch all leagues
+  - GET /api/demo/leagues/:id - fetch single league
+
+**Dashboard Redesign (October 2025):**
+- **League Management Focus**: Dashboard redesigned from team management to league administration focus
+- **Top Stats**: Active Leagues (0), Rules Queries (127), Upcoming Deadlines (5), AI Tokens Used (2.1K)
+- **Discord Integration Card**: Shows bot status, permissions, slash commands registration, webhook verification
+- **Sleeper Integration Card**: Displays league info, season/week data, sync status, cache status, API usage
+- **Available Slash Commands**: Grid of 6 Discord commands (/rules, /deadlines, /scoring, /config, /remind, /help) with access badges
+- **RAG System Status**: Constitution version, sections, embeddings, vector dimensions, recent queries, reindex button
+- **AI Assistant (DeepSeek)**: Model info, request metrics, response times, cache hit rates, token usage with progress bar
+- **Recent Activity Log**: System events with timestamps (Sleeper sync, command execution, digest generation, reindexing)
+
 ## System Architecture
 
 ### UI/UX Decisions
@@ -42,7 +84,7 @@ The frontend uses React with TypeScript, Vite, and shadcn/ui components built on
 - **Toast System**: Consistent feedback using sonner library across all interactive elements
 
 ### Technical Implementations
-- **Frontend**: React, TypeScript, Vite, Wouter (routing), TanStack Query (server state), Zustand (client state).
+- **Frontend**: React, TypeScript, Vite, Wouter (routing), TanStack Query (server state), Zustand (client state). Dashboard features owner mapping, reminder management, and league settings with TanStack Query state management.
 - **Backend**: Node.js with Express, TypeScript. Modular service-oriented pattern for Discord, Sleeper, DeepSeek LLM, and RAG functionalities.
 - **Database**: PostgreSQL with Drizzle ORM and pgvector extension for vector storage. Supabase is used for managed hosting.
 - **Discord Integration**: Ed25519 signature verification, slash commands, OAuth2, component interactions.
@@ -54,6 +96,7 @@ The frontend uses React with TypeScript, Vite, and shadcn/ui components built on
 ### System Design Choices
 - **Event-Driven Architecture**: Custom EventBus for asynchronous operations and system events.
 - **Feature Flags**: Per-league configuration for bot features.
+- **Demo Mode**: Development endpoints (`/api/demo/*`) bypass authentication for UI testing and development workflows.
 - **Robust Error Handling**: Comprehensive error handling and event logging throughout the system.
 - **Scalability**: Designed for potential future enhancements like retry logic for transient failures and more advanced Sleeper API integrations.
 - **Developer Tools**: Includes admin utility endpoints and a developer dashboard section for command registration, test messages, and log access.
