@@ -79,11 +79,26 @@ export const leagues = pgTable("leagues", {
     digest: true,
     trade_helper: false,
     autoMeme: false,
+    digestEnabled: true,
+    highlights: false,
+    rivalries: false,
+    creativeTrashTalk: false,
+    deepStats: false,
     reminders: {
       lineupLock: true,
       waiver: true,
       tradeDeadline: true
     }
+  }),
+  channels: jsonb("channels").default({
+    digests: null,
+    reminders: null,
+    polls: null,
+    highlights: null
+  }),
+  personality: jsonb("personality").default({
+    style: "neutral",
+    customTemplate: null
   }),
   modelPrefs: jsonb("model_prefs").default({
     maxTokens: 1000,
@@ -372,6 +387,8 @@ export const insertLeagueSchema = createInsertSchema(leagues).pick({
   tone: true,
   featureFlags: true,
   modelPrefs: true,
+  channels: true,
+  personality: true,
 });
 
 export const insertMemberSchema = createInsertSchema(members).pick({

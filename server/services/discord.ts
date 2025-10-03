@@ -262,23 +262,67 @@ export class DiscordService {
   }
 
   // Get guild channels
-  async getGuildChannels(guildId: string): Promise<any[]> {
-    const url = `${this.baseUrl}/guilds/${guildId}/channels`;
-    
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bot ${this.botToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch channels: ${response.statusText}`);
+  async getGuildChannels(guildId: string): Promise<Array<{id: string, name: string, type: number}>> {
+    try {
+      const response = await fetch(
+        `https://discord.com/api/v10/guilds/${guildId}/channels`,
+        {
+          headers: {
+            Authorization: `Bot ${this.botToken}`,
+          },
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`Discord API error: ${response.status}`);
+      }
+      
+      const channels = await response.json();
+      
+      // Filter for text channels (type 0) and threads (type 11)
+      return channels
+        .filter((ch: any) => ch.type === 0 || ch.type === 11)
+        .map((ch: any) => ({
+          id: ch.id,
+          name: ch.name,
+          type: ch.type
+        }));
+    } catch (error) {
+      console.error("Failed to get guild channels:", error);
+      throw error;
     }
+  }
 
-    const channels = await response.json();
-    // Filter to text channels (type 0) where bot can send messages
-    return channels.filter((ch: any) => ch.type === 0);
+  // Get guild members
+  async getGuildMembers(guildId: string): Promise<Array<{id: string, username: string, avatar?: string}>> {
+    try {
+      const response = await fetch(
+        `https://discord.com/api/v10/guilds/${guildId}/members?limit=1000`,
+        {
+          headers: {
+            Authorization: `Bot ${this.botToken}`,
+          },
+        }
+      );
+      
+      if (!response.ok) {
+        console.warn("Could not fetch guild members, may need GUILD_MEMBERS intent");
+        return [];
+      }
+      
+      const members = await response.json();
+      
+      return members
+        .filter((m: any) => !m.user.bot)
+        .map((m: any) => ({
+          id: m.user.id,
+          username: m.user.username,
+          avatar: m.user.avatar,
+        }));
+    } catch (error) {
+      console.error("Failed to get guild members:", error);
+      return [];
+    }
   }
 
   // Post message to channel

@@ -1,273 +1,184 @@
-import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Users, CheckCircle, AlertCircle, Save } from "lucide-react";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 
 interface OwnerMappingProps {
   leagueId: string;
 }
 
-interface DiscordMember {
+interface TeamOwner {
   id: string;
-  discordUserId: string;
-  discordUsername: string;
+  leagueId: string;
+  teamId: string;
+  teamName: string;
+  discordUserId: string | null;
+  discordUsername: string | null;
   role: string;
 }
 
-interface SleeperOwner {
-  ownerId: string;
-  teamName: string;
-}
-
-interface Mapping {
+interface DiscordMember {
   id: string;
-  sleeperOwnerId: string;
-  discordUserId: string;
-  sleeperTeamName?: string;
-  discordUsername?: string;
+  username: string;
+  avatar?: string;
 }
 
 export function OwnerMapping({ leagueId }: OwnerMappingProps) {
   const { toast } = useToast();
-  const [pendingMappings, setPendingMappings] = useState<Record<string, string>>({});
-
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["/api/owners/data", leagueId],
-    queryFn: () => fetch(`/api/owners/data?leagueId=${leagueId}`).then(res => {
-      if (!res.ok) throw new Error("Failed to load owner data");
-      return res.json();
-    }),
+  
+  const { data: membersData, isLoading: membersLoading } = useQuery<TeamOwner[]>({
+    queryKey: ["/api/v2/owners", leagueId],
+    queryFn: async () => {
+      const response = await fetch(`/api/v2/owners?leagueId=${leagueId}`);
+      if (!response.ok) {
+        throw new Error("Failed to fetch team owners");
+      }
+      return response.json();
+    },
     enabled: !!leagueId,
-    retry: 1
   });
-
-  const saveMappingsMutation = useMutation({
-    mutationFn: async (pairs: Array<{ sleeperOwnerId: string; discordUserId: string; sleeperTeamName?: string; discordUsername?: string }>) => {
-      return await apiRequest("POST", "/api/owners/map", {
+  
+  const { data: guildMembersResponse, isLoading: guildMembersLoading } = useQuery<{ ok: boolean; data: DiscordMember[] }>({
+    queryKey: ["/api/discord/guild-members", leagueId],
+    queryFn: async () => {
+      const response = await fetch(`/api/discord/guild-members?leagueId=${leagueId}`);
+      if (!response.ok) {
+        throw new Error("Failed to fetch Discord members");
+      }
+      return response.json();
+    },
+    enabled: !!leagueId,
+  });
+  
+  const mapMutation = useMutation({
+    mutationFn: async (data: { teamId: string; discordUserId: string; teamName?: string; discordUsername?: string }) => {
+      return await apiRequest("POST", "/api/v2/owners/map", {
         leagueId,
-        pairs
+        teamId: data.teamId,
+        discordUserId: data.discordUserId,
+        teamName: data.teamName,
+        discordUsername: data.discordUsername,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/owners/data", leagueId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/owners"] });
-      setPendingMappings({});
+      queryClient.invalidateQueries({ queryKey: ["/api/v2/owners", leagueId] });
       toast({
-        title: "Mappings Saved",
-        description: "Owner mappings have been updated successfully."
+        title: "Owner mapping updated",
+        description: "The team owner has been successfully linked to Discord user.",
       });
     },
     onError: (error: Error) => {
       toast({
-        title: "Save Failed",
-        description: error.message || "Failed to save owner mappings",
-        variant: "destructive"
+        title: "Failed to update mapping",
+        description: error.message || "An error occurred while updating the mapping.",
+        variant: "destructive",
       });
-    }
+    },
   });
-
-  const discordMembers: DiscordMember[] = data?.discordMembers || [];
-  const sleeperOwners: SleeperOwner[] = data?.sleeperOwners || [];
-  const existingMappings: Mapping[] = data?.mappings || [];
-
-  // Create a map of existing mappings
-  const mappingsBySleeperOwner = new Map(
-    existingMappings.map(m => [m.sleeperOwnerId, m.discordUserId])
-  );
-
-  // Merge existing and pending mappings
-  const currentMappings = new Map(mappingsBySleeperOwner);
-  Object.entries(pendingMappings).forEach(([sleeperOwnerId, discordUserId]) => {
-    if (discordUserId) {
-      currentMappings.set(sleeperOwnerId, discordUserId);
-    }
-  });
-
-  // Get unmapped owners
-  const unmappedOwners = sleeperOwners.filter(
-    owner => !currentMappings.has(owner.ownerId)
-  );
-
-  // Get available Discord members (not already mapped unless in pending)
-  const getAvailableMembers = (forSleeperOwner: string) => {
-    const usedDiscordIds = new Set(
-      Array.from(currentMappings.entries())
-        .filter(([ownerId, _]) => ownerId !== forSleeperOwner)
-        .map(([_, discordId]) => discordId)
-    );
-    return discordMembers.filter(m => !usedDiscordIds.has(m.discordUserId));
-  };
-
-  const handleMappingChange = (sleeperOwnerId: string, discordUserId: string) => {
-    setPendingMappings(prev => ({
-      ...prev,
-      [sleeperOwnerId]: discordUserId
-    }));
-  };
-
-  const handleSave = () => {
-    const pairs = Object.entries(pendingMappings)
-      .filter(([_, discordUserId]) => discordUserId)
-      .map(([sleeperOwnerId, discordUserId]) => {
-        const sleeperOwner = sleeperOwners.find(o => o.ownerId === sleeperOwnerId);
-        const discordMember = discordMembers.find(m => m.discordUserId === discordUserId);
-        return {
-          sleeperOwnerId,
-          discordUserId,
-          sleeperTeamName: sleeperOwner?.teamName,
-          discordUsername: discordMember?.discordUsername
-        };
-      });
-
-    if (pairs.length === 0) {
-      toast({
-        title: "No Changes",
-        description: "No new mappings to save",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    saveMappingsMutation.mutate(pairs);
-  };
-
-  const hasPendingChanges = Object.keys(pendingMappings).length > 0;
-
+  
+  const members = membersData || [];
+  const guildMembers = guildMembersResponse?.data || [];
+  const unmappedCount = members.filter((m) => !m.discordUserId).length;
+  const isLoading = membersLoading || guildMembersLoading;
+  
   if (isLoading) {
     return (
-      <Card data-testid="owner-mapping-loading">
+      <Card data-testid="card-owner-mapping">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="w-5 h-5" />
-            Owner Mapping
-          </CardTitle>
+          <CardTitle>Team Owners</CardTitle>
+          <p className="text-sm text-muted-foreground mt-1">Link Discord members to their fantasy teams</p>
         </CardHeader>
         <CardContent>
-          <div className="animate-pulse space-y-3">
-            <div className="h-12 bg-secondary rounded"></div>
-            <div className="h-12 bg-secondary rounded"></div>
-            <div className="h-12 bg-secondary rounded"></div>
+          <div className="space-y-3">
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
           </div>
         </CardContent>
       </Card>
     );
   }
-
-  if (error) {
-    return (
-      <Card data-testid="owner-mapping-error">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="w-5 h-5" />
-            Owner Mapping
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Alert variant="destructive">
-            <AlertCircle className="w-4 h-4" />
+  
+  return (
+    <Card data-testid="card-owner-mapping">
+      <CardHeader>
+        <CardTitle>Team Owners</CardTitle>
+        <p className="text-sm text-muted-foreground mt-1">Link Discord members to their fantasy teams</p>
+      </CardHeader>
+      <CardContent>
+        {unmappedCount > 0 && (
+          <Alert variant="destructive" className="mb-4" data-testid="alert-unmapped-teams">
+            <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              Failed to load owner mapping data. Please ensure the league is properly configured.
+              {unmappedCount} team(s) not mapped. Mentions and personalization won't work for unmapped teams.
             </AlertDescription>
           </Alert>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  return (
-    <Card data-testid="owner-mapping-card">
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="flex items-center gap-2">
-          <Users className="w-5 h-5" />
-          Owner Mapping
-        </CardTitle>
-        <Badge variant={unmappedOwners.length === 0 ? "default" : "secondary"}>
-          {existingMappings.length}/{sleeperOwners.length} Mapped
-        </Badge>
-      </CardHeader>
-      
-      <CardContent className="space-y-4">
-        {unmappedOwners.length === 0 && !hasPendingChanges ? (
+        )}
+        
+        {members.length === 0 ? (
           <Alert>
-            <CheckCircle className="w-4 h-4" />
             <AlertDescription>
-              All Sleeper owners are mapped to Discord members!
+              No teams found. Make sure your league is properly configured.
             </AlertDescription>
           </Alert>
         ) : (
-          <>
-            <p className="text-sm text-muted-foreground">
-              Map Sleeper team owners to Discord server members so THE COMMISH can personalize interactions.
-            </p>
-
-            <div className="space-y-3">
-              {sleeperOwners.map(owner => {
-                const currentMapping = currentMappings.get(owner.ownerId);
-                const mappedMember = discordMembers.find(m => m.discordUserId === currentMapping);
-                const isPending = pendingMappings[owner.ownerId] !== undefined;
-                const availableMembers = getAvailableMembers(owner.ownerId);
-
-                return (
-                  <div
-                    key={owner.ownerId}
-                    className="flex items-center gap-3 p-3 bg-secondary/50 rounded-lg"
-                    data-testid={`mapping-${owner.ownerId}`}
-                  >
-                    <div className="flex-1">
-                      <p className="font-medium text-sm">{owner.teamName}</p>
-                      <p className="text-xs text-muted-foreground">Sleeper Owner</p>
+          <div className="space-y-3">
+            {members.map((member) => {
+              const currentDiscordMember = guildMembers.find(gm => gm.id === member.discordUserId);
+              
+              return (
+                <div 
+                  key={member.teamId} 
+                  className="flex items-center justify-between gap-4 p-3 border rounded-lg bg-secondary/20" 
+                  data-testid={`row-team-${member.teamId}`}
+                >
+                  <div className="flex-1">
+                    <div className="font-medium" data-testid={`text-team-name-${member.teamId}`}>
+                      {member.teamName || "Unknown Team"}
                     </div>
-                    
-                    <div className="flex items-center gap-2">
-                      <span className="text-muted-foreground">→</span>
-                      <Select
-                        value={pendingMappings[owner.ownerId] || currentMapping || ""}
-                        onValueChange={(value) => handleMappingChange(owner.ownerId, value)}
-                        data-testid={`select-mapping-${owner.ownerId}`}
-                      >
-                        <SelectTrigger className="w-48">
-                          <SelectValue placeholder="Select Discord member..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {currentMapping && !isPending && (
-                            <SelectItem value={currentMapping}>
-                              {mappedMember?.discordUsername || "Unknown"}
-                            </SelectItem>
-                          )}
-                          {availableMembers.map(member => (
-                            <SelectItem key={member.discordUserId} value={member.discordUserId}>
-                              {member.discordUsername}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {currentMapping && !isPending && (
-                        <CheckCircle className="w-4 h-4 text-green-500" />
-                      )}
+                    <div className="text-xs text-muted-foreground">
+                      Team ID: {member.teamId}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-
-            {hasPendingChanges && (
-              <Button
-                onClick={handleSave}
-                disabled={saveMappingsMutation.isPending}
-                className="w-full"
-                data-testid="save-mappings-button"
-              >
-                <Save className="w-4 h-4 mr-2" />
-                {saveMappingsMutation.isPending ? "Saving..." : `Save ${Object.keys(pendingMappings).length} Mapping(s)`}
-              </Button>
-            )}
-          </>
+                  
+                  <Select
+                    value={member.discordUserId || ""}
+                    onValueChange={(value) => {
+                      const selectedMember = guildMembers.find(gm => gm.id === value);
+                      mapMutation.mutate({
+                        teamId: member.teamId,
+                        discordUserId: value,
+                        teamName: member.teamName,
+                        discordUsername: selectedMember?.username,
+                      });
+                    }}
+                    disabled={mapMutation.isPending}
+                  >
+                    <SelectTrigger className="w-[200px]" data-testid={`select-discord-user-${member.teamId}`}>
+                      <SelectValue placeholder="Select Discord user" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {guildMembers.length === 0 ? (
+                        <div className="p-2 text-sm text-muted-foreground">
+                          No Discord members available
+                        </div>
+                      ) : (
+                        guildMembers.map((gm) => (
+                          <SelectItem key={gm.id} value={gm.id}>
+                            {gm.username}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+              );
+            })}
+          </div>
         )}
       </CardContent>
     </Card>

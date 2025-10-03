@@ -11,6 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/Textarea';
 import { 
   MessageSquare, 
   Calendar, 
@@ -43,6 +46,7 @@ import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Member, Reminder, League } from '@shared/schema';
 import { ModeBadge } from '@/components/ModeBadge';
 import { FinishSetupBanner } from '@/components/FinishSetupBanner';
+import { OwnerMapping } from '@/components/owner-mapping';
 
 interface DashboardStats {
   activeLeagues: number;
@@ -242,6 +246,13 @@ export function DashboardPage() {
   const [contentQueueStatusFilter, setContentQueueStatusFilter] = useState<string>('all');
   const [creativeTrashTalk, setCreativeTrashTalk] = useState(false);
   const [deepStats, setDeepStats] = useState(false);
+
+  // Commissioner Dashboard v2 State
+  const [personalityStyle, setPersonalityStyle] = useState<string>('neutral');
+  const [customTemplate, setCustomTemplate] = useState<string>('');
+  const [previewText, setPreviewText] = useState<string>('Your team scored 150 points this week!');
+  const [isDigestPreviewOpen, setIsDigestPreviewOpen] = useState(false);
+  const [digestPreviewData, setDigestPreviewData] = useState<any>(null);
 
   // Fetch leagues to get the first one if not set (using demo endpoint for testing)
   const { data: leagues } = useQuery<{ leagues: League[] }>({
@@ -599,6 +610,99 @@ export function DashboardPage() {
     },
   });
 
+  // Commissioner v2: Fetch league config from v2 API
+  const { data: v2LeagueData, isLoading: v2LeagueLoading } = useQuery<{ ok: boolean; data: League }>({
+    queryKey: ['/api/v2/leagues', leagueId],
+    queryFn: async () => {
+      const res = await fetch(`/api/v2/leagues/${leagueId}`);
+      if (!res.ok) throw new Error('Failed to fetch league');
+      return res.json();
+    },
+    enabled: !!leagueId,
+  });
+
+  const v2League = v2LeagueData?.data;
+
+  // Commissioner v2: Fetch Discord channels
+  const { data: v2DiscordChannels, isLoading: v2ChannelsLoading } = useQuery<{ ok: boolean; data: any[] }>({
+    queryKey: ['/api/v2/discord/channels', v2League?.guildId],
+    queryFn: async () => {
+      const res = await fetch(`/api/v2/discord/channels?guildId=${v2League?.guildId}`);
+      if (!res.ok) throw new Error('Failed to fetch channels');
+      return res.json();
+    },
+    enabled: !!v2League?.guildId,
+  });
+
+  // Commissioner v2: Personality preview
+  const { data: personalityPreview, isLoading: previewLoading } = useQuery<{ ok: boolean; data: { preview: string } }>({
+    queryKey: ['/api/v2/personality/preview', personalityStyle, customTemplate, previewText],
+    queryFn: async () => {
+      const style = personalityStyle === 'custom' ? customTemplate : personalityStyle;
+      const res = await fetch(`/api/v2/personality/preview?style=${encodeURIComponent(style)}&text=${encodeURIComponent(previewText)}`);
+      if (!res.ok) throw new Error('Failed to fetch preview');
+      return res.json();
+    },
+    enabled: !!previewText && (personalityStyle !== 'custom' || !!customTemplate),
+  });
+
+  // Commissioner v2: Update league config
+  const updateV2LeagueMutation = useMutation({
+    mutationFn: async (updates: any) => {
+      const response = await apiRequest('PATCH', `/api/v2/leagues/${leagueId}`, updates);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/leagues', leagueId] });
+      toast.success('League updated', {
+        description: 'Settings have been saved successfully',
+      });
+    },
+    onError: (error: any) => {
+      toast.error('Failed to update league', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
+  // Commissioner v2: Preview digest
+  const previewDigestMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest('POST', `/api/v2/digest/preview?leagueId=${leagueId}`, {});
+      return response.json();
+    },
+    onSuccess: (data: any) => {
+      setDigestPreviewData(data?.data || data);
+      setIsDigestPreviewOpen(true);
+      toast.success('Digest preview generated', {
+        description: 'Review the digest content below',
+      });
+    },
+    onError: (error: any) => {
+      toast.error('Failed to preview digest', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
+  // Commissioner v2: Run digest now
+  const runDigestMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest('POST', `/api/v2/digest/run?leagueId=${leagueId}`, {});
+      return response.json();
+    },
+    onSuccess: () => {
+      toast.success('Digest posted!', {
+        description: 'The weekly digest has been sent to Discord',
+      });
+    },
+    onError: (error: any) => {
+      toast.error('Failed to run digest', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
   const handleManageDiscord = () => {
     toast.info('Opening Discord settings...', {
       description: 'Manage bot permissions, slash commands, and webhook configuration.',
@@ -880,6 +984,316 @@ export function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      {/* Commissioner Control Cards */}
+      {leagueId && !v2LeagueLoading && v2League && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Feature Toggles Card */}
+          <Card className="bg-surface-card border-border-subtle shadow-depth2" data-testid="card-feature-toggles">
+            <CardHeader>
+              <CardTitle className="text-text-primary flex items-center gap-2">
+                <Settings className="w-5 h-5" />
+                League Features
+              </CardTitle>
+              <p className="text-sm text-text-secondary mt-1">Enable or disable features for your league</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="digest-enabled" className="text-text-primary cursor-pointer">Weekly Digest</Label>
+                <Switch
+                  id="digest-enabled"
+                  data-testid="switch-digest-enabled"
+                  checked={(v2League.featureFlags as any)?.digestEnabled ?? false}
+                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { digestEnabled: checked } })}
+                  disabled={updateV2LeagueMutation.isPending}
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="auto-meme" className="text-text-primary cursor-pointer">Auto-Meme (Blowouts)</Label>
+                <Switch
+                  id="auto-meme"
+                  data-testid="switch-auto-meme"
+                  checked={(v2League.featureFlags as any)?.autoMeme ?? false}
+                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { autoMeme: checked } })}
+                  disabled={updateV2LeagueMutation.isPending}
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="highlights" className="text-text-primary cursor-pointer">Weekly Highlights</Label>
+                <Switch
+                  id="highlights"
+                  data-testid="switch-highlights"
+                  checked={(v2League.featureFlags as any)?.highlights ?? false}
+                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { highlights: checked } })}
+                  disabled={updateV2LeagueMutation.isPending}
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="rivalries" className="text-text-primary cursor-pointer">Rivalries Tracking</Label>
+                <Switch
+                  id="rivalries"
+                  data-testid="switch-rivalries"
+                  checked={(v2League.featureFlags as any)?.rivalries ?? false}
+                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { rivalries: checked } })}
+                  disabled={updateV2LeagueMutation.isPending}
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="creative-trash-talk" className="text-text-primary cursor-pointer">Creative Trash Talk</Label>
+                <Switch
+                  id="creative-trash-talk"
+                  data-testid="switch-creative-trash-talk"
+                  checked={(v2League.featureFlags as any)?.creativeTrashTalk ?? false}
+                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { creativeTrashTalk: checked } })}
+                  disabled={updateV2LeagueMutation.isPending}
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="deep-stats" className="text-text-primary cursor-pointer">Deep Stats Analysis</Label>
+                <Switch
+                  id="deep-stats"
+                  data-testid="switch-deep-stats"
+                  checked={(v2League.featureFlags as any)?.deepStats ?? false}
+                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { deepStats: checked } })}
+                  disabled={updateV2LeagueMutation.isPending}
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Channel Routing Card */}
+          <Card className="bg-surface-card border-border-subtle shadow-depth2" data-testid="card-channel-routing">
+            <CardHeader>
+              <CardTitle className="text-text-primary flex items-center gap-2">
+                <MessageCircle className="w-5 h-5" />
+                Channel Configuration
+              </CardTitle>
+              <p className="text-sm text-text-secondary mt-1">Choose where features should post</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {v2ChannelsLoading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3, 4].map((i) => (
+                    <Skeleton key={i} className="h-10 w-full bg-surface-hover" />
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <Label htmlFor="digests-channel" className="text-text-secondary mb-2 block">Digests Channel</Label>
+                    <Select
+                      value={(v2League.channels as any)?.digests || ""}
+                      onValueChange={(value) => updateV2LeagueMutation.mutate({ channels: { digests: value } })}
+                      disabled={updateV2LeagueMutation.isPending}
+                    >
+                      <SelectTrigger id="digests-channel" data-testid="select-digests-channel" className="bg-surface-elevated border-border-default text-text-primary">
+                        <SelectValue placeholder="Select channel" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-surface-card border-border-default">
+                        {v2DiscordChannels?.data?.map((ch: any) => (
+                          <SelectItem key={ch.id} value={ch.id} className="text-text-primary hover:bg-surface-hover">#{ch.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="reminders-channel" className="text-text-secondary mb-2 block">Reminders Channel</Label>
+                    <Select
+                      value={(v2League.channels as any)?.reminders || ""}
+                      onValueChange={(value) => updateV2LeagueMutation.mutate({ channels: { reminders: value } })}
+                      disabled={updateV2LeagueMutation.isPending}
+                    >
+                      <SelectTrigger id="reminders-channel" data-testid="select-reminders-channel" className="bg-surface-elevated border-border-default text-text-primary">
+                        <SelectValue placeholder="Select channel" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-surface-card border-border-default">
+                        {v2DiscordChannels?.data?.map((ch: any) => (
+                          <SelectItem key={ch.id} value={ch.id} className="text-text-primary hover:bg-surface-hover">#{ch.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="polls-channel" className="text-text-secondary mb-2 block">Polls Channel</Label>
+                    <Select
+                      value={(v2League.channels as any)?.polls || ""}
+                      onValueChange={(value) => updateV2LeagueMutation.mutate({ channels: { polls: value } })}
+                      disabled={updateV2LeagueMutation.isPending}
+                    >
+                      <SelectTrigger id="polls-channel" data-testid="select-polls-channel" className="bg-surface-elevated border-border-default text-text-primary">
+                        <SelectValue placeholder="Select channel" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-surface-card border-border-default">
+                        {v2DiscordChannels?.data?.map((ch: any) => (
+                          <SelectItem key={ch.id} value={ch.id} className="text-text-primary hover:bg-surface-hover">#{ch.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor="highlights-channel" className="text-text-secondary mb-2 block">Highlights Channel</Label>
+                    <Select
+                      value={(v2League.channels as any)?.highlights || ""}
+                      onValueChange={(value) => updateV2LeagueMutation.mutate({ channels: { highlights: value } })}
+                      disabled={updateV2LeagueMutation.isPending}
+                    >
+                      <SelectTrigger id="highlights-channel" data-testid="select-highlights-channel" className="bg-surface-elevated border-border-default text-text-primary">
+                        <SelectValue placeholder="Select channel" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-surface-card border-border-default">
+                        {v2DiscordChannels?.data?.map((ch: any) => (
+                          <SelectItem key={ch.id} value={ch.id} className="text-text-primary hover:bg-surface-hover">#{ch.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Owner Mapping Section */}
+      {leagueId && <OwnerMapping leagueId={leagueId} />}
+
+      {/* Bot Personality & Digest Controls */}
+      {leagueId && !v2LeagueLoading && v2League && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Bot Personality Card */}
+          <Card className="bg-surface-card border-border-subtle shadow-depth2" data-testid="card-bot-personality">
+            <CardHeader>
+              <CardTitle className="text-text-primary flex items-center gap-2">
+                <Brain className="w-5 h-5" />
+                Bot Personality
+              </CardTitle>
+              <p className="text-sm text-text-secondary mt-1">Choose how the bot communicates</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <RadioGroup
+                value={personalityStyle}
+                onValueChange={setPersonalityStyle}
+                className="space-y-3"
+                data-testid="radio-group-personality"
+              >
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="neutral" id="personality-neutral" data-testid="radio-personality-neutral" />
+                  <Label htmlFor="personality-neutral" className="text-text-primary cursor-pointer">Neutral</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="sassy" id="personality-sassy" data-testid="radio-personality-sassy" />
+                  <Label htmlFor="personality-sassy" className="text-text-primary cursor-pointer">Sassy</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="formal" id="personality-formal" data-testid="radio-personality-formal" />
+                  <Label htmlFor="personality-formal" className="text-text-primary cursor-pointer">Formal</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="meme-y" id="personality-meme-y" data-testid="radio-personality-meme-y" />
+                  <Label htmlFor="personality-meme-y" className="text-text-primary cursor-pointer">Meme-y</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="custom" id="personality-custom" data-testid="radio-personality-custom" />
+                  <Label htmlFor="personality-custom" className="text-text-primary cursor-pointer">Custom</Label>
+                </div>
+              </RadioGroup>
+
+              {personalityStyle === 'custom' && (
+                <Textarea
+                  value={customTemplate}
+                  onChange={(e) => setCustomTemplate(e.target.value)}
+                  placeholder="Enter custom personality template..."
+                  data-testid="textarea-custom-personality"
+                  className="min-h-[100px] bg-surface-elevated border-border-default text-text-primary"
+                />
+              )}
+
+              <div className="border border-border-subtle rounded-lg p-4 bg-surface-elevated">
+                <Label className="text-text-secondary text-xs mb-2 block">Preview</Label>
+                {previewLoading ? (
+                  <Skeleton className="h-16 w-full bg-surface-hover" />
+                ) : (
+                  <p className="text-sm text-text-primary italic">{personalityPreview?.data?.preview || previewText}</p>
+                )}
+              </div>
+
+              <Button
+                onClick={() => {
+                  const style = personalityStyle === 'custom' ? customTemplate : personalityStyle;
+                  updateV2LeagueMutation.mutate({ personality: { style } });
+                }}
+                data-testid="button-save-personality"
+                disabled={updateV2LeagueMutation.isPending || (personalityStyle === 'custom' && !customTemplate)}
+                className="w-full bg-brand-teal hover:bg-brand-teal/90 text-white"
+              >
+                <Save className="w-4 h-4 mr-2" />
+                {updateV2LeagueMutation.isPending ? 'Saving...' : 'Save Personality'}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Digest Controls Card */}
+          <Card className="bg-surface-card border-border-subtle shadow-depth2" data-testid="card-digest-controls">
+            <CardHeader>
+              <CardTitle className="text-text-primary flex items-center gap-2">
+                <Calendar className="w-5 h-5" />
+                Weekly Digest
+              </CardTitle>
+              <p className="text-sm text-text-secondary mt-1">Manage digest generation and posting</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="border border-border-subtle rounded-lg p-4 bg-surface-elevated">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-text-secondary">Next Scheduled</span>
+                  <Clock className="w-4 h-4 text-text-muted" />
+                </div>
+                <p className="text-lg font-semibold text-text-primary">
+                  {(v2League as any).nextDigestAt ? new Date((v2League as any).nextDigestAt).toLocaleString() : 'Not scheduled'}
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <Button
+                  onClick={() => previewDigestMutation.mutate()}
+                  data-testid="button-preview-digest"
+                  disabled={previewDigestMutation.isPending}
+                  variant="secondary"
+                  className="w-full text-text-primary border border-border-default hover:bg-surface-hover"
+                >
+                  {previewDigestMutation.isPending && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
+                  {!previewDigestMutation.isPending && <Search className="w-4 h-4 mr-2" />}
+                  {previewDigestMutation.isPending ? 'Generating...' : 'Preview Digest'}
+                </Button>
+
+                <Button
+                  onClick={() => {
+                    if (confirm('Are you sure you want to post the digest to Discord now?')) {
+                      runDigestMutation.mutate();
+                    }
+                  }}
+                  data-testid="button-run-digest"
+                  disabled={runDigestMutation.isPending}
+                  className="w-full bg-brand-teal hover:bg-brand-teal/90 text-white"
+                >
+                  {runDigestMutation.isPending && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
+                  {!runDigestMutation.isPending && <Zap className="w-4 h-4 mr-2" />}
+                  {runDigestMutation.isPending ? 'Posting...' : 'Run Digest Now'}
+                </Button>
+              </div>
+
+              <div className="text-xs text-text-muted pt-2 border-t border-border-subtle">
+                <p>⚠️ Running digest now will post to the configured digest channel immediately.</p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* League Settings Card */}
       {leagueId && (
@@ -2363,6 +2777,47 @@ export function DashboardPage() {
             </div>
           </div>
         )}
+      </Dialog>
+
+      {/* Digest Preview Dialog */}
+      <Dialog
+        open={isDigestPreviewOpen}
+        onClose={() => {
+          setIsDigestPreviewOpen(false);
+          setDigestPreviewData(null);
+        }}
+        title="Digest Preview"
+        size="lg"
+      >
+        <div className="space-y-4">
+          {digestPreviewData ? (
+            <div className="max-h-[500px] overflow-y-auto">
+              <div className="p-4 bg-surface-elevated border border-border-subtle rounded-lg">
+                <pre className="text-xs text-text-primary whitespace-pre-wrap font-mono">
+                  {JSON.stringify(digestPreviewData, null, 2)}
+                </pre>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center text-text-muted py-8">
+              No digest preview available
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-4">
+            <Button
+              onClick={() => {
+                setIsDigestPreviewOpen(false);
+                setDigestPreviewData(null);
+              }}
+              data-testid="button-close-digest-preview"
+              variant="secondary"
+              className="flex-1"
+            >
+              Close
+            </Button>
+          </div>
+        </div>
       </Dialog>
     </div>
   );

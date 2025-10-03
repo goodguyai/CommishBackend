@@ -3,6 +3,9 @@ import express from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
 import { nanoid } from "nanoid";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import { eq } from "drizzle-orm";
 import { storage } from "./storage";
 import { env, getEnv } from "./services/env";
 import { verifyDiscordSignature, generateRequestId } from "./lib/crypto";
@@ -21,7 +24,7 @@ import { RivalriesService } from "./services/rivalries";
 import { ContentService } from "./services/content";
 import { AuthService } from "./services/auth";
 import { DemoService } from "./services/demo";
-import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member } from "@shared/schema";
+import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, leagues } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
 
 // Extend express-session types to include csrfToken
@@ -125,6 +128,13 @@ let rivalriesService: RivalriesService;
 let contentService: ContentService;
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Initialize database connection
+  const client = postgres(process.env.DATABASE_URL!, { 
+    max: 1,
+    ssl: process.env.NODE_ENV === 'production' ? 'require' : undefined 
+  });
+  const db = drizzle(client);
+
   // Initialize services after environment validation
   ragService = new RAGService(storage);
   eventBus = new EventBus(storage);
@@ -1174,6 +1184,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/discord/guild-members - Get Discord guild members for a league
+  app.get("/api/discord/guild-members", async (req, res) => {
+    try {
+      const { leagueId } = req.query;
+      
+      if (!leagueId || typeof leagueId !== 'string') {
+        return res.status(400).json({
+          ok: false,
+          code: "LEAGUE_ID_REQUIRED",
+          message: "leagueId query parameter required"
+        });
+      }
+      
+      const league = await storage.getLeague(leagueId);
+      
+      if (!league || !league.guildId) {
+        return res.status(404).json({
+          ok: false,
+          code: "GUILD_NOT_FOUND",
+          message: "League guild not configured"
+        });
+      }
+      
+      const members = await discordService.getGuildMembers(league.guildId);
+      
+      res.json({
+        ok: true,
+        data: members
+      });
+    } catch (error) {
+      console.error("Get guild members failed:", error);
+      res.status(500).json({
+        ok: false,
+        code: "GET_MEMBERS_FAILED",
+        message: "Failed to get guild members"
+      });
+    }
+  });
+
   // POST /api/v2/owners/map - Upsert a member mapping
   app.post("/api/v2/owners/map", async (req, res) => {
     try {
@@ -1469,28 +1518,319 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // === END PHASE 3 ENDPOINTS ===
 
-  // === END SETUP WIZARD ENDPOINTS ===
+  // === COMMISSIONER DASHBOARD ENDPOINTS ===
+
+  // GET /api/v2/leagues/:leagueId - Get league configuration
+  app.get("/api/v2/leagues/:leagueId", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      const [league] = await db.select()
+        .from(leagues)
+        .where(eq(leagues.id, leagueId))
+        .limit(1);
+      
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found"
+        });
+      }
+      
+      res.json({
+        ok: true,
+        data: league
+      });
+    } catch (error) {
+      console.error("Get league failed:", error);
+      res.status(500).json({
+        ok: false,
+        code: "GET_LEAGUE_FAILED",
+        message: "Failed to get league"
+      });
+    }
+  });
+
+  // PATCH /api/v2/leagues/:leagueId - Update league configuration
+  app.patch("/api/v2/leagues/:leagueId", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      const { featureFlags, channels, personality } = req.body;
+      
+      // Get current league
+      const [currentLeague] = await db.select()
+        .from(leagues)
+        .where(eq(leagues.id, leagueId))
+        .limit(1);
+      
+      if (!currentLeague) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found"
+        });
+      }
+      
+      // Merge updates
+      const updates: any = { updatedAt: new Date() };
+      
+      if (featureFlags) {
+        updates.featureFlags = {
+          ...(currentLeague.featureFlags as any),
+          ...featureFlags
+        };
+      }
+      
+      if (channels) {
+        updates.channels = {
+          ...(currentLeague.channels as any),
+          ...channels
+        };
+      }
+      
+      if (personality) {
+        updates.personality = {
+          ...(currentLeague.personality as any),
+          ...personality
+        };
+      }
+      
+      const [updated] = await db.update(leagues)
+        .set(updates)
+        .where(eq(leagues.id, leagueId))
+        .returning();
+      
+      res.json({
+        ok: true,
+        data: updated
+      });
+    } catch (error) {
+      console.error("Update league failed:", error);
+      res.status(500).json({
+        ok: false,
+        code: "UPDATE_LEAGUE_FAILED",
+        message: "Failed to update league"
+      });
+    }
+  });
+
+  // GET /api/v2/discord/channels?guildId=... - Get writable channels
+  app.get("/api/v2/discord/channels", async (req, res) => {
+    try {
+      const { guildId } = req.query;
+      
+      if (!guildId || typeof guildId !== 'string') {
+        return res.status(400).json({
+          ok: false,
+          code: "GUILD_ID_REQUIRED",
+          message: "guildId query parameter required"
+        });
+      }
+      
+      const channels = await discordService.getGuildChannels(guildId);
+      
+      res.json({
+        ok: true,
+        data: channels
+      });
+    } catch (error) {
+      console.error("Get channels failed:", error);
+      res.status(500).json({
+        ok: false,
+        code: "GET_CHANNELS_FAILED",
+        message: "Failed to get channels"
+      });
+    }
+  });
+
+  // GET /api/v2/personality/preview?style=...&text=... - Preview personality style
+  app.get("/api/v2/personality/preview", async (req, res) => {
+    try {
+      const { style = 'neutral', text = 'Your team scored 150 points this week!' } = req.query;
+      
+      const styleMap: Record<string, string> = {
+        neutral: text as string,
+        sassy: `💅 ${text} (and yes, we're all very impressed)`,
+        formal: `Please be advised: ${text}`,
+        'meme-y': `${text} 🔥💯 no cap fr fr`,
+        custom: text as string
+      };
+      
+      res.json({
+        ok: true,
+        preview: styleMap[style as string] || text
+      });
+    } catch (error) {
+      console.error("Personality preview failed:", error);
+      res.status(500).json({
+        ok: false,
+        code: "PREVIEW_FAILED",
+        message: "Failed to generate preview"
+      });
+    }
+  });
+
+  // POST /api/v2/digest/preview?leagueId=... - Preview digest
+  app.post("/api/v2/digest/preview", async (req, res) => {
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || adminKey !== env.app.adminKey) {
+      return res.status(403).json({
+        ok: false,
+        code: "UNAUTHORIZED",
+        message: "Admin key required"
+      });
+    }
+    
+    try {
+      const { leagueId } = req.query;
+      
+      if (!leagueId || typeof leagueId !== 'string') {
+        return res.status(400).json({
+          ok: false,
+          code: "LEAGUE_ID_REQUIRED",
+          message: "leagueId query parameter required"
+        });
+      }
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found"
+        });
+      }
+      
+      if (!league.sleeperLeagueId) {
+        return res.status(400).json({
+          ok: false,
+          code: "NO_SLEEPER_LEAGUE",
+          message: "League has no Sleeper league ID"
+        });
+      }
+      
+      const sleeperData = await sleeperService.syncLeagueData(league.sleeperLeagueId);
+      const digest = await generateDigestContent(league, sleeperData);
+      
+      let description = digest.sections.map(s => `**${s.title}**\n${s.content}`).join("\n\n");
+      if (description.length > 3800) {
+        description = description.substring(0, 3797) + "...";
+      }
+      
+      const embed = {
+        title: `📊 ${digest.leagueName} - Weekly Digest`.substring(0, 256),
+        description,
+        color: 0x00D2FF,
+        footer: { text: `THE COMMISH • Generated ${new Date(digest.timestamp).toLocaleString()}` },
+        timestamp: new Date(digest.timestamp).toISOString(),
+      };
+      
+      res.json({
+        ok: true,
+        summary: digest.sections.map(s => s.title).join(", "),
+        embed
+      });
+    } catch (error) {
+      console.error("Digest preview failed:", error);
+      res.status(500).json({
+        ok: false,
+        code: "PREVIEW_FAILED",
+        message: "Failed to generate digest preview"
+      });
+    }
+  });
+
+  // POST /api/v2/digest/run?leagueId=... - Run digest now
+  app.post("/api/v2/digest/run", async (req, res) => {
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || adminKey !== env.app.adminKey) {
+      return res.status(403).json({
+        ok: false,
+        code: "UNAUTHORIZED",
+        message: "Admin key required"
+      });
+    }
+    
+    try {
+      const { leagueId } = req.query;
+      
+      if (!leagueId || typeof leagueId !== 'string') {
+        return res.status(400).json({
+          ok: false,
+          code: "LEAGUE_ID_REQUIRED",
+          message: "leagueId query parameter required"
+        });
+      }
+      
+      const [league] = await db.select()
+        .from(leagues)
+        .where(eq(leagues.id, leagueId))
+        .limit(1);
+      
+      if (!league || !league.channelId) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_CONFIGURED",
+          message: "League not found or channel not configured"
+        });
+      }
+      
+      if (!league.sleeperLeagueId) {
+        return res.status(400).json({
+          ok: false,
+          code: "NO_SLEEPER_LEAGUE",
+          message: "League has no Sleeper league ID"
+        });
+      }
+      
+      const sleeperData = await sleeperService.syncLeagueData(league.sleeperLeagueId);
+      const digest = await generateDigestContent(league as any, sleeperData);
+      
+      let description = digest.sections.map(s => `**${s.title}**\n${s.content}`).join("\n\n");
+      if (description.length > 3800) {
+        description = description.substring(0, 3797) + "...";
+      }
+      
+      const embed = {
+        title: `📊 ${digest.leagueName} - Weekly Digest`.substring(0, 256),
+        description,
+        color: 0x00D2FF,
+        footer: { text: `THE COMMISH • Generated ${new Date(digest.timestamp).toLocaleString()}` },
+        timestamp: new Date(digest.timestamp).toISOString(),
+      };
+      
+      const result = await discordService.postMessage(
+        league.channelId,
+        { embeds: [embed] }
+      );
+      
+      res.json({
+        ok: true,
+        messageId: result
+      });
+    } catch (error) {
+      console.error("Digest run failed:", error);
+      res.status(500).json({
+        ok: false,
+        code: "RUN_FAILED",
+        message: "Failed to run digest"
+      });
+    }
+  });
+
+  // === END COMMISSIONER DASHBOARD ENDPOINTS ===
 
   // === /api/v2 ALIASES (CDN Cache Bypass) ===
-  // Temporary aliases to bypass potential CDN caching of old HTML responses
-  // These delegate to the original handlers
-  
-  app.get("/api/v2/leagues/:leagueId", (req, res, next) => {
-    req.url = `/api/leagues/${req.params.leagueId}`;
-    next();
-  });
-
-  app.patch("/api/v2/leagues/:leagueId", (req, res, next) => {
-    req.url = `/api/leagues/${req.params.leagueId}`;
-    next();
-  });
-
+  // Keep polls alias for backward compatibility
   app.post("/api/v2/polls", (req, res, next) => {
     req.url = `/api/polls`;
     next();
   });
   
   // === END /api/v2 ALIASES ===
+
+  // === END SETUP WIZARD ENDPOINTS ===
 
   // === ACTIVATION FLOW ENDPOINTS (Phase 4) ===
 

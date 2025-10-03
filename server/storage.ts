@@ -1186,7 +1186,9 @@ export class MemStorage implements IStorage {
       timezone: league.timezone ?? null,
       tone: league.tone ?? null,
       featureFlags: league.featureFlags ?? { qa: true, deadlines: true, digest: true, trade_helper: false, autoMeme: false, reminders: { lineupLock: true, waiver: true, tradeDeadline: true } },
-      modelPrefs: league.modelPrefs ?? { maxTokens: 1000, provider: "deepseek" }
+      modelPrefs: league.modelPrefs ?? { maxTokens: 1000, provider: "deepseek" },
+      channels: league.channels ?? { digests: null, reminders: null, polls: null, highlights: null },
+      personality: league.personality ?? { style: "neutral", customTemplate: null }
     };
     this.leagues.set(id, newLeague);
     return id;
