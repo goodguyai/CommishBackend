@@ -18,6 +18,8 @@ import { TradeFairnessService } from "./services/tradeFairness";
 import { HighlightsService } from "./services/highlights";
 import { RivalriesService } from "./services/rivalries";
 import { ContentService } from "./services/content";
+import { AuthService } from "./services/auth";
+import { DemoService } from "./services/demo";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member } from "@shared/schema";
 
 // Zod schemas for Phase 2 API request validation
@@ -138,6 +140,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   highlightsService = new HighlightsService();
   rivalriesService = new RivalriesService();
   contentService = new ContentService();
+  
+  const auth = new AuthService(storage);
+  const demo = new DemoService(storage);
 
   // Forward scheduler events to eventBus
   scheduler.on("digest_due", (data) => eventBus.emit("digest_due", data));
@@ -1738,6 +1743,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // === END /api/v2 ALIASES ===
+
+  // === ACTIVATION FLOW ENDPOINTS (Phase 4) ===
+
+  // GET /api/app/modes - Check available activation modes
+  app.get("/api/app/modes", async (req, res) => {
+    try {
+      const user = await auth.getSessionUser(req);
+      const cta: ("demo" | "beta")[] = ["demo", "beta"];
+      res.json({ cta, hasSession: !!user, hasLeague: false });
+    } catch (e) {
+      console.error("[Modes]", e);
+      res.status(500).json({ error: "MODES_FAILED" });
+    }
+  });
+
+  // POST /api/app/demo/activate - Activate demo mode
+  app.post("/api/app/demo/activate", async (req, res) => {
+    try {
+      let user = await auth.getSessionUser(req);
+      if (!user) {
+        user = await auth.createDemoSession(req);
+      }
+      
+      const accountId = await auth.ensureAccount(req, user);
+      const { leagueId } = await demo.ensureDemoLeague(accountId);
+      
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId: null,
+        payload: { action: "demo_activated", accountId, leagueId, userId: user.userId }
+      });
+      
+      res.json({ ok: true, leagueId });
+    } catch (e) {
+      console.error("[Demo Activate]", e);
+      res.status(500).json({ error: "DEMO_ACTIVATE_FAILED" });
+    }
+  });
+
+  // POST /api/app/beta/activate - Activate beta mode
+  app.post("/api/app/beta/activate", async (req, res) => {
+    const Body = z.object({ inviteCode: z.string().optional() });
+    const body = Body.safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: "BAD_REQUEST" });
+
+    try {
+      const user = await auth.getSessionUser(req);
+      if (!user) {
+        return res.status(401).json({ error: "AUTH_REQUIRED" });
+      }
+
+      await auth.ensureAccount(req, user);
+      
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId: null,
+        payload: { action: "beta_activated", userId: user.userId }
+      });
+
+      res.json({ ok: true, next: "/setup" });
+    } catch (e) {
+      console.error("[Beta Activate]", e);
+      res.status(500).json({ error: "BETA_ACTIVATE_FAILED" });
+    }
+  });
+
+  // GET /api/app/me - Get current user and their leagues
+  app.get("/api/app/me", async (req, res) => {
+    try {
+      const user = await auth.getSessionUser(req);
+      if (!user) {
+        return res.json({ 
+          userId: null, 
+          accountId: null, 
+          email: null, 
+          leagues: [] 
+        });
+      }
+
+      const accountId = user.accountId || await auth.ensureAccount(req, user);
+      const leagues = await storage.getLeaguesByAccount?.(accountId) || [];
+
+      res.json({
+        userId: user.userId,
+        accountId,
+        email: user.email,
+        leagues: leagues.map(l => ({
+          id: l.id,
+          name: l.name || 'Unnamed League',
+          isDemo: !!(l.featureFlags as any)?.demo,
+          isBeta: true
+        }))
+      });
+    } catch (e) {
+      console.error("[Me]", e);
+      res.status(500).json({ error: "ME_FAILED" });
+    }
+  });
+
+  // === END ACTIVATION FLOW ENDPOINTS ===
 
   // Health check with real database connectivity test
   app.get("/api/health", async (req, res) => {

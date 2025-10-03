@@ -42,7 +42,24 @@ export const accounts = pgTable("accounts", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email").notNull().unique(),
   discordUserId: text("discord_user_id"),
+  name: text("name"),
+  plan: text("plan").default("beta"),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const userAccounts = pgTable("user_accounts", {
+  userId: uuid("user_id").notNull(),
+  accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  role: text("role").notNull().default("owner"),
+}, (table) => ({
+  pk: { primaryKey: true, columns: [table.userId, table.accountId] },
+}));
+
+export const betaInvites = pgTable("beta_invites", {
+  code: text("code").primaryKey(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  claimedBy: uuid("claimed_by"),
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
 });
 
 export const leagues = pgTable("leagues", {
@@ -327,6 +344,20 @@ export const contentQueue = pgTable("content_queue", {
 export const insertAccountSchema = createInsertSchema(accounts).pick({
   email: true,
   discordUserId: true,
+  name: true,
+  plan: true,
+});
+
+export const insertUserAccountSchema = createInsertSchema(userAccounts).pick({
+  userId: true,
+  accountId: true,
+  role: true,
+});
+
+export const insertBetaInviteSchema = createInsertSchema(betaInvites).pick({
+  code: true,
+  claimedBy: true,
+  claimedAt: true,
 });
 
 export const insertLeagueSchema = createInsertSchema(leagues).pick({
@@ -523,6 +554,10 @@ export const insertContentQueueSchema = createInsertSchema(contentQueue).pick({
 // Types
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
+export type UserAccount = typeof userAccounts.$inferSelect;
+export type InsertUserAccount = z.infer<typeof insertUserAccountSchema>;
+export type BetaInvite = typeof betaInvites.$inferSelect;
+export type InsertBetaInvite = z.infer<typeof insertBetaInviteSchema>;
 export type League = typeof leagues.$inferSelect;
 export type InsertLeague = z.infer<typeof insertLeagueSchema>;
 export type Member = typeof members.$inferSelect;

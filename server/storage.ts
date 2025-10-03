@@ -165,6 +165,11 @@ export interface IStorage {
   getContentQueueByLeague(leagueId: string, status?: string): Promise<ContentQueue[]>;
   updateContentQueueStatus(id: string, status: string, postedMessageId?: string): Promise<void>;
 
+  // Activation flow methods (Phase 4)
+  getUserAccount(userId: string): Promise<string | null>;
+  linkUserAccount(userId: string, accountId: string, role: string): Promise<void>;
+  findDemoLeague(accountId: string): Promise<string | null>;
+
   // Migration methods
   runRawSQL(query: string): Promise<any>;
   ensurePgVectorExtension(): Promise<void>;
@@ -977,6 +982,32 @@ export class DatabaseStorage implements IStorage {
       .where(eq(schema.contentQueue.id, id));
   }
 
+  // Activation flow methods (Phase 4)
+  async getUserAccount(userId: string): Promise<string | null> {
+    const results = await this.db.select({ accountId: schema.userAccounts.accountId })
+      .from(schema.userAccounts)
+      .where(eq(schema.userAccounts.userId, userId))
+      .limit(1);
+    return results[0]?.accountId || null;
+  }
+
+  async linkUserAccount(userId: string, accountId: string, role: string): Promise<void> {
+    await this.db.insert(schema.userAccounts)
+      .values({ userId, accountId, role })
+      .onConflictDoNothing();
+  }
+
+  async findDemoLeague(accountId: string): Promise<string | null> {
+    const results = await this.db.select({ id: schema.leagues.id })
+      .from(schema.leagues)
+      .where(and(
+        eq(schema.leagues.accountId, accountId),
+        sql`(feature_flags->>'demo')::boolean = true`
+      ))
+      .limit(1);
+    return results[0]?.id || null;
+  }
+
   // Migration methods implementation
   async runRawSQL(query: string): Promise<any> {
     return this.db.execute(sql.raw(query));
@@ -1045,7 +1076,9 @@ export class MemStorage implements IStorage {
       ...account, 
       id, 
       createdAt: new Date(),
-      discordUserId: account.discordUserId ?? null
+      discordUserId: account.discordUserId ?? null,
+      name: account.name ?? null,
+      plan: account.plan ?? null
     };
     this.accounts.set(id, newAccount);
     return id;
@@ -1748,6 +1781,20 @@ export class MemStorage implements IStorage {
         item.postedMessageId = postedMessageId;
       }
     }
+  }
+
+  // Activation flow methods (Phase 4) - in-memory stub implementations
+  async getUserAccount(userId: string): Promise<string | null> {
+    return null;
+  }
+
+  async linkUserAccount(userId: string, accountId: string, role: string): Promise<void> {
+    console.log("MemStorage: linkUserAccount not implemented");
+  }
+
+  async findDemoLeague(accountId: string): Promise<string | null> {
+    return Array.from(this.leagues.values())
+      .find(l => l.accountId === accountId && (l.featureFlags as any)?.demo === true)?.id || null;
   }
 
   // Migration methods implementation (no-op for in-memory storage)

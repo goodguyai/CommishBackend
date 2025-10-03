@@ -41,6 +41,8 @@ import {
 import { toast } from 'sonner';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Member, Reminder, League } from '@shared/schema';
+import { ModeBadge } from '@/components/ModeBadge';
+import { FinishSetupBanner } from '@/components/FinishSetupBanner';
 
 interface DashboardStats {
   activeLeagues: number;
@@ -835,12 +837,28 @@ export function DashboardPage() {
     return cron;
   };
 
+  // Check if current league is in demo mode
+  const isDemoMode = leagueData?.league?.featureFlags && (leagueData.league.featureFlags as any)?.demo === true;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-text-primary mb-1">Dashboard</h1>
-        <p className="text-text-secondary">League management and bot system status</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-text-primary mb-1">Dashboard</h1>
+            {isDemoMode && <ModeBadge mode="demo" />}
+          </div>
+          <p className="text-text-secondary">League management and bot system status</p>
+        </div>
       </div>
+
+      {isDemoMode && (
+        <FinishSetupBanner 
+          message="You're in demo mode. Activate beta to connect your real Discord and Sleeper league."
+          actionLabel="Activate Beta"
+          actionPath="/"
+        />
+      )}
 
       {/* Top Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -1,0 +1,367 @@
+Awesome — let’s ship the Demo vs Beta activation + Live Linking layer now.
+
+Below is a copy-paste, ready-to-implement package: minimal SQL, small service stubs, 4 API endpoints, and 3 tiny React components + hooks. It stays inside all guardrails (Supabase-only, env.ts, JSON-only, Vite API guards intact, no localhost, no schema churn).
+
+⸻
+
+1) Migration (idempotent)
+
+Create migrations/0008_modes_auth.sql:
+
+-- 0008_modes_auth.sql
+-- Safe to re-run. No destructive changes.
+
+create extension if not exists pgcrypto with schema public;
+
+create table if not exists accounts (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  name text,
+  plan text default 'beta'
+);
+
+create table if not exists user_accounts (
+  user_id uuid not null,
+  account_id uuid not null references accounts(id) on delete cascade,
+  role text not null default 'owner',
+  primary key (user_id, account_id)
+);
+
+alter table if exists leagues
+  add column if not exists account_id uuid;
+
+-- Simple invite mechanism (optional)
+create table if not exists beta_invites (
+  code text primary key,
+  created_at timestamptz not null default now(),
+  claimed_by uuid,
+  claimed_at timestamptz
+);
+
+-- Convenience view to expose demo/beta flags cleanly
+create or replace view v_league_modes as
+select
+  l.id as league_id,
+  l.guild_id,
+  l.channel_id,
+  l.sleeper_league_id,
+  coalesce((l.feature_flags->>'demo')::boolean, false) as is_demo,
+  coalesce((l.feature_flags->>'beta')::boolean, true)  as is_beta,
+  l.account_id
+from leagues l;
+
+Apply via your normal migration runner. Do not hand-edit schema elsewhere.
+
+⸻
+
+2) Services (typed stubs)
+
+Add server/services/auth.ts:
+
+import type { Request } from "express";
+import type { Storage } from "../storage";
+
+export type SessionUser = { userId: string; email?: string | null; accountId?: string | null };
+
+export class AuthService {
+  constructor(private store: Storage) {}
+
+  /**
+   * Resolve the current user from session/cookie/JWT header.
+   * For now, accept a header "x-user-id" (dev) and treat as authenticated.
+   * Replit can later wire Supabase Auth or your session.
+   */
+  async getSessionUser(req: Request): Promise<SessionUser | null> {
+    const hdr = req.header("x-user-id"); // dev-only
+    if (!hdr) return null;
+    // TODO: look up user's default account from user_accounts; return { userId, accountId }
+    return { userId: hdr, accountId: undefined };
+  }
+
+  /** Ensure an account exists for the user; link in user_accounts. */
+  async ensureAccount(user: SessionUser): Promise<string> {
+    if (user.accountId) return user.accountId;
+    // Minimal: create or reuse a single account for the user
+    // Replit: implement using this.store.<your methods> (insert accounts, user_accounts)
+    return "00000000-0000-0000-0000-000000000000";
+  }
+}
+
+Add server/services/demo.ts:
+
+import type { Storage } from "../storage";
+
+export class DemoService {
+  constructor(private store: Storage) {}
+
+  /**
+   * Create or reuse a demo league for an account.
+   * Sets featureFlags.demo=true and a safe name.
+   */
+  async ensureDemoLeague(accountId: string): Promise<{ leagueId: string }> {
+    // Replit: implement find-or-create league with account_id=accountId and featureFlags.demo=true
+    return { leagueId: "demo-league-id" };
+  }
+}
+
+Keep the existing Phase 1–3 services as-is.
+
+⸻
+
+3) API Endpoints (JSON-only)
+
+Open server/routes.ts. Before the health route, add:
+
+import { z } from "zod";
+import { AuthService } from "./services/auth";
+import { DemoService } from "./services/demo";
+// import your storage factory or instance:
+import { storage } from "./storage"; // adjust import to your project’s actual export
+
+const auth = new AuthService(storage);
+const demo = new DemoService(storage);
+
+/**
+ * GET /api/app/modes
+ * Decide which CTAs to show on the homepage.
+ */
+app.get("/api/app/modes", async (req, res) => {
+  try {
+    const user = await auth.getSessionUser(req);
+    const cta: ("demo" | "beta")[] = user ? ["demo", "beta"] : ["demo", "beta"];
+    res.json({ cta, hasSession: !!user, hasLeague: false });
+  } catch (e) {
+    res.status(500).json({ error: "MODES_FAILED" });
+  }
+});
+
+/**
+ * POST /api/app/demo/activate
+ * Body: {}
+ * Returns: { ok:true, leagueId }
+ */
+app.post("/api/app/demo/activate", async (req, res) => {
+  try {
+    // Allow anonymous demo: create a soft account or fall back to a known demo account
+    const user = (await auth.getSessionUser(req)) ?? { userId: "anon" };
+    const accountId = await auth.ensureAccount(user);
+    const { leagueId } = await demo.ensureDemoLeague(accountId);
+    // log event
+    await storage.addEvent?.({
+      type: "demo_activated",
+      details: { accountId, leagueId },
+    } as any);
+    res.json({ ok: true, leagueId });
+  } catch (e) {
+    res.status(500).json({ error: "DEMO_ACTIVATE_FAILED" });
+  }
+});
+
+/**
+ * POST /api/app/beta/activate
+ * Body: { inviteCode?: string }
+ * Returns: { ok:true, next:"/setup" }
+ */
+app.post("/api/app/beta/activate", async (req, res) => {
+  const Body = z.object({ inviteCode: z.string().optional() });
+  const body = Body.safeParse(req.body);
+  if (!body.success) return res.status(400).json({ error: "BAD_REQUEST" });
+
+  try {
+    const user = await auth.getSessionUser(req);
+    if (!user) return res.status(401).json({ error: "AUTH_REQUIRED" });
+
+    // Optionally validate inviteCode in beta_invites table (if provided)
+    // Ensure accounts + user_accounts link
+    await auth.ensureAccount(user);
+
+    await storage.addEvent?.({
+      type: "beta_activated",
+      details: { userId: user.userId },
+    } as any);
+
+    res.json({ ok: true, next: "/setup" });
+  } catch (e) {
+    res.status(500).json({ error: "BETA_ACTIVATE_FAILED" });
+  }
+});
+
+/**
+ * GET /api/app/me
+ * Returns user + leagues summary for shell UI.
+ */
+app.get("/api/app/me", async (req, res) => {
+  try {
+    const user = await auth.getSessionUser(req);
+    if (!user) return res.json({ userId: null, accountId: null, email: null, leagues: [] });
+
+    // Replit: pull leagues for this account from storage; map minimal fields + demo/beta flags via v_league_modes
+    const leagues: Array<{ id: string; name?: string; isDemo: boolean; isBeta: boolean }> = [];
+
+    res.json({
+      userId: user.userId,
+      accountId: user.accountId ?? null,
+      email: user.email ?? null,
+      leagues,
+    });
+  } catch (e) {
+    res.status(500).json({ error: "ME_FAILED" });
+  }
+});
+
+Keep your existing setup endpoints (/api/discord/*, /api/setup/*, /api/sleeper/*, /api/rag/*) untouched.
+
+⸻
+
+4) Frontend — Home CTAs + Badges (tiny)
+
+4.1 API hook (client)
+
+Create client/src/lib/apiApp.ts:
+
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(path, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    cache: "no-store",
+  });
+  if (!r.ok) throw new Error(`API ${path} -> ${r.status}`);
+  return (await r.json()) as T;
+}
+
+4.2 Home CTAs
+
+Add client/src/components/HomeCTAs.tsx:
+
+import { useEffect, useState } from "react";
+import { api } from "../lib/apiApp";
+
+type Modes = { cta: ("demo"|"beta")[]; hasSession: boolean; hasLeague: boolean; };
+
+export default function HomeCTAs() {
+  const [modes, setModes] = useState<Modes | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api<Modes>("/api/app/modes").then(setModes).catch(() => setModes({cta:["demo"],hasSession:false,hasLeague:false})); }, []);
+
+  const tryDemo = async () => {
+    setBusy(true);
+    try {
+      const r = await api<{ ok: true; leagueId: string }>("/api/app/demo/activate", { method: "POST", body: JSON.stringify({}) });
+      window.location.href = `/dashboard?leagueId=${encodeURIComponent(r.leagueId)}&mode=demo`;
+    } finally { setBusy(false); }
+  };
+
+  const activateBeta = async () => {
+    // If you have a login modal, open it if modes?.hasSession===false.
+    setBusy(true);
+    try {
+      const r = await api<{ ok: true; next: string }>("/api/app/beta/activate", { method: "POST", body: JSON.stringify({}) });
+      window.location.href = r.next || "/setup";
+    } finally { setBusy(false); }
+  };
+
+  if (!modes) return <div className="muted">Loading…</div>;
+
+  return (
+    <div className="home-ctas">
+      {modes.cta.includes("demo") && (
+        <button disabled={busy} onClick={tryDemo} className="btn btn-secondary">
+          Try Demo
+        </button>
+      )}
+      {modes.cta.includes("beta") && (
+        <button disabled={busy} onClick={activateBeta} className="btn btn-primary">
+          Activate Your Beta
+        </button>
+      )}
+    </div>
+  );
+}
+
+On your home page (client/src/pages/Home.tsx or equivalent), render:
+
+import HomeCTAs from "../components/HomeCTAs";
+export default function Home() {
+  return (
+    <main className="container">
+      <h1>THE COMMISH</h1>
+      <p className="muted">The co-commissioner that runs your league with you.</p>
+      <HomeCTAs />
+    </main>
+  );
+}
+
+4.3 Mode badge + Finish-Setup banner
+
+Add client/src/components/ModeBadge.tsx:
+
+export function ModeBadge({ isDemo }: { isDemo: boolean }) {
+  return (
+    <span className={`badge ${isDemo ? "badge-yellow" : "badge-green"}`}>
+      {isDemo ? "DEMO" : "BETA"}
+    </span>
+  );
+}
+
+Add client/src/components/FinishSetupBanner.tsx:
+
+type Props = { needsSetup: boolean; guildId?: string; };
+export function FinishSetupBanner({ needsSetup, guildId }: Props) {
+  if (!needsSetup) return null;
+  return (
+    <div className="banner warn">
+      You’re almost there — connect Discord & Sleeper to go live.
+      <a className="btn btn-small" href="/setup">Resume Setup</a>
+      {guildId ? <a className="btn btn-small" href={`/api/discord/post-test?guildId=${guildId}`}>Post Test</a> : null}
+    </div>
+  );
+}
+
+Use both in Dashboard (read mode via your existing /api/setup/status → include mode: "demo"|"beta" and missing fields):
+
+import { ModeBadge } from "../components/ModeBadge";
+import { FinishSetupBanner } from "../components/FinishSetupBanner";
+
+// inside component:
+{/* <ModeBadge isDemo={status.mode === "demo"} /> */}
+{/* <FinishSetupBanner needsSetup={!status.channelId || !status.sleeperLeagueId} guildId={status.guildId} /> */}
+
+
+⸻
+
+5) QA / Acceptance (quick)
+
+Run these after deploy:
+
+B=https://thecommish.replit.app
+curl -s "$B/api/app/modes" | jq           # shows demo/beta
+curl -s -X POST "$B/api/app/demo/activate" -H 'Content-Type: application/json' -d '{}' | jq
+# → { ok: true, leagueId: "..." }
+
+# Browser:
+# - Open /app (or your homepage), see both CTA buttons.
+# - Click “Try Demo” → lands on /dashboard?leagueId=... and shows DEMO badge.
+# - Click “Activate Your Beta” → if not signed in, prompt; after sign-in, lands on /setup.
+# - Complete Step 1 & 2 with your real Discord + Sleeper creds.
+# - Finish (index rules) → Dashboard all green; slash commands respond in Discord.
+
+
+⸻
+
+6) Notes for the Agent (so it “doesn’t run wild”)
+	•	Do not alter server/vite.ts other than existing /api/* guards (leave them intact).
+	•	Do not introduce new secrets outside env.ts.
+	•	Do not rewire database drivers; keep Supabase connection + sslmode=require.
+	•	Do not rename or remove existing /api/v1 or /api/v2 endpoints.
+	•	Do add events: demo_activated, beta_activated, league_discord_linked, league_sleeper_linked, league_activated.
+	•	Do keep JSON-only responses with proper error codes.
+
+⸻
+
+What you’ll see when it’s done
+	•	Home shows two clean CTAs: Try Demo / Activate Your Beta.
+	•	Demo jumps you straight into a ready league (safe sample data) with a DEMO badge.
+	•	Beta sends you through the existing /setup wizard (Discord + Sleeper + Rules), then to a green Dashboard.
+	•	Your two live leagues can be linked today (real guild + real Sleeper), and all earlier features (owners mapping, reminders, vibes/disputes, highlights/content) remain intact.
+
+If you want, I can also provide tiny storage layer shims for ensureDemoLeague and ensureAccount to match your current storage interface — but the above is enough for Replit to implement coherently without drifting from the codebase.

@@ -1,8 +1,11 @@
 import express, { type Request, Response, NextFunction } from "express";
+import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import pg from "pg";
 import { registerRoutes } from "./routes";
 import { scheduler } from "./lib/scheduler";
 import { serveStatic, log } from "./vite";
-import { validateEnvironment } from "./services/env";
+import { validateEnvironment, getEnv } from "./services/env";
 import { generateRequestId } from "./lib/crypto";
 
 const app = express();
@@ -112,6 +115,39 @@ app.use((req, res, next) => {
     }
     jsonParser(req, res, next);
   });
+
+  // Session middleware - must be before routes
+  const PgSession = connectPgSimple(session);
+  
+  // Parse connection string and configure SSL properly for Supabase
+  const dbUrl = new URL(getEnv().DATABASE_URL);
+  dbUrl.searchParams.delete('sslmode'); // Remove sslmode param as we use ssl object instead
+  
+  const sessionPool = new pg.Pool({
+    connectionString: dbUrl.toString(),
+    ssl: {
+      rejectUnauthorized: false,
+    },
+  });
+
+  app.use(
+    session({
+      store: new PgSession({
+        pool: sessionPool,
+        tableName: "user_sessions",
+        createTableIfMissing: false,
+      }),
+      secret: getEnv().SESSION_SECRET,
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        secure: getEnv().NODE_ENV === "production",
+        httpOnly: true,
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        sameSite: "lax",
+      },
+    })
+  );
 
   // CRITICAL: Register all API endpoints and WAIT for completion
   const server = await registerRoutes(app);
