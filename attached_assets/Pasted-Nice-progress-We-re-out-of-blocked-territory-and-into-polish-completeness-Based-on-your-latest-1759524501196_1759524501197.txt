@@ -1,0 +1,206 @@
+Nice progress. We’re out of “blocked” territory and into polish + completeness. Based on your latest logs:
+	•	The 500s on /api/app/demo/activate were caused by missing DB columns (leagues.channels, leagues.personality). You hot-patched with ALTER TABLE … ADD COLUMN. Good stopgap—now let’s make it permanent with a migration and finish the MVP UX so commissioners can actually run a league end-to-end.
+
+Below is a copy-paste work order for Replit that (1) codifies the DB fix, (2) eliminates any remaining “stale HTML” surprises, and (3) finishes the “feel complete” items (dashboard toggles, reminders, rules UX, owner mapping niceties), plus (4) adds small QA and observability improvements.
+
+⸻
+
+COPY THIS TO REPLIT (guardrails + tasks + checks)
+
+Guardrails (do not change)
+	•	APP_BASE_URL=https://thecommish.replit.app (no trailing slash)
+	•	Database = Supabase only (no Neon/Replit PG)
+	•	Read env via centralized env service only (no new process.env in routes)
+	•	Keep /api/discord/interactions on express.raw + Ed25519 verify
+	•	Keep Vite /api/* guards and current route order intact
+	•	Prefer new APIs under /api/v2/*
+	•	No schema edits except via migrations in migrations/*.sql
+
+⸻
+
+Phase 1 — Make the DB patch permanent + safe
+
+1.1 Add migration for the hotfix columns and defaults
+
+Create migrations/0010_leagues_columns.sql:
+
+BEGIN;
+
+-- Add JSONB columns if missing
+ALTER TABLE public.leagues
+  ADD COLUMN IF NOT EXISTS channels jsonb,
+  ADD COLUMN IF NOT EXISTS personality jsonb;
+
+-- Optional: set minimal defaults if NULL
+UPDATE public.leagues
+SET channels = COALESCE(channels, '{}'::jsonb),
+    personality = COALESCE(personality, jsonb_build_object('tone','neutral'));
+
+-- (Optional) basic constraint to ensure tone exists
+-- Comment out if you don’t want opinionated defaults yet
+-- ALTER TABLE public.leagues
+--   ADD CONSTRAINT leagues_personality_has_tone
+--   CHECK ( (personality ? 'tone') );
+
+COMMIT;
+
+Run:
+
+npm run db:migrate
+
+Acceptance
+
+psql "$DATABASE_URL" -c "\d+ public.leagues" | grep -E "channels|personality"
+
+Expect to see both columns.
+
+⸻
+
+Phase 2 — Lock in anti-cache for HTML (keep asset caching)
+
+(You already added no-store headers. Double-check both dev and prod paths are in place.)
+
+2.1 Rebuild & restart with version bump
+	•	Set BUILD_VERSION secret to a new value (timestamp).
+	•	Rebuild and restart:
+
+npm run build
+pkill -f node || true
+npm start &
+
+
+
+2.2 Verify new HTML is served
+
+curl -s "https://thecommish.replit.app/?cb=$(date +%s)" | head -40
+
+You should see your latest data-testids.
+
+⸻
+
+Phase 3 — Complete Commissioner Dashboard (polish + “feels complete”)
+
+3.1 Feature toggles & channels (UI + API)
+	•	Backend: Confirm/finish
+	•	GET /api/v2/leagues/:leagueId returns:
+	•	featureFlags object (include autoMeme, digest, reminders, polls, highlights, rivalries)
+	•	channels object (e.g., { digest: <id>, reminders: <id>, polls: <id>, highlights: <id> })
+	•	personality { tone: "neutral"|"sassy"|"formal"|"meme" }
+	•	PATCH /api/v2/leagues/:leagueId updates any of the above.
+	•	Frontend: In Dashboard
+	•	Feature Toggles Card (switches for the 5–6 flags; disable while saving; toast on success)
+	•	Channel Routing Card (dropdown per stream; load options from /api/v2/discord/channels?guildId= using saved guild)
+	•	Bot Personality Card (radio buttons for tones + live one-line preview)
+	•	Digest Controls (select: Off/Daily/Weekly; “Run now” calls /api/digest/run-now?leagueId=… behind admin-key in dev)
+
+Acceptance
+	•	Toggle any flag → persists and survives reload.
+	•	Change digest channel → /api/v2/leagues/:id reflects change.
+
+⸻
+
+Phase 4 — Owner Mapping niceties
+
+4.1 UI polish
+	•	Two lists: Unmapped Teams and Mapped Owners
+	•	Add a search box to the Discord users list.
+	•	Add “Auto-map suggestions” button:
+	•	Backend: POST /api/v2/owners/suggest (no DB write). Returns [ {teamId, discordUserId, confidence} ]
+	•	UI: show suggestions with “Apply” → POST /api/v2/owners/map
+	•	Add “Unmap” button in the Mapped list.
+
+Acceptance
+	•	Map/unmap works; suggestions show and applying writes to DB; reload shows correct state.
+
+⸻
+
+Phase 5 — Reminders & Schedules (MVP)
+
+5.1 Backend
+	•	POST /api/v2/reminders { leagueId, type: "lineup_lock"|"waivers"|"trade_deadline"|"custom", cron?, channelId? }
+	•	GET /api/v2/reminders?leagueId=...
+	•	Scheduler: idempotent jobs (store last_run, use jitter, respect Discord rate-limit wrapper)
+
+5.2 Frontend (Dashboard → Reminders Card)
+	•	Presets (toggle each):
+	•	Lineup lock (Sun 12:30p ET)
+	•	Waivers (Wed 9a local)
+	•	Trade deadline (T-7, T-1, T-0 days)
+	•	Custom reminder modal: message + cron + channel; basic validation.
+
+Acceptance
+	•	Enabling a preset shows in GET; content poster emits events when due (log shows scheduled sends).
+
+⸻
+
+Phase 6 — Rules (RAG) UX polish
+
+6.1 Rules Library
+	•	/api/v2/rag/docs?leagueId=… list docs (title, version, chunks, last_indexed)
+	•	Frontend card: shows list + “Re-index” per doc + “Add Rules” (textarea or file upload MVP)
+
+6.2 Answer card
+	•	For /rules & /scoring replies: render compact card with top chunk, source doc title/version, and “Not what you wanted? Try again” button.
+
+Acceptance
+	•	Add/reindex document works; /rules uses latest content and shows card-style answer in Discord.
+
+⸻
+
+Phase 7 — Slash commands quick audit
+
+Make sure these respond ephemerally and use league scoping:
+	•	/help (include a link to dashboard)
+	•	/rules question:<text>
+	•	/scoring question:<text>
+	•	/whoami
+	•	/digest run|status
+	•	/poll question:<text> options:<csv> duration:<m>
+
+Acceptance
+	•	Try each in Discord; gets a timely response; errors are structured.
+
+⸻
+
+Phase 8 — Reliability/Observability touch-ups (fast wins)
+	•	Ensure all /api/* responses set:
+	•	Cache-Control: no-store
+	•	X-Request-Id + elapsed ms in logs ([req_…] GET /path 200 45ms)
+	•	Discord posting uses your idempotent + retry wrapper (already wired; re-check).
+	•	Add a tiny /api/ping route for synthetic checks (returns {ok:true, ts}).
+
+Acceptance
+
+curl -I "$APP_BASE_URL/api/ping"
+curl -s "$APP_BASE_URL/api/ping" | jq
+
+
+⸻
+
+Phase 9 — QA: run the Playwright suite against prod (with cache-buster)
+
+npx playwright test --reporter=list
+
+	•	Make sure tests navigate with ?cb=${Date.now()}.
+	•	Save HTML and screenshots for failing tests.
+
+Acceptance
+	•	Green suite for: Home CTAs, Demo activation, Setup wizard, API sanity, Owner mapping.
+	•	Any new dashboard tests you add for toggles/reminders pass.
+
+⸻
+
+End of work order
+
+⸻
+
+What I’ll look for from Replit after you paste this
+	1.	Migration 0010_leagues_columns.sql added & applied (leagues has channels, personality across all envs).
+	2.	Dashboard cards present and stateful: toggles, channel routing, personality, digest controls.
+	3.	Owner mapping search & suggestions UX works.
+	4.	Reminders presets create scheduled jobs (logs show scheduled posts, rate-limit respected).
+	5.	Rules doc listing + reindex from dashboard; /rules answers show a neat card in Discord.
+	6.	End-to-end Playwright: green.
+	7.	Health steady, logs show request IDs and ms timings.
+
+If you hit a snag, drop me the specific endpoint/UI that’s failing and the console log line (the [req_…] record). I’ll translate that into a surgical patch.
