@@ -22,6 +22,14 @@ import { ContentService } from "./services/content";
 import { AuthService } from "./services/auth";
 import { DemoService } from "./services/demo";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member } from "@shared/schema";
+import { validate, schemas } from "./utils/validation";
+
+// Extend express-session types to include csrfToken
+declare module 'express-session' {
+  interface SessionData {
+    csrfToken?: string;
+  }
+}
 
 // Zod schemas for Phase 2 API request validation
 const vibesScoreSchema = z.object({
@@ -530,6 +538,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   });
 
+  // CSRF token endpoint
+  app.get('/api/csrf-token', (req, res) => {
+    if (!req.session.csrfToken) {
+      req.session.csrfToken = nanoid(32);
+    }
+    res.json({ token: req.session.csrfToken });
+  });
+
+  // CSRF protection middleware for /api/v2/* routes
+  app.use('/api/v2', (req, res, next) => {
+    // Skip CSRF for GET/HEAD/OPTIONS
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      return next();
+    }
+    
+    // Skip CSRF for requests with X-Admin-Key (server-to-server)
+    if (req.headers['x-admin-key']) {
+      return next();
+    }
+    
+    // Check CSRF token
+    const csrfToken = req.headers['x-csrf-token'] || req.body?._csrf;
+    const sessionToken = req.session?.csrfToken;
+    
+    if (!csrfToken || !sessionToken || csrfToken !== sessionToken) {
+      return res.status(403).json({
+        ok: false,
+        code: 'CSRF_TOKEN_INVALID',
+        message: 'CSRF token missing or invalid',
+      });
+    }
+    
+    next();
+  });
+
   // Dev: Register Discord commands (requires admin key)
   app.post("/api/dev/register-commands", async (req, res) => {
     // Admin authentication
@@ -774,12 +817,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/v2/vibes/score", async (req, res) => {
     try {
       // Validate request body
-      const validation = vibesScoreSchema.safeParse(req.body);
-      if (!validation.success) {
-        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      const validation = validate(vibesScoreSchema, req.body);
+      if (!validation.ok) {
+        return res.status(400).json(validation);
       }
 
-      const { leagueId, channelId, messageId, authorId, text } = validation.data;
+      const { leagueId, channelId, messageId, authorId, text } = validation.data!;
 
       // Auth check (admin key OR commissioner)
       const auth = await checkAuthV2(req, leagueId, true);
@@ -962,12 +1005,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/v2/disputes", async (req, res) => {
     try {
       // Validate request body
-      const validation = createDisputeSchema.safeParse(req.body);
-      if (!validation.success) {
-        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      const validation = validate(createDisputeSchema, req.body);
+      if (!validation.ok) {
+        return res.status(400).json(validation);
       }
 
-      const { leagueId, kind, subjectId, openedBy, details } = validation.data;
+      const { leagueId, kind, subjectId, openedBy, details } = validation.data!;
 
       // Create dispute
       const disputeId = await storage.createDispute({
@@ -1134,15 +1177,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // POST /api/v2/owners/map - Upsert a member mapping
   app.post("/api/v2/owners/map", async (req, res) => {
     try {
-      const { leagueId, teamId, discordUserId, teamName, discordUsername } = req.body;
+      const validation = validate(
+        z.object({
+          leagueId: schemas.leagueId,
+          teamId: z.string().min(1),
+          discordUserId: schemas.discordId,
+          teamName: z.string().optional(),
+          discordUsername: z.string().optional(),
+        }),
+        req.body
+      );
       
-      if (!leagueId || !teamId || !discordUserId) {
-        return res.status(400).json({ 
-          ok: false, 
-          code: "MISSING_FIELDS", 
-          message: "leagueId, teamId, and discordUserId are required" 
-        });
+      if (!validation.ok) {
+        return res.status(400).json(validation);
       }
+      
+      const { leagueId, teamId, discordUserId, teamName, discordUsername } = validation.data!;
       
       await storage.upsertMember({
         leagueId,
