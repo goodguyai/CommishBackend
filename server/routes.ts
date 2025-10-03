@@ -15,6 +15,9 @@ import { scheduler } from "./lib/scheduler";
 import { VibesService } from "./services/vibes";
 import { ModerationService } from "./services/moderation";
 import { TradeFairnessService } from "./services/tradeFairness";
+import { HighlightsService } from "./services/highlights";
+import { RivalriesService } from "./services/rivalries";
+import { ContentService } from "./services/content";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema } from "@shared/schema";
 
 // Zod schemas for Phase 2 API request validation
@@ -67,12 +70,39 @@ const evaluateTradeSchema = z.object({
   }),
 });
 
+// Zod schemas for Phase 3 API request validation
+const computeHighlightsSchema = z.object({
+  leagueId: z.string().uuid(),
+  week: z.number().int().min(1).max(18).optional(),
+});
+
+const getHighlightsSchema = z.object({
+  leagueId: z.string().uuid(),
+  week: z.string().regex(/^\d+$/).transform(Number).optional(),
+});
+
+const updateRivalriesSchema = z.object({
+  leagueId: z.string().uuid(),
+  week: z.number().int().min(1).max(18).optional(),
+});
+
+const enqueueContentSchema = z.object({
+  leagueId: z.string().uuid(),
+  channelId: z.string(),
+  scheduledAt: z.string().datetime(),
+  template: z.enum(['digest', 'highlight', 'meme', 'rivalry']),
+  payload: z.record(z.any()),
+});
+
 // Module-level variables that will be initialized after env validation
 let ragService: RAGService;
 let eventBus: EventBus;
 let vibesService: VibesService;
 let moderationService: ModerationService;
 let tradeFairnessService: TradeFairnessService;
+let highlightsService: HighlightsService;
+let rivalriesService: RivalriesService;
+let contentService: ContentService;
 
 // Session store for OAuth tokens (simple in-memory store for demo)
 const oAuthSessions = new Map<string, {
@@ -96,6 +126,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   vibesService = new VibesService(storage);
   moderationService = new ModerationService(storage);
   tradeFairnessService = new TradeFairnessService(storage);
+  highlightsService = new HighlightsService();
+  rivalriesService = new RivalriesService();
+  contentService = new ContentService();
 
   // Setup event handlers
   eventBus.on("digest_due", async (data) => {
@@ -1286,6 +1319,211 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: "Failed to evaluate trade", code: "TRADE_EVALUATE_FAILED" });
     }
   });
+
+  // === PHASE 3 ENGAGEMENT ENDPOINTS ===
+
+  // 1. POST /api/v2/highlights/compute - Compute and store week highlights
+  app.post("/api/v2/highlights/compute", async (req, res) => {
+    try {
+      // Validate request body
+      const validation = computeHighlightsSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      }
+
+      let { leagueId, week } = validation.data;
+
+      // Auth check (admin key OR commissioner)
+      const auth = await checkAuthV2(req, leagueId, true);
+      if (!auth.authorized) {
+        return res.status(403).json({ error: auth.error || "Unauthorized", code: "AUTH_REQUIRED" });
+      }
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+      }
+
+      // If week not provided, use current week from Sleeper
+      if (!week) {
+        week = await sleeperService.getCurrentWeek();
+      }
+
+      // Compute highlights
+      const summary = await highlightsService.computeWeekHighlights({ leagueId, week });
+
+      // Get the computed highlights
+      const highlights = await storage.getHighlightsByLeagueWeek(leagueId, week);
+
+      // Emit event
+      eventBus.emit("highlights_computed", {
+        leagueId,
+        week,
+        count: summary.total,
+      });
+
+      res.json({
+        computed: summary.total,
+        highlights,
+      });
+    } catch (error) {
+      console.error("Compute highlights error:", error);
+      res.status(500).json({ error: "Failed to compute highlights", code: "HIGHLIGHTS_COMPUTE_FAILED" });
+    }
+  });
+
+  // 2. GET /api/v2/highlights - List highlights
+  app.get("/api/v2/highlights", async (req, res) => {
+    try {
+      // Validate query params
+      const validation = getHighlightsSchema.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid query parameters", details: validation.error.issues });
+      }
+
+      const { leagueId, week } = validation.data;
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+      }
+
+      // Get highlights
+      let highlights;
+      if (week !== undefined) {
+        highlights = await storage.getHighlightsByLeagueWeek(leagueId, week);
+      } else {
+        // If no week specified, return all highlights for the league
+        highlights = await storage.getHighlightsByLeagueWeek(leagueId, 0);
+      }
+
+      res.json({ highlights });
+    } catch (error) {
+      console.error("Get highlights error:", error);
+      res.status(500).json({ error: "Failed to get highlights", code: "HIGHLIGHTS_GET_FAILED" });
+    }
+  });
+
+  // 3. POST /api/v2/rivalries/update - Update rivalry records
+  app.post("/api/v2/rivalries/update", async (req, res) => {
+    try {
+      // Validate request body
+      const validation = updateRivalriesSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      }
+
+      let { leagueId, week } = validation.data;
+
+      // Auth check (admin key OR commissioner)
+      const auth = await checkAuthV2(req, leagueId, true);
+      if (!auth.authorized) {
+        return res.status(403).json({ error: auth.error || "Unauthorized", code: "AUTH_REQUIRED" });
+      }
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+      }
+
+      // If week not provided, use current week from Sleeper
+      if (!week) {
+        week = await sleeperService.getCurrentWeek();
+      }
+
+      // Update rivalries
+      await rivalriesService.updateHeadToHead({ leagueId, week });
+
+      // Emit event
+      eventBus.emit("rivalries_updated", {
+        leagueId,
+        week,
+      });
+
+      res.json({
+        updated: 1,
+        message: `Rivalries updated for week ${week}`,
+      });
+    } catch (error) {
+      console.error("Update rivalries error:", error);
+      res.status(500).json({ error: "Failed to update rivalries", code: "RIVALRIES_UPDATE_FAILED" });
+    }
+  });
+
+  // 4. POST /api/v2/content/enqueue - Queue content for posting
+  app.post("/api/v2/content/enqueue", async (req, res) => {
+    try {
+      // Validate request body
+      const validation = enqueueContentSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      }
+
+      const { leagueId, channelId, scheduledAt, template, payload } = validation.data;
+
+      // Auth check (admin key OR commissioner)
+      const auth = await checkAuthV2(req, leagueId, true);
+      if (!auth.authorized) {
+        return res.status(403).json({ error: auth.error || "Unauthorized", code: "AUTH_REQUIRED" });
+      }
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+      }
+
+      // Enqueue content
+      const queuedItem = await contentService.enqueue({
+        leagueId,
+        channelId,
+        scheduledAt: new Date(scheduledAt),
+        template,
+        payload,
+      });
+
+      // Emit event
+      eventBus.emit("content_queued", {
+        leagueId,
+        template,
+        scheduledAt,
+      });
+
+      res.status(201).json(queuedItem);
+    } catch (error) {
+      console.error("Enqueue content error:", error);
+      res.status(500).json({ error: "Failed to enqueue content", code: "CONTENT_ENQUEUE_FAILED" });
+    }
+  });
+
+  // 5. POST /api/v2/content/run - Run content poster (CRON-like)
+  app.post("/api/v2/content/run", async (req, res) => {
+    try {
+      // Admin authentication
+      const adminKey = req.headers["x-admin-key"];
+      if (!env.app.adminKey || adminKey !== env.app.adminKey) {
+        return res.status(401).json({ error: "Unauthorized", code: "UNAUTHORIZED" });
+      }
+
+      // Post queued content
+      const posted = await contentService.postQueued(new Date());
+
+      // Emit event
+      eventBus.emit("content_posted", {
+        count: posted,
+      });
+
+      res.json({ posted });
+    } catch (error) {
+      console.error("Run content poster error:", error);
+      res.status(500).json({ error: "Failed to run content poster", code: "CONTENT_RUN_FAILED" });
+    }
+  });
+
+  // === END PHASE 3 ENDPOINTS ===
 
   // === END SETUP WIZARD ENDPOINTS ===
 
