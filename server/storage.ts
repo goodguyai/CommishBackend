@@ -9,7 +9,9 @@ import type {
   DiscordInteraction, PendingSetup, InsertPendingSetup,
   OwnerMapping, InsertOwnerMapping, Poll, InsertPoll,
   Vote, InsertVote, Reminder, InsertReminder,
-  SentimentLog, InsertSentimentLog, TradeInsight, InsertTradeInsight
+  SentimentLog, InsertSentimentLog, TradeInsight, InsertTradeInsight,
+  ModAction, InsertModAction, Dispute, InsertDispute,
+  TradeEvaluation, InsertTradeEvaluation
 } from "@shared/schema";
 import { EmbeddingResult } from "./services/rag";
 import { env } from "./services/env";
@@ -138,6 +140,11 @@ export interface IStorage {
   // Trade Insight methods (Phase 1)
   createTradeInsight(data: InsertTradeInsight): Promise<string>;
   getTradeInsights(leagueId: string, limit?: number): Promise<TradeInsight[]>;
+
+  // Phase 2 methods
+  createModAction(data: InsertModAction): Promise<string>;
+  createDispute(data: InsertDispute): Promise<string>;
+  createTradeEvaluation(data: InsertTradeEvaluation): Promise<string>;
 
   // Migration methods
   runRawSQL(query: string): Promise<any>;
@@ -796,6 +803,28 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
+  // Phase 2 methods implementation
+  async createModAction(data: InsertModAction): Promise<string> {
+    const result = await this.db.insert(schema.modActions)
+      .values(data)
+      .returning({ id: schema.modActions.id });
+    return result[0].id;
+  }
+
+  async createDispute(data: InsertDispute): Promise<string> {
+    const result = await this.db.insert(schema.disputes)
+      .values(data)
+      .returning({ id: schema.disputes.id });
+    return result[0].id;
+  }
+
+  async createTradeEvaluation(data: InsertTradeEvaluation): Promise<string> {
+    const result = await this.db.insert(schema.tradeEvaluations)
+      .values(data)
+      .returning({ id: schema.tradeEvaluations.id });
+    return result[0].id;
+  }
+
   // Migration methods implementation
   async runRawSQL(query: string): Promise<any> {
     return this.db.execute(sql.raw(query));
@@ -822,6 +851,9 @@ export class MemStorage implements IStorage {
   private votes: Map<string, Vote> = new Map();
   private sentimentLogs: Map<string, SentimentLog> = new Map();
   private tradeInsights: Map<string, TradeInsight> = new Map();
+  private modActions: Map<string, ModAction> = new Map();
+  private disputes: Map<string, Dispute> = new Map();
+  private tradeEvaluations: Map<string, TradeEvaluation> = new Map();
 
   // Helper to generate IDs
   private generateId(): string {
@@ -1352,8 +1384,9 @@ export class MemStorage implements IStorage {
     const newLog: SentimentLog = {
       id,
       ...data,
-      sampleSize: data.sampleSize ?? 0,
-      metadata: data.metadata ?? {},
+      summary: data.summary ?? null,
+      toxicityScore: data.toxicityScore ?? null,
+      sentimentScore: data.sentimentScore ?? null,
       createdAt: new Date()
     };
     this.sentimentLogs.set(id, newLog);
@@ -1392,6 +1425,51 @@ export class MemStorage implements IStorage {
       .filter(insight => insight.leagueId === leagueId)
       .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0))
       .slice(0, limit);
+  }
+
+  // Phase 2 methods implementation
+  async createModAction(data: InsertModAction): Promise<string> {
+    const id = this.generateId();
+    const newAction: ModAction = {
+      id,
+      ...data,
+      targetChannelId: data.targetChannelId ?? null,
+      targetMessageId: data.targetMessageId ?? null,
+      reason: data.reason ?? null,
+      createdAt: new Date()
+    };
+    this.modActions.set(id, newAction);
+    return id;
+  }
+
+  async createDispute(data: InsertDispute): Promise<string> {
+    const id = this.generateId();
+    const newDispute: Dispute = {
+      id,
+      ...data,
+      subjectId: data.subjectId ?? null,
+      status: data.status ?? "open",
+      details: data.details ?? null,
+      resolution: data.resolution ?? null,
+      resolvedAt: data.resolvedAt ?? null,
+      createdAt: new Date()
+    };
+    this.disputes.set(id, newDispute);
+    return id;
+  }
+
+  async createTradeEvaluation(data: InsertTradeEvaluation): Promise<string> {
+    const id = this.generateId();
+    const newEvaluation: TradeEvaluation = {
+      id,
+      ...data,
+      fairnessScore: data.fairnessScore ?? null,
+      rationale: data.rationale ?? null,
+      inputs: data.inputs ?? null,
+      createdAt: new Date()
+    };
+    this.tradeEvaluations.set(id, newEvaluation);
+    return id;
   }
 
   // Migration methods implementation (no-op for in-memory storage)

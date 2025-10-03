@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, jsonb, integer, real, pgEnum, uuid, boolean, customType, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, jsonb, integer, real, pgEnum, uuid, boolean, customType, unique, numeric } from "drizzle-orm/pg-core";
 
 // Custom vector type for pgvector extension
 const vector = (dimension: number = 1536) => customType<{ data: number[]; driverData: string }>({
@@ -34,6 +34,7 @@ export const eventTypeEnum = pgEnum("event_type", [
   "MISCONFIGURED",
   "ERROR_OCCURRED"
 ]);
+export const disputeStatusEnum = pgEnum("dispute_status", ["open", "under_review", "resolved", "dismissed"]);
 
 // Core tables
 export const accounts = pgTable("accounts", {
@@ -232,13 +233,49 @@ export const sentimentLogs = pgTable("sentiment_logs", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   leagueId: uuid("league_id").references(() => leagues.id).notNull(),
   channelId: text("channel_id").notNull(),
-  score: real("score").notNull(), // -1.0 to 1.0
-  windowStart: timestamp("window_start").notNull(),
-  windowEnd: timestamp("window_end").notNull(),
-  sampleSize: integer("sample_size").default(0).notNull(),
-  metadata: jsonb("metadata").default({}),
-  createdAt: timestamp("created_at").defaultNow(),
+  messageId: text("message_id").notNull(),
+  authorId: text("author_id").notNull(),
+  summary: text("summary"),
+  toxicityScore: numeric("toxicity_score", { precision: 4, scale: 3 }),
+  sentimentScore: numeric("sentiment_score", { precision: 4, scale: 3 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const modActions = pgTable("mod_actions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  actor: text("actor").notNull(),
+  action: text("action").notNull(),
+  targetChannelId: text("target_channel_id"),
+  targetMessageId: text("target_message_id"),
+  reason: text("reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const disputes = pgTable("disputes", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  kind: text("kind").notNull(),
+  subjectId: text("subject_id"),
+  openedBy: text("opened_by").notNull(),
+  status: disputeStatusEnum("status").notNull().default("open"),
+  details: jsonb("details"),
+  resolution: jsonb("resolution"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+});
+
+export const tradeEvaluations = pgTable("trade_evaluations", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  tradeId: text("trade_id").notNull(),
+  fairnessScore: numeric("fairness_score", { precision: 5, scale: 2 }),
+  rationale: text("rationale"),
+  inputs: jsonb("inputs"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  uniqTradeEval: unique("uniq_trade_eval").on(table.leagueId, table.tradeId),
+}));
 
 export const tradeInsights = pgTable("trade_insights", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -377,11 +414,39 @@ export const insertReminderSchema = createInsertSchema(reminders).pick({
 export const insertSentimentLogSchema = createInsertSchema(sentimentLogs).pick({
   leagueId: true,
   channelId: true,
-  score: true,
-  windowStart: true,
-  windowEnd: true,
-  sampleSize: true,
-  metadata: true,
+  messageId: true,
+  authorId: true,
+  summary: true,
+  toxicityScore: true,
+  sentimentScore: true,
+});
+
+export const insertModActionSchema = createInsertSchema(modActions).pick({
+  leagueId: true,
+  actor: true,
+  action: true,
+  targetChannelId: true,
+  targetMessageId: true,
+  reason: true,
+});
+
+export const insertDisputeSchema = createInsertSchema(disputes).pick({
+  leagueId: true,
+  kind: true,
+  subjectId: true,
+  openedBy: true,
+  status: true,
+  details: true,
+  resolution: true,
+  resolvedAt: true,
+});
+
+export const insertTradeEvaluationSchema = createInsertSchema(tradeEvaluations).pick({
+  leagueId: true,
+  tradeId: true,
+  fairnessScore: true,
+  rationale: true,
+  inputs: true,
 });
 
 export const insertTradeInsightSchema = createInsertSchema(tradeInsights).pick({
@@ -425,6 +490,12 @@ export type Reminder = typeof reminders.$inferSelect;
 export type InsertReminder = z.infer<typeof insertReminderSchema>;
 export type SentimentLog = typeof sentimentLogs.$inferSelect;
 export type InsertSentimentLog = z.infer<typeof insertSentimentLogSchema>;
+export type ModAction = typeof modActions.$inferSelect;
+export type InsertModAction = z.infer<typeof insertModActionSchema>;
+export type Dispute = typeof disputes.$inferSelect;
+export type InsertDispute = z.infer<typeof insertDisputeSchema>;
+export type TradeEvaluation = typeof tradeEvaluations.$inferSelect;
+export type InsertTradeEvaluation = z.infer<typeof insertTradeEvaluationSchema>;
 export type TradeInsight = typeof tradeInsights.$inferSelect;
 export type InsertTradeInsight = z.infer<typeof insertTradeInsightSchema>;
 
