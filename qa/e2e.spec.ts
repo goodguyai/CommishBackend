@@ -51,7 +51,13 @@ test('02 Demo activation flow (no auth required)', async ({ page }) => {
   // Wait for navigation to complete
   await page.waitForURL(/\/(app|dashboard)/, { timeout: 10000 });
   
-  // Now check for demo badge and dashboard
+  // Wait for dashboard to fully load (the dashboard queries league data, which loads the demo badge)
+  await page.waitForSelector('[data-testid="dashboard-root"]', { timeout: 10000 });
+  
+  // Wait for demo badge to appear (it shows after league data loads)
+  await page.waitForSelector('[data-testid="badge-mode-demo"]', { timeout: 10000 });
+  
+  // Now verify both are visible
   await expect(page.getByTestId('badge-mode-demo')).toBeVisible();
   await expect(page.getByTestId('dashboard-root')).toBeVisible();
   await page.screenshot({ path: 'qa__02_demo_dashboard.png', fullPage: true });
