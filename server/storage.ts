@@ -157,8 +157,10 @@ export interface IStorage {
   deleteHighlightsByLeagueWeek(leagueId: string, week: number): Promise<void>;
   createOrUpdateRivalry(rivalry: InsertRivalry): Promise<string>;
   getRivalry(leagueId: string, teamA: string, teamB: string): Promise<Rivalry | undefined>;
+  getRivalriesByLeague(leagueId: string): Promise<Rivalry[]>;
   createContentQueueItem(item: InsertContentQueue): Promise<string>;
   getQueuedContent(now: Date): Promise<ContentQueue[]>;
+  getContentQueueByLeague(leagueId: string, status?: string): Promise<ContentQueue[]>;
   updateContentQueueStatus(id: string, status: string, postedMessageId?: string): Promise<void>;
 
   // Migration methods
@@ -911,6 +913,12 @@ export class DatabaseStorage implements IStorage {
     return rivalries[0];
   }
 
+  async getRivalriesByLeague(leagueId: string): Promise<Rivalry[]> {
+    return this.db.select().from(schema.rivalries)
+      .where(eq(schema.rivalries.leagueId, leagueId))
+      .orderBy(desc(sql`${schema.rivalries.aWins} + ${schema.rivalries.bWins}`));
+  }
+
   async createContentQueueItem(item: InsertContentQueue): Promise<string> {
     const result = await this.db.insert(schema.contentQueue)
       .values(item)
@@ -925,6 +933,21 @@ export class DatabaseStorage implements IStorage {
         sql`${schema.contentQueue.scheduledAt} <= ${now}`
       ))
       .orderBy(schema.contentQueue.scheduledAt);
+  }
+
+  async getContentQueueByLeague(leagueId: string, status?: string): Promise<ContentQueue[]> {
+    if (status) {
+      return this.db.select().from(schema.contentQueue)
+        .where(and(
+          eq(schema.contentQueue.leagueId, leagueId),
+          eq(schema.contentQueue.status, status as "queued" | "posted" | "skipped")
+        ))
+        .orderBy(desc(schema.contentQueue.createdAt));
+    } else {
+      return this.db.select().from(schema.contentQueue)
+        .where(eq(schema.contentQueue.leagueId, leagueId))
+        .orderBy(desc(schema.contentQueue.createdAt));
+    }
   }
 
   async updateContentQueueStatus(id: string, status: string, postedMessageId?: string): Promise<void> {
@@ -1651,6 +1674,12 @@ export class MemStorage implements IStorage {
       .find(r => r.leagueId === leagueId && r.teamA === teamA && r.teamB === teamB);
   }
 
+  async getRivalriesByLeague(leagueId: string): Promise<Rivalry[]> {
+    return Array.from(this.rivalries.values())
+      .filter(r => r.leagueId === leagueId)
+      .sort((a, b) => (b.aWins + b.bWins) - (a.aWins + a.bWins));
+  }
+
   async createContentQueueItem(item: InsertContentQueue): Promise<string> {
     const id = this.generateId();
     const newItem: ContentQueue = {
@@ -1668,6 +1697,17 @@ export class MemStorage implements IStorage {
     return Array.from(this.contentQueueItems.values())
       .filter(item => item.status === "queued" && item.scheduledAt <= now)
       .sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime());
+  }
+
+  async getContentQueueByLeague(leagueId: string, status?: string): Promise<ContentQueue[]> {
+    let items = Array.from(this.contentQueueItems.values())
+      .filter(item => item.leagueId === leagueId);
+    
+    if (status) {
+      items = items.filter(item => item.status === status);
+    }
+    
+    return items.sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
   }
 
   async updateContentQueueStatus(id: string, status: string, postedMessageId?: string): Promise<void> {

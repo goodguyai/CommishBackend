@@ -33,7 +33,10 @@ import {
   Shield,
   Search,
   Lock,
-  MessageCircle
+  MessageCircle,
+  Trophy,
+  Swords,
+  Clock
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiRequest, queryClient } from '@/lib/queryClient';
@@ -119,6 +122,38 @@ interface TradeEvaluation {
   timestamp: string;
 }
 
+interface Highlight {
+  id: string;
+  leagueId: string;
+  week: number;
+  kind: 'comeback' | 'blowout' | 'bench_tragedy' | 'top_scorer';
+  payload: any;
+  createdAt: string;
+}
+
+interface Rivalry {
+  id: string;
+  leagueId: string;
+  teamA: string;
+  teamB: string;
+  aWins: number;
+  bWins: number;
+  lastMeetingWeek: number | null;
+  meta: any;
+}
+
+interface ContentQueueItem {
+  id: string;
+  leagueId: string;
+  channelId: string;
+  scheduledAt: string;
+  template: 'digest' | 'highlight' | 'meme' | 'rivalry';
+  status: 'queued' | 'posted' | 'skipped';
+  payload: any;
+  postedMessageId: string | null;
+  createdAt: string;
+}
+
 const TIMEZONES = [
   'America/New_York',
   'America/Chicago',
@@ -194,6 +229,18 @@ export function DashboardPage() {
   const [clarifyChannelId, setClarifyChannelId] = useState('');
   const [clarifyQuestion, setClarifyQuestion] = useState('');
 
+  // Phase 3: Highlights State
+  const [highlightsWeek, setHighlightsWeek] = useState<number>(1);
+  const [highlightsEnabled, setHighlightsEnabled] = useState(false);
+
+  // Phase 3: Rivalries State
+  const [rivalriesEnabled, setRivalriesEnabled] = useState(false);
+
+  // Phase 3: Content Queue State
+  const [contentQueueStatusFilter, setContentQueueStatusFilter] = useState<string>('all');
+  const [creativeTrashTalk, setCreativeTrashTalk] = useState(false);
+  const [deepStats, setDeepStats] = useState(false);
+
   // Fetch leagues to get the first one if not set (using demo endpoint for testing)
   const { data: leagues } = useQuery<{ leagues: League[] }>({
     queryKey: ['/api/demo/leagues'],
@@ -228,6 +275,10 @@ export function DashboardPage() {
       setVibesMonitorEnabled(flags?.vibesMonitor ?? false);
       setVibesThreshold(flags?.vibesThreshold ?? 0.7);
       setVibesAlertDm(flags?.vibesAlertDm ?? false);
+      setCreativeTrashTalk(flags?.creativeTrashTalk ?? false);
+      setDeepStats(flags?.deepStats ?? false);
+      setHighlightsEnabled(flags?.highlights ?? false);
+      setRivalriesEnabled(flags?.rivalries ?? false);
     }
   }, [leagueData?.league]);
 
@@ -443,6 +494,109 @@ export function DashboardPage() {
     },
   });
 
+  // Phase 3: Highlights Query
+  const { data: highlightsData, isLoading: highlightsLoading, refetch: refetchHighlights } = useQuery<{ highlights: Highlight[] }>({
+    queryKey: ['/api/v2/highlights', leagueId, highlightsWeek],
+    queryFn: async () => {
+      const res = await fetch(`/api/v2/highlights?leagueId=${leagueId}&week=${highlightsWeek}`);
+      if (!res.ok) throw new Error('Failed to fetch highlights');
+      return res.json();
+    },
+    enabled: !!leagueId && highlightsWeek > 0,
+  });
+
+  // Phase 3: Compute Highlights Mutation
+  const computeHighlightsMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest('POST', '/api/v2/highlights/compute', {
+        leagueId,
+        week: highlightsWeek,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/highlights', leagueId] });
+      refetchHighlights();
+      toast.success('Highlights computed', {
+        description: `Highlights for week ${highlightsWeek} have been generated`,
+      });
+    },
+    onError: (error: any) => {
+      toast.error('Failed to compute highlights', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
+  // Phase 3: Rivalries Query
+  const { data: rivalriesData, isLoading: rivalriesLoading } = useQuery<{ rivalries: Rivalry[] }>({
+    queryKey: ['/api/v2/rivalries', leagueId],
+    queryFn: async () => {
+      const res = await fetch(`/api/v2/rivalries?leagueId=${leagueId}`);
+      if (!res.ok) throw new Error('Failed to fetch rivalries');
+      return res.json();
+    },
+    enabled: !!leagueId,
+  });
+
+  // Phase 3: Update Rivalries Mutation
+  const updateRivalriesMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest('POST', '/api/v2/rivalries/update', {
+        leagueId,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/rivalries', leagueId] });
+      toast.success('Rivalries updated', {
+        description: 'Rivalry records have been refreshed',
+      });
+    },
+    onError: (error: any) => {
+      toast.error('Failed to update rivalries', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
+  // Phase 3: Content Queue Query
+  const { data: contentQueueData, isLoading: contentQueueLoading } = useQuery<{ queue: ContentQueueItem[] }>({
+    queryKey: ['/api/v2/content/queue', leagueId, contentQueueStatusFilter],
+    queryFn: async () => {
+      const statusParam = contentQueueStatusFilter !== 'all' ? `&status=${contentQueueStatusFilter}` : '';
+      const res = await fetch(`/api/v2/content/queue?leagueId=${leagueId}${statusParam}`);
+      if (!res.ok) throw new Error('Failed to fetch content queue');
+      return res.json();
+    },
+    enabled: !!leagueId,
+  });
+
+  // Phase 3: Re-enqueue Content Mutation
+  const reenqueueContentMutation = useMutation({
+    mutationFn: async (item: ContentQueueItem) => {
+      const response = await apiRequest('POST', '/api/v2/content/enqueue', {
+        leagueId: item.leagueId,
+        channelId: item.channelId,
+        scheduledAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+        template: item.template,
+        payload: item.payload,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/content/queue', leagueId] });
+      toast.success('Content re-enqueued', {
+        description: 'Content has been added back to the queue',
+      });
+    },
+    onError: (error: any) => {
+      toast.error('Failed to re-enqueue content', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
   const handleManageDiscord = () => {
     toast.info('Opening Discord settings...', {
       description: 'Manage bot permissions, slash commands, and webhook configuration.',
@@ -568,6 +722,10 @@ export function DashboardPage() {
         digest: autoDigest,
         polls: pollsEnabled,
         trade_helper: tradeInsights,
+        creativeTrashTalk: creativeTrashTalk,
+        deepStats: deepStats,
+        highlights: highlightsEnabled,
+        rivalries: rivalriesEnabled,
       },
     });
   };
@@ -781,6 +939,46 @@ export function DashboardPage() {
                     checked={tradeInsights}
                     onCheckedChange={setTradeInsights}
                     data-testid="switch-trade-insights"
+                    className="data-[state=checked]:bg-brand-teal"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-text-primary">Creative Trash Talk</span>
+                  <Switch
+                    checked={creativeTrashTalk}
+                    onCheckedChange={setCreativeTrashTalk}
+                    data-testid="switch-creative-trash-talk"
+                    className="data-[state=checked]:bg-brand-teal"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-text-primary">Deep Statistics</span>
+                  <Switch
+                    checked={deepStats}
+                    onCheckedChange={setDeepStats}
+                    data-testid="switch-deep-stats"
+                    className="data-[state=checked]:bg-brand-teal"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-text-primary">Weekly Highlights</span>
+                  <Switch
+                    checked={highlightsEnabled}
+                    onCheckedChange={setHighlightsEnabled}
+                    data-testid="switch-highlights"
+                    className="data-[state=checked]:bg-brand-teal"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-text-primary">Rivalry Tracking</span>
+                  <Switch
+                    checked={rivalriesEnabled}
+                    onCheckedChange={setRivalriesEnabled}
+                    data-testid="switch-rivalries"
                     className="data-[state=checked]:bg-brand-teal"
                   />
                 </div>
@@ -1636,6 +1834,260 @@ export function DashboardPage() {
                 </Button>
               </div>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Phase 3: Highlights Section */}
+      {leagueId && (
+        <Card className="bg-surface-card border-border-subtle shadow-depth2">
+          <CardHeader>
+            <CardTitle className="text-text-primary flex items-center gap-2">
+              <Trophy className="w-5 h-5" />
+              Highlights
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex gap-2">
+                <Select value={highlightsWeek.toString()} onValueChange={(val) => setHighlightsWeek(parseInt(val))}>
+                  <SelectTrigger className="w-32 bg-surface-elevated border-border-default text-text-primary" data-testid="select-highlights-week">
+                    <SelectValue placeholder="Week" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 18 }, (_, i) => i + 1).map(week => (
+                      <SelectItem key={week} value={week.toString()}>Week {week}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  onClick={() => refetchHighlights()}
+                  data-testid="button-fetch-highlights"
+                  disabled={highlightsLoading}
+                  className="bg-brand-teal hover:bg-brand-teal/90 text-white"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Fetch
+                </Button>
+                <Button
+                  onClick={() => computeHighlightsMutation.mutate()}
+                  data-testid="button-compute-highlights"
+                  disabled={computeHighlightsMutation.isPending}
+                  className="bg-brand-pink hover:bg-brand-pink/90 text-white"
+                >
+                  <Zap className="w-4 h-4 mr-2" />
+                  {computeHighlightsMutation.isPending ? 'Computing...' : 'Compute'}
+                </Button>
+              </div>
+
+              {highlightsLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-24 w-full" />
+                  <Skeleton className="h-24 w-full" />
+                </div>
+              ) : highlightsData?.highlights && highlightsData.highlights.length > 0 ? (
+                <div className="space-y-3">
+                  {highlightsData.highlights.map((highlight) => (
+                    <div 
+                      key={highlight.id} 
+                      className="p-4 bg-surface-elevated border border-border-subtle rounded-lg space-y-2"
+                      data-testid={`highlight-card-${highlight.id}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <Badge
+                          className={`${
+                            highlight.kind === 'comeback' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
+                            highlight.kind === 'blowout' ? 'bg-red-500/20 text-red-400 border-red-500/30' :
+                            highlight.kind === 'bench_tragedy' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+                            'bg-brand-teal/20 text-brand-teal border-brand-teal/30'
+                          } border`}
+                          data-testid={`badge-highlight-kind-${highlight.id}`}
+                        >
+                          {highlight.kind.replace('_', ' ').toUpperCase()}
+                        </Badge>
+                        <span className="text-xs text-text-muted">
+                          {new Date(highlight.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="text-sm text-text-primary">
+                        <pre className="whitespace-pre-wrap font-sans">
+                          {JSON.stringify(highlight.payload, null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-text-secondary" data-testid="empty-highlights">
+                  <Trophy className="w-10 h-10 mx-auto mb-2 text-text-muted" />
+                  <p>No highlights for this week</p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Phase 3: Rivalries Section */}
+      {leagueId && (
+        <Card className="bg-surface-card border-border-subtle shadow-depth2">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-text-primary flex items-center gap-2">
+                <Swords className="w-5 h-5" />
+                Rivalries
+              </CardTitle>
+              <Button
+                onClick={() => updateRivalriesMutation.mutate()}
+                data-testid="button-update-rivalries"
+                disabled={updateRivalriesMutation.isPending}
+                className="bg-brand-teal hover:bg-brand-teal/90 text-white"
+              >
+                <RefreshCw className="w-4 h-4 mr-2" />
+                {updateRivalriesMutation.isPending ? 'Updating...' : 'Update Rivalries'}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {rivalriesLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-12 w-full" />
+              </div>
+            ) : rivalriesData?.rivalries && rivalriesData.rivalries.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Matchup</TableHead>
+                    <TableHead>Record</TableHead>
+                    <TableHead>Last Meeting</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rivalriesData.rivalries.map((rivalry) => (
+                    <TableRow key={rivalry.id} data-testid={`rivalry-row-${rivalry.id}`}>
+                      <TableCell className="font-medium">
+                        {rivalry.teamA} vs {rivalry.teamB}
+                      </TableCell>
+                      <TableCell>
+                        <span className="font-mono">{rivalry.aWins}-{rivalry.bWins}</span>
+                      </TableCell>
+                      <TableCell>
+                        {rivalry.lastMeetingWeek ? `Week ${rivalry.lastMeetingWeek}` : 'N/A'}
+                      </TableCell>
+                      <TableCell>
+                        {rivalry.aWins === rivalry.bWins && rivalry.aWins > 0 ? (
+                          <Badge className="bg-brand-pink/20 text-brand-pink border-brand-pink/30 border">
+                            Rubber Match!
+                          </Badge>
+                        ) : Math.abs(rivalry.aWins - rivalry.bWins) === 1 ? (
+                          <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 border">
+                            Close
+                          </Badge>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <div className="text-center py-8 text-text-secondary" data-testid="empty-rivalries">
+                <Swords className="w-10 h-10 mx-auto mb-2 text-text-muted" />
+                <p>No rivalries tracked yet</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Phase 3: Content Queue Section */}
+      {leagueId && (
+        <Card className="bg-surface-card border-border-subtle shadow-depth2">
+          <CardHeader>
+            <CardTitle className="text-text-primary flex items-center gap-2">
+              <Clock className="w-5 h-5" />
+              Content Queue
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Tabs value={contentQueueStatusFilter} onValueChange={setContentQueueStatusFilter}>
+              <TabsList className="grid w-full grid-cols-4 bg-surface-elevated">
+                <TabsTrigger value="all" data-testid="tab-queue-all">All</TabsTrigger>
+                <TabsTrigger value="queued" data-testid="tab-queue-queued">Queued</TabsTrigger>
+                <TabsTrigger value="posted" data-testid="tab-queue-posted">Posted</TabsTrigger>
+                <TabsTrigger value="skipped" data-testid="tab-queue-skipped">Skipped</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value={contentQueueStatusFilter} className="mt-4">
+                {contentQueueLoading ? (
+                  <div className="space-y-2">
+                    <Skeleton className="h-12 w-full" />
+                    <Skeleton className="h-12 w-full" />
+                  </div>
+                ) : contentQueueData?.queue && contentQueueData.queue.length > 0 ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Scheduled</TableHead>
+                        <TableHead>Template</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Message ID</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {contentQueueData.queue.map((item) => (
+                        <TableRow key={item.id} data-testid={`queue-row-${item.id}`}>
+                          <TableCell className="text-sm">
+                            {new Date(item.scheduledAt).toLocaleString()}
+                          </TableCell>
+                          <TableCell>
+                            <Badge className="bg-brand-teal/20 text-brand-teal border-brand-teal/30 border">
+                              {item.template}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              className={`${
+                                item.status === 'posted' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
+                                item.status === 'queued' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+                                'bg-red-500/20 text-red-400 border-red-500/30'
+                              } border`}
+                              data-testid={`badge-queue-status-${item.id}`}
+                            >
+                              {item.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs font-mono text-text-muted">
+                            {item.postedMessageId || 'N/A'}
+                          </TableCell>
+                          <TableCell>
+                            {(item.status === 'skipped' || item.status === 'posted') && (
+                              <Button
+                                onClick={() => reenqueueContentMutation.mutate(item)}
+                                data-testid={`button-reenqueue-${item.id}`}
+                                disabled={reenqueueContentMutation.isPending}
+                                variant="secondary"
+                                className="text-xs"
+                              >
+                                <RefreshCw className="w-3 h-3 mr-1" />
+                                Re-enqueue
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <div className="text-center py-8 text-text-secondary" data-testid="empty-content-queue">
+                    <Clock className="w-10 h-10 mx-auto mb-2 text-text-muted" />
+                    <p>No content in queue</p>
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
           </CardContent>
         </Card>
       )}

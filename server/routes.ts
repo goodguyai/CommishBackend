@@ -86,12 +86,21 @@ const updateRivalriesSchema = z.object({
   week: z.number().int().min(1).max(18).optional(),
 });
 
+const getRivalriesSchema = z.object({
+  leagueId: z.string().uuid(),
+});
+
 const enqueueContentSchema = z.object({
   leagueId: z.string().uuid(),
   channelId: z.string(),
   scheduledAt: z.string().datetime(),
   template: z.enum(['digest', 'highlight', 'meme', 'rivalry']),
   payload: z.record(z.any()),
+});
+
+const getContentQueueSchema = z.object({
+  leagueId: z.string().uuid(),
+  status: z.enum(['queued', 'posted', 'skipped']).optional(),
 });
 
 // Module-level variables that will be initialized after env validation
@@ -1581,6 +1590,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/v2/rivalries - List all rivalries for a league
+  app.get("/api/v2/rivalries", async (req, res) => {
+    try {
+      // Validate query params
+      const validation = getRivalriesSchema.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid query parameters", details: validation.error.issues });
+      }
+
+      const { leagueId } = validation.data;
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+      }
+
+      // Get all rivalries for the league
+      const rivalries = await storage.getRivalriesByLeague(leagueId);
+
+      res.json({ rivalries });
+    } catch (error) {
+      console.error("Get rivalries error:", error);
+      res.status(500).json({ error: "Failed to get rivalries", code: "RIVALRIES_GET_FAILED" });
+    }
+  });
+
   // 4. POST /api/v2/content/enqueue - Queue content for posting
   app.post("/api/v2/content/enqueue", async (req, res) => {
     try {
@@ -1624,6 +1660,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Enqueue content error:", error);
       res.status(500).json({ error: "Failed to enqueue content", code: "CONTENT_ENQUEUE_FAILED" });
+    }
+  });
+
+  // GET /api/v2/content/queue - List content queue items
+  app.get("/api/v2/content/queue", async (req, res) => {
+    try {
+      // Validate query params
+      const validation = getContentQueueSchema.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid query parameters", details: validation.error.issues });
+      }
+
+      const { leagueId, status } = validation.data;
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+      }
+
+      // Get content queue items
+      const queue = await storage.getContentQueueByLeague(leagueId, status);
+
+      res.json({ queue });
+    } catch (error) {
+      console.error("Get content queue error:", error);
+      res.status(500).json({ error: "Failed to get content queue", code: "CONTENT_QUEUE_GET_FAILED" });
     }
   });
 
