@@ -117,6 +117,26 @@ const getContentQueueSchema = z.object({
   status: z.enum(['queued', 'posted', 'skipped']).optional(),
 });
 
+// Zod schemas for Phase 5 Reminders API
+const createReminderSchemaV2 = z.object({
+  leagueId: z.string().uuid(),
+  type: z.enum(['lineup_lock', 'waivers', 'trade_deadline', 'custom']),
+  cron: z.string().optional(),
+  message: z.string().optional(),
+  channelId: z.string().optional(),
+}).refine((data) => {
+  if (data.type === 'custom') {
+    return data.cron && data.message;
+  }
+  return true;
+}, {
+  message: "Custom reminders require both cron and message",
+});
+
+const getRemindersSchemaV2 = z.object({
+  leagueId: z.string().uuid(),
+});
+
 // Module-level variables that will be initialized after env validation
 let ragService: RAGService;
 let eventBus: EventBus;
@@ -153,6 +173,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   scheduler.on("sync_due", (data) => eventBus.emit("sync_due", data));
   scheduler.on("cleanup_due", (data) => eventBus.emit("cleanup_due", data));
   scheduler.on("reminder_due", (data) => eventBus.emit("reminder_due", data));
+  scheduler.on("reminder_job_due", (data) => eventBus.emit("reminder_job_due", data));
   scheduler.on("highlights_due", (data) => eventBus.emit("highlights_due", data));
   scheduler.on("rivalry_due", (data) => eventBus.emit("rivalry_due", data));
   scheduler.on("content_poster_due", () => eventBus.emit("content_poster_due"));
@@ -334,6 +355,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[Scheduler] Cleaned up ${deletedCount} expired wizard sessions`);
     } catch (error) {
       console.error("[Scheduler] Failed to cleanup expired sessions:", error);
+    }
+  });
+
+  // Phase 5: Reminder job handler
+  eventBus.on("reminder_job_due", async (data) => {
+    try {
+      const { reminderId, leagueId, channelId, message } = data;
+      console.log(`[Scheduler] Reminder job due: ${reminderId} for league ${leagueId}`);
+
+      // Update last fired timestamp
+      await storage.updateReminder(reminderId, { 
+        lastFired: new Date() 
+      });
+
+      // Post reminder message to Discord
+      await discordService.postMessage(channelId, {
+        content: message,
+      });
+
+      // Log event
+      await storage.createEvent({
+        type: "MESSAGE_POSTED",
+        leagueId,
+        payload: { 
+          reminderId, 
+          type: "reminder",
+          channelId,
+        },
+      });
+
+      console.log(`[Scheduler] Reminder ${reminderId} sent successfully`);
+    } catch (error) {
+      console.error("[Scheduler] Failed to send reminder:", error);
+      // Log error event
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        leagueId: data.leagueId,
+        payload: { 
+          error: "Failed to send reminder",
+          reminderId: data.reminderId,
+        },
+      });
     }
   });
 
@@ -1259,6 +1322,102 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // POST /api/v2/owners/suggest - Get auto-mapping suggestions based on fuzzy matching
+  app.post("/api/v2/owners/suggest", async (req, res) => {
+    try {
+      const validation = validate(
+        z.object({
+          leagueId: schemas.leagueId,
+        }),
+        req.body
+      );
+      
+      if (!validation.ok) {
+        return res.status(400).json(validation);
+      }
+      
+      const { leagueId } = validation.data!;
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      if (!league.guildId) {
+        return res.status(400).json({ ok: false, code: "NO_GUILD", message: "League has no Discord guild configured" });
+      }
+      
+      const members = await storage.getMembers(leagueId);
+      const guildMembers = await discordService.getGuildMembers(league.guildId);
+      
+      const unmappedTeams = members.filter(m => !m.discordUserId);
+      
+      const suggestions = unmappedTeams
+        .map(team => {
+          const teamName = (team.sleeperTeamName || '').toLowerCase().trim();
+          if (!teamName) return null;
+          
+          let bestMatch = null;
+          let bestConfidence = 0;
+          
+          for (const guildMember of guildMembers) {
+            const username = (guildMember.username || '').toLowerCase().trim();
+            if (!username) continue;
+            
+            const confidence = calculateStringSimilarity(teamName, username);
+            
+            if (confidence > bestConfidence) {
+              bestConfidence = confidence;
+              bestMatch = guildMember;
+            }
+          }
+          
+          if (bestMatch && bestConfidence >= 0.5) {
+            return {
+              teamId: team.sleeperOwnerId!,
+              teamName: team.sleeperTeamName!,
+              discordUserId: bestMatch.id,
+              discordUsername: bestMatch.username,
+              confidence: bestConfidence,
+            };
+          }
+          
+          return null;
+        })
+        .filter(s => s !== null);
+      
+      res.json({ ok: true, data: suggestions });
+    } catch (e) {
+      console.error('[Owners Suggest]', e);
+      res.status(500).json({ ok: false, code: "SUGGEST_FAILED", message: "Failed to generate suggestions" });
+    }
+  });
+
+  // DELETE /api/v2/owners/:memberId - Delete an owner mapping
+  app.delete("/api/v2/owners/:memberId", async (req, res) => {
+    try {
+      const { memberId } = req.params;
+      
+      if (!memberId) {
+        return res.status(400).json({ ok: false, code: "MISSING_MEMBER_ID", message: "memberId is required" });
+      }
+      
+      const members = await storage.getMembers('');
+      const member = members.find(m => m.id === memberId);
+      
+      if (!member) {
+        return res.status(404).json({ ok: false, code: "MEMBER_NOT_FOUND", message: "Member not found" });
+      }
+      
+      await storage.deleteMember(member.leagueId, member.discordUserId);
+      
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[Owners Delete]', e);
+      res.status(500).json({ ok: false, code: "DELETE_FAILED", message: "Failed to delete mapping" });
+    }
+  });
+
   // === PHASE 3 ENGAGEMENT ENDPOINTS ===
 
   // 1. POST /api/v2/highlights/compute - Compute and store week highlights
@@ -1419,6 +1578,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // === Phase 5: Reminders API ===
+
+  // POST /api/v2/reminders - Create a reminder
+  app.post("/api/v2/reminders", async (req, res) => {
+    try {
+      // Validate request body
+      const validation = createReminderSchemaV2.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      }
+
+      const { leagueId, type, cron, message, channelId } = validation.data;
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+      }
+
+      // Auto-generate cron and message for preset types
+      let finalCron = cron;
+      let finalMessage = message;
+      const timezone = league.timezone || "America/New_York";
+
+      if (type === 'lineup_lock') {
+        finalCron = "30 12 * * SUN"; // Sunday 12:30 PM
+        finalMessage = "⏰ Lineup lock reminder! Make sure your lineups are set before game time.";
+      } else if (type === 'waivers') {
+        finalCron = "0 9 * * WED"; // Wednesday 9:00 AM
+        finalMessage = "📋 Waiver wire opens today! Don't forget to submit your claims.";
+      } else if (type === 'trade_deadline') {
+        // For trade deadline, we'll create a single reminder that fires before the deadline
+        // The actual deadline date should be in the league's deadlines table
+        finalCron = "0 12 * * *"; // Daily at noon, will check deadline proximity
+        finalMessage = "🔔 Trade deadline is approaching! Get your trades in soon.";
+      }
+
+      // Use league's channelId if not specified
+      const targetChannelId = channelId || league.channelId;
+      if (!targetChannelId) {
+        return res.status(400).json({ error: "Channel ID required", code: "CHANNEL_REQUIRED" });
+      }
+
+      // Check for existing reminder of same type (idempotency)
+      const existing = await storage.getReminders(leagueId);
+      const duplicate = existing.find(r => r.type === type && r.enabled);
+      if (duplicate) {
+        return res.json({ id: duplicate.id, exists: true });
+      }
+
+      // Create reminder
+      const reminderId = await storage.createReminder({
+        leagueId,
+        type,
+        cron: finalCron!,
+        message: finalMessage,
+        channelId: targetChannelId,
+        timezone,
+        enabled: true,
+        metadata: {},
+      });
+
+      // Schedule the reminder job
+      scheduler.scheduleReminderJob(reminderId, leagueId, finalCron!, targetChannelId, finalMessage!, timezone);
+
+      res.status(201).json({ id: reminderId });
+    } catch (error) {
+      console.error("Create reminder error:", error);
+      res.status(500).json({ error: "Failed to create reminder", code: "REMINDER_CREATE_FAILED" });
+    }
+  });
+
+  // GET /api/v2/reminders - List reminders for a league
+  app.get("/api/v2/reminders", async (req, res) => {
+    try {
+      // Validate query params
+      const validation = getRemindersSchemaV2.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid query parameters", details: validation.error.issues });
+      }
+
+      const { leagueId } = validation.data;
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+      }
+
+      // Get all reminders for the league
+      const reminders = await storage.getReminders(leagueId);
+
+      // Add nextRun calculation for each reminder
+      const remindersWithNextRun = reminders.map(reminder => {
+        // TODO: Calculate next run time based on cron expression
+        // For now, we'll return null
+        return {
+          ...reminder,
+          nextRun: null,
+        };
+      });
+
+      res.json({ reminders: remindersWithNextRun });
+    } catch (error) {
+      console.error("Get reminders error:", error);
+      res.status(500).json({ error: "Failed to get reminders", code: "REMINDERS_GET_FAILED" });
+    }
+  });
+
+  // DELETE /api/v2/reminders/:id - Delete a reminder
+  app.delete("/api/v2/reminders/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Delete the reminder
+      await storage.deleteReminder(id);
+
+      // Unschedule the job
+      scheduler.unschedule(`reminder_job_${id}`);
+
+      res.status(204).send();
+    } catch (error) {
+      console.error("Delete reminder error:", error);
+      res.status(500).json({ error: "Failed to delete reminder", code: "REMINDER_DELETE_FAILED" });
+    }
+  });
+
   // 4. POST /api/v2/content/enqueue - Queue content for posting
   app.post("/api/v2/content/enqueue", async (req, res) => {
     try {
@@ -1556,7 +1842,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/v2/leagues/:leagueId", async (req, res) => {
     try {
       const { leagueId } = req.params;
-      const { featureFlags, channels, personality } = req.body;
+      const { featureFlags, channels, personality, digestFrequency } = req.body;
       
       // Get current league
       const [currentLeague] = await db.select()
@@ -1594,6 +1880,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ...(currentLeague.personality as any),
           ...personality
         };
+      }
+      
+      if (digestFrequency !== undefined) {
+        updates.digestFrequency = digestFrequency;
       }
       
       const [updated] = await db.update(leagues)
@@ -2480,6 +2770,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
+  // Phase 8.3: Simple health check endpoint for monitoring/load balancers
+  app.get("/api/ping", (_req, res) => {
+    res.json({
+      ok: true,
+      ts: Date.now(),
+      uptime: Math.floor(process.uptime()),
+      version: "1.0.0"
+    });
+  });
 
   app.post("/api/discord/oauth-callback", async (req, res) => {
     try {
@@ -2946,16 +3245,83 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // RAG and rules routes
+  
+  // Phase 6: GET /api/v2/rag/docs - Get document list with metadata
+  app.get("/api/v2/rag/docs", async (req, res) => {
+    try {
+      const { leagueId } = req.query;
+      
+      if (!leagueId || typeof leagueId !== 'string') {
+        return res.status(400).json({ error: "leagueId query parameter is required" });
+      }
+
+      const documents = await storage.getDocumentsWithMetadata(leagueId);
+      
+      res.json({ documents });
+    } catch (error) {
+      console.error("Failed to get documents:", error);
+      res.status(500).json({ error: "Failed to get documents" });
+    }
+  });
+
+  // Phase 6: POST /api/v2/rag/reindex/:docId - Re-index a document
+  app.post("/api/v2/rag/reindex/:docId", async (req, res) => {
+    try {
+      const { docId } = req.params;
+      
+      const document = await storage.getDocument(docId);
+      if (!document) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+
+      if (!document.content) {
+        return res.status(400).json({ error: "Document has no content to reindex" });
+      }
+
+      // Clear existing rules for this document
+      const existingRules = await storage.getRulesByLeague(document.leagueId);
+      const docRules = existingRules.filter(r => r.documentId === docId);
+      
+      // Delete old rules (embeddings will cascade)
+      for (const rule of docRules) {
+        await storage.clearLeagueRules(document.leagueId);
+        break; // clearLeagueRules clears all, so we only need to call once
+      }
+
+      // Reindex the document
+      const result = await ragService.indexDocument(
+        document.leagueId,
+        document.content,
+        document.version,
+        document.type
+      );
+
+      // Update document timestamp
+      await storage.updateDocument(docId, { updatedAt: new Date() });
+
+      eventBus.emitRulesUpdated(document.leagueId, document.version, result.rulesIndexed);
+      
+      res.json({ 
+        success: true, 
+        chunksCount: result.rulesIndexed,
+        documentId: result.documentId
+      });
+    } catch (error) {
+      console.error("Failed to reindex document:", error);
+      res.status(500).json({ error: "Failed to reindex document" });
+    }
+  });
+
   app.post("/api/rag/index/:leagueId", async (req, res) => {
     try {
       const { leagueId } = req.params;
-      const { content, version, type } = req.body;
+      const { content, version, type, title } = req.body;
       
       if (!content || !version) {
         return res.status(400).json({ error: "content and version are required" });
       }
 
-      const result = await ragService.indexDocument(leagueId, content, version, type);
+      const result = await ragService.indexDocument(leagueId, content, version, type, title);
       
       eventBus.emitRulesUpdated(leagueId, version, result.rulesIndexed);
       
@@ -3063,6 +3429,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Failed to generate digest:", error);
       res.status(500).json({ error: "Failed to generate digest" });
+    }
+  });
+
+  // POST /api/digest/run-now - Run digest and post to Discord immediately
+  app.post("/api/digest/run-now", async (req, res) => {
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || adminKey !== env.app.adminKey) {
+      return res.status(401).json({ ok: false, error: "Unauthorized - valid X-Admin-Key required" });
+    }
+
+    try {
+      const { leagueId } = req.query;
+      
+      if (!leagueId || typeof leagueId !== 'string') {
+        return res.status(400).json({ ok: false, error: "leagueId query parameter is required" });
+      }
+
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, error: "League not found" });
+      }
+
+      if (!league.channelId) {
+        return res.status(400).json({ ok: false, error: "No channel configured for this league" });
+      }
+
+      if (!league.sleeperLeagueId) {
+        return res.status(400).json({ ok: false, error: "League not configured with Sleeper ID" });
+      }
+
+      const sleeperData = await sleeperService.syncLeagueData(league.sleeperLeagueId);
+      const digest = await generateDigestContent(league, sleeperData);
+
+      let description = digest.sections.map(s => `**${s.title}**\n${s.content}`).join("\n\n");
+      if (description.length > 3800) {
+        description = description.substring(0, 3797) + "...";
+      }
+
+      const embed = {
+        title: `📊 ${digest.leagueName} - Weekly Digest`.substring(0, 256),
+        description,
+        color: 0x00D2FF,
+        footer: { text: `THE COMMISH • Generated ${new Date(digest.timestamp).toLocaleString()}` },
+        timestamp: new Date(digest.timestamp).toISOString(),
+      };
+
+      await discordService.postMessage(league.channelId, { embeds: [embed] });
+      
+      await storage.createEvent({
+        type: "DIGEST_SENT",
+        leagueId: league.id,
+        payload: { trigger: "manual", success: true },
+      });
+      
+      console.log(`[Manual] Digest sent to league ${league.id}`);
+
+      res.json({ ok: true, message: "Digest posted to Discord successfully" });
+    } catch (error) {
+      console.error("Failed to run digest:", error);
+      res.status(500).json({ ok: false, error: "Failed to run digest" });
     }
   });
 
@@ -3869,6 +4295,12 @@ async function handleRulesCommand(interaction: any, league: any, requestId: stri
         league.tone
       );
 
+      // Phase 6: Get confidence and source metadata from top result
+      const topResult = relevantRules[0];
+      const confidence = topResult?.confidence || topResult?.similarity || 0;
+      const sourceDoc = topResult?.sourceDoc || "League Constitution";
+      const sourceVersion = topResult?.sourceVersion || "v1.0";
+
       // Normalize and deduplicate citations
       const seenCitations = new Set<string>();
       const normalizedCitations = response.citations
@@ -3884,17 +4316,41 @@ async function handleRulesCommand(interaction: any, league: any, requestId: stri
           return `${index + 1}. **${citation.ruleKey}**${section}\n   "${excerpt}${citation.text?.length > 150 ? '...' : ''}"`;
         });
 
-      const embed = {
-        title: "📋 Rules Query Result",
-        description: response.answer,
-        color: 0x5865F2,
-        fields: normalizedCitations.length > 0 ? [{
-          name: "📚 Citations",
-          value: normalizedCitations.join('\n\n'),
+      // Phase 6: Enhanced embed with confidence and source metadata
+      const fields: any[] = [];
+      
+      // Add source field
+      fields.push({
+        name: "📚 Source",
+        value: `${sourceDoc} (${sourceVersion})`,
+        inline: true,
+      });
+
+      // Add low confidence warning if needed
+      if (confidence < 0.6) {
+        fields.push({
+          name: "⚠️ Low Confidence",
+          value: "Not confident in this answer. Try rephrasing your question.",
+          inline: true,
+        });
+      }
+
+      // Add citations if present
+      if (normalizedCitations.length > 0) {
+        fields.push({
+          name: "📖 Citations",
+          value: normalizedCitations.join('\n\n').substring(0, 1024), // Discord field limit
           inline: false,
-        }] : [],
+        });
+      }
+
+      const embed = {
+        title: "📚 Rules Answer",
+        description: response.answer,
+        color: 0x009898, // Brand teal
+        fields,
         footer: {
-          text: `Tokens: ${response.tokensUsed} • ${requestId}`,
+          text: confidence < 0.6 ? "⚠️ Low confidence answer" : `✅ High confidence (${(confidence * 100).toFixed(0)}%)`,
         },
       };
 
@@ -4029,6 +4485,12 @@ async function handleScoringCommand(interaction: any, league: any, requestId: st
           league.tone
         );
 
+        // Phase 6: Get confidence and source metadata from top result
+        const topResult = relevantRules[0];
+        const confidence = topResult?.confidence || topResult?.similarity || 0.8; // Higher default for scoring
+        const sourceDoc = topResult?.sourceDoc || "Sleeper Scoring Settings";
+        const sourceVersion = topResult?.sourceVersion || "Current";
+
         // Normalize and deduplicate citations
         const seenCitations = new Set<string>();
         const normalizedCitations = response.citations
@@ -4044,17 +4506,41 @@ async function handleScoringCommand(interaction: any, league: any, requestId: st
             return `${index + 1}. **${citation.ruleKey}**${section}\n   "${excerpt}${citation.text?.length > 150 ? '...' : ''}"`;
           });
 
-        const embed = {
-          title: "🏈 Scoring Query Result",
-          description: response.answer,
-          color: 0x10B981,
-          fields: normalizedCitations.length > 0 ? [{
-            name: "📚 Citations",
-            value: normalizedCitations.join('\n\n'),
+        // Phase 6: Enhanced embed with confidence and source metadata
+        const fields: any[] = [];
+        
+        // Add source field
+        fields.push({
+          name: "📚 Source",
+          value: `${sourceDoc} (${sourceVersion})`,
+          inline: true,
+        });
+
+        // Add low confidence warning if needed
+        if (confidence < 0.6) {
+          fields.push({
+            name: "⚠️ Low Confidence",
+            value: "Not confident in this answer. Try rephrasing your question.",
+            inline: true,
+          });
+        }
+
+        // Add citations if present
+        if (normalizedCitations.length > 0) {
+          fields.push({
+            name: "📖 Citations",
+            value: normalizedCitations.join('\n\n').substring(0, 1024), // Discord field limit
             inline: false,
-          }] : [],
+          });
+        }
+
+        const embed = {
+          title: "🏈 Scoring Answer",
+          description: response.answer,
+          color: 0x009898, // Brand teal
+          fields,
           footer: {
-            text: `Tokens: ${response.tokensUsed} • ${requestId}`,
+            text: confidence < 0.6 ? "⚠️ Low confidence answer" : `✅ High confidence (${(confidence * 100).toFixed(0)}%)`,
           },
         };
 
@@ -4143,6 +4629,19 @@ async function handleHelpCommand(interaction: any) {
     type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
     data: {
       embeds: [embed],
+      components: [
+        {
+          type: ComponentType.ACTION_ROW,
+          components: [
+            {
+              type: ComponentType.BUTTON,
+              style: 5,
+              label: "View Dashboard",
+              url: env.app.baseUrl
+            }
+          ]
+        }
+      ],
       flags: 64,
     },
   };
@@ -4574,10 +5073,18 @@ async function handleWhoamiCommand(interaction: any, league: any, requestId: str
     const roleEmoji = member.role === "COMMISH" ? "👑" : "📊";
     const roleLabel = member.role === "COMMISH" ? "Commissioner" : "Manager";
 
+    // Phase 7: Include team mapping if available
+    let teamInfo = "";
+    if (member.sleeperTeamName) {
+      teamInfo = `\n⚡ **Sleeper Team:** ${member.sleeperTeamName}`;
+    } else if (member.sleeperOwnerId) {
+      teamInfo = `\n⚡ **Sleeper Owner ID:** ${member.sleeperOwnerId}`;
+    }
+
     return {
       type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
       data: {
-        content: `${roleEmoji} **Your League Profile**\n\n🏈 **League:** ${league.name}\n🎯 **Role:** ${roleLabel}\n🆔 **Member ID:** ${member.id}\n👤 **Discord ID:** <@${userId}>`,
+        content: `${roleEmoji} **Your League Profile**\n\n🏈 **League:** ${league.name}\n🎯 **Role:** ${roleLabel}\n🆔 **Member ID:** ${member.id}\n👤 **Discord ID:** <@${userId}>${teamInfo}`,
         flags: 64,
       },
     };
@@ -5069,6 +5576,74 @@ async function handleToxicityClarifyButton(req: any, res: any, interaction: any)
       },
     });
   }
+}
+
+// Helper function to calculate string similarity for auto-mapping suggestions
+function calculateStringSimilarity(str1: string, str2: string): number {
+  const s1 = str1.toLowerCase().trim();
+  const s2 = str2.toLowerCase().trim();
+  
+  // Exact match
+  if (s1 === s2) return 1.0;
+  
+  // One contains the other
+  if (s1.includes(s2) || s2.includes(s1)) return 0.85;
+  
+  // Check for word-level matches
+  const words1 = s1.split(/\s+/);
+  const words2 = s2.split(/\s+/);
+  
+  let matchingWords = 0;
+  for (const word1 of words1) {
+    for (const word2 of words2) {
+      if (word1 === word2 || word1.includes(word2) || word2.includes(word1)) {
+        matchingWords++;
+        break;
+      }
+    }
+  }
+  
+  if (matchingWords > 0) {
+    const wordMatchScore = matchingWords / Math.max(words1.length, words2.length);
+    return 0.6 + (wordMatchScore * 0.2); // 0.6-0.8 range for word matches
+  }
+  
+  // Calculate Levenshtein distance for remaining cases
+  const distance = levenshteinDistance(s1, s2);
+  const maxLength = Math.max(s1.length, s2.length);
+  const similarity = 1 - (distance / maxLength);
+  
+  // Scale down the similarity for non-matching strings
+  return Math.max(0, similarity * 0.5);
+}
+
+// Levenshtein distance algorithm
+function levenshteinDistance(str1: string, str2: string): number {
+  const matrix: number[][] = [];
+
+  for (let i = 0; i <= str2.length; i++) {
+    matrix[i] = [i];
+  }
+
+  for (let j = 0; j <= str1.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= str2.length; i++) {
+    for (let j = 1; j <= str1.length; j++) {
+      if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+
+  return matrix[str2.length][str1.length];
 }
 
 // Utility function to schedule reminders for upcoming deadlines

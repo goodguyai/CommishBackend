@@ -11,8 +11,13 @@ export interface EmbeddingResult {
     ruleKey: string;
     citations: any[];
     sectionId: string;
+    version?: string;
+    documentId?: string;
   };
   passages?: string[]; // Extracted relevant passages from the rule text
+  sourceDoc?: string; // Phase 6: Source document title
+  sourceVersion?: string; // Phase 6: Source document version
+  confidence?: number; // Phase 6: Search confidence (0-1)
 }
 
 export class RAGService {
@@ -51,7 +56,8 @@ export class RAGService {
     leagueId: string,
     content: string,
     version: string,
-    type: "ORIGINAL" | "NORMALIZED" = "NORMALIZED"
+    type: "ORIGINAL" | "NORMALIZED" = "NORMALIZED",
+    title?: string
   ): Promise<{ documentId: string; rulesIndexed: number }> {
     try {
       // Store the document
@@ -60,6 +66,7 @@ export class RAGService {
         type,
         content,
         version,
+        title: title || "League Constitution",
       };
 
       const documentId = await this.storage.createDocument(document);

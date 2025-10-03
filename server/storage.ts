@@ -53,6 +53,14 @@ export interface IStorage {
   // Document methods
   getDocument(id: string): Promise<Document | undefined>;
   getDocumentsByLeague(leagueId: string): Promise<Document[]>;
+  getDocumentsWithMetadata(leagueId: string): Promise<Array<{
+    id: string;
+    title: string;
+    version: string;
+    contentType: string;
+    chunksCount: number;
+    lastIndexed: Date;
+  }>>;
   createDocument(document: InsertDocument): Promise<string>;
   updateDocument(id: string, updates: Partial<Document>): Promise<void>;
   deleteDocument(id: string): Promise<void>;
@@ -339,6 +347,38 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(schema.documents.createdAt));
   }
 
+  async getDocumentsWithMetadata(leagueId: string): Promise<Array<{
+    id: string;
+    title: string;
+    version: string;
+    contentType: string;
+    chunksCount: number;
+    lastIndexed: Date;
+  }>> {
+    const result = await this.db.select({
+      id: schema.documents.id,
+      title: schema.documents.title,
+      version: schema.documents.version,
+      type: schema.documents.type,
+      updatedAt: schema.documents.updatedAt,
+      rulesCount: sql<number>`COUNT(DISTINCT ${schema.rules.id})::int`,
+    })
+      .from(schema.documents)
+      .leftJoin(schema.rules, eq(schema.rules.documentId, schema.documents.id))
+      .where(eq(schema.documents.leagueId, leagueId))
+      .groupBy(schema.documents.id, schema.documents.title, schema.documents.version, schema.documents.type, schema.documents.updatedAt)
+      .orderBy(desc(schema.documents.updatedAt));
+
+    return result.map(row => ({
+      id: row.id,
+      title: row.title,
+      version: row.version,
+      contentType: row.type === 'ORIGINAL' ? 'text/plain' : 'text/plain',
+      chunksCount: row.rulesCount,
+      lastIndexed: row.updatedAt || new Date(),
+    }));
+  }
+
   async createDocument(document: InsertDocument): Promise<string> {
     const documents = await this.db.insert(schema.documents).values(document).returning();
     return documents[0].id;
@@ -445,9 +485,14 @@ export class DatabaseStorage implements IStorage {
         r.text,
         r.rule_key,
         r.citations,
-        r.section_id
+        r.section_id,
+        r.version,
+        r.document_id,
+        d.title as document_title,
+        d.version as document_version
       FROM ${schema.embeddings} e
       JOIN ${schema.rules} r ON e.rule_id = r.id
+      JOIN ${schema.documents} d ON r.document_id = d.id
       WHERE r.league_id = ${leagueId}
         AND 1 - (e.embedding <=> ${sql.raw(`'[${queryVector.join(',')}]'::vector`)}) > ${threshold}
       ORDER BY e.embedding <=> ${sql.raw(`'[${queryVector.join(',')}]'::vector`)}
@@ -462,7 +507,12 @@ export class DatabaseStorage implements IStorage {
         ruleKey: row.rule_key,
         citations: row.citations,
         sectionId: row.section_id,
+        version: row.version,
+        documentId: row.document_id,
       },
+      sourceDoc: row.document_title,
+      sourceVersion: row.document_version,
+      confidence: row.similarity,
     }));
   }
 
@@ -1237,6 +1287,27 @@ export class MemStorage implements IStorage {
   async getDocument(id: string): Promise<Document | undefined> { return this.documents.get(id); }
   async getDocumentsByLeague(leagueId: string): Promise<Document[]> { 
     return Array.from(this.documents.values()).filter(d => d.leagueId === leagueId);
+  }
+  async getDocumentsWithMetadata(leagueId: string): Promise<Array<{
+    id: string;
+    title: string;
+    version: string;
+    contentType: string;
+    chunksCount: number;
+    lastIndexed: Date;
+  }>> {
+    const docs = Array.from(this.documents.values()).filter(d => d.leagueId === leagueId);
+    return docs.map(doc => {
+      const rules = Array.from(this.rules.values()).filter(r => r.documentId === doc.id);
+      return {
+        id: doc.id,
+        title: (doc as any).title || 'League Constitution',
+        version: doc.version,
+        contentType: doc.type === 'ORIGINAL' ? 'text/plain' : 'text/plain',
+        chunksCount: rules.length,
+        lastIndexed: (doc as any).updatedAt || doc.createdAt || new Date(),
+      };
+    });
   }
   async createDocument(document: InsertDocument): Promise<string> {
     const id = this.generateId();

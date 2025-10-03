@@ -39,7 +39,10 @@ import {
   MessageCircle,
   Trophy,
   Swords,
-  Clock
+  Clock,
+  BookOpen,
+  Upload,
+  FileText
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiRequest, queryClient } from '@/lib/queryClient';
@@ -253,6 +256,12 @@ export function DashboardPage() {
   const [previewText, setPreviewText] = useState<string>('Your team scored 150 points this week!');
   const [isDigestPreviewOpen, setIsDigestPreviewOpen] = useState(false);
   const [digestPreviewData, setDigestPreviewData] = useState<any>(null);
+
+  // Phase 6: Rules Library State
+  const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
+  const [documentTitle, setDocumentTitle] = useState('');
+  const [documentVersion, setDocumentVersion] = useState('v1.0');
+  const [documentContent, setDocumentContent] = useState('');
 
   // Fetch leagues to get the first one if not set (using demo endpoint for testing)
   const { data: leagues } = useQuery<{ leagues: League[] }>({
@@ -623,6 +632,14 @@ export function DashboardPage() {
 
   const v2League = v2LeagueData?.data;
 
+  // Initialize personality style from league data
+  useEffect(() => {
+    if (v2League?.personality) {
+      const style = (v2League.personality as any)?.style || 'neutral';
+      setPersonalityStyle(style);
+    }
+  }, [v2League]);
+
   // Commissioner v2: Fetch Discord channels
   const { data: v2DiscordChannels, isLoading: v2ChannelsLoading } = useQuery<{ ok: boolean; data: any[] }>({
     queryKey: ['/api/v2/discord/channels', v2League?.guildId],
@@ -688,7 +705,18 @@ export function DashboardPage() {
   // Commissioner v2: Run digest now
   const runDigestMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest('POST', `/api/v2/digest/run?leagueId=${leagueId}`, {});
+      const adminKey = import.meta.env.VITE_ADMIN_KEY || 'dev-key';
+      const response = await fetch(`/api/digest/run-now?leagueId=${leagueId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Key': adminKey,
+        },
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to run digest');
+      }
       return response.json();
     },
     onSuccess: () => {
@@ -698,6 +726,64 @@ export function DashboardPage() {
     },
     onError: (error: any) => {
       toast.error('Failed to run digest', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
+  // Phase 6: Rules Library Query
+  const { data: documentsData, isLoading: documentsLoading } = useQuery<{ documents: Array<{ id: string; title: string; version: string; contentType: string; chunksCount: number; lastIndexed: string; }> }>({
+    queryKey: ['/api/v2/rag/docs', leagueId],
+    queryFn: async () => {
+      const res = await fetch(`/api/v2/rag/docs?leagueId=${leagueId}`);
+      if (!res.ok) throw new Error('Failed to fetch documents');
+      return res.json();
+    },
+    enabled: !!leagueId,
+  });
+
+  // Phase 6: Reindex Document Mutation
+  const reindexDocumentMutation = useMutation({
+    mutationFn: async (docId: string) => {
+      const response = await apiRequest('POST', `/api/v2/rag/reindex/${docId}`, {});
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/rag/docs', leagueId] });
+      toast.success('Document reindexed', {
+        description: 'Document has been reindexed successfully',
+      });
+    },
+    onError: (error: any) => {
+      toast.error('Failed to reindex document', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
+  // Phase 6: Add Document Mutation
+  const addDocumentMutation = useMutation({
+    mutationFn: async ({ title, version, content }: { title: string; version: string; content: string }) => {
+      const response = await apiRequest('POST', `/api/rag/index/${leagueId}`, {
+        title,
+        version,
+        content,
+        type: 'NORMALIZED',
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/rag/docs', leagueId] });
+      toast.success('Document added', {
+        description: 'Document has been indexed successfully',
+      });
+      setIsRulesModalOpen(false);
+      setDocumentTitle('');
+      setDocumentVersion('v1.0');
+      setDocumentContent('');
+    },
+    onError: (error: any) => {
+      toast.error('Failed to add document', {
         description: error?.message || 'An error occurred',
       });
     },
@@ -999,18 +1085,7 @@ export function DashboardPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
-                <Label htmlFor="digest-enabled" className="text-text-primary cursor-pointer">Weekly Digest</Label>
-                <Switch
-                  id="digest-enabled"
-                  data-testid="switch-digest-enabled"
-                  checked={(v2League.featureFlags as any)?.digestEnabled ?? false}
-                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { digestEnabled: checked } })}
-                  disabled={updateV2LeagueMutation.isPending}
-                  className="data-[state=checked]:bg-brand-teal"
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="auto-meme" className="text-text-primary cursor-pointer">Auto-Meme (Blowouts)</Label>
+                <Label htmlFor="auto-meme" className="text-text-primary cursor-pointer">Auto-Meme</Label>
                 <Switch
                   id="auto-meme"
                   data-testid="switch-auto-meme"
@@ -1021,7 +1096,40 @@ export function DashboardPage() {
                 />
               </div>
               <div className="flex items-center justify-between">
-                <Label htmlFor="highlights" className="text-text-primary cursor-pointer">Weekly Highlights</Label>
+                <Label htmlFor="digest" className="text-text-primary cursor-pointer">Digest</Label>
+                <Switch
+                  id="digest"
+                  data-testid="switch-digest"
+                  checked={(v2League.featureFlags as any)?.digest ?? false}
+                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { digest: checked } })}
+                  disabled={updateV2LeagueMutation.isPending}
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="reminders" className="text-text-primary cursor-pointer">Reminders</Label>
+                <Switch
+                  id="reminders"
+                  data-testid="switch-reminders"
+                  checked={(v2League.featureFlags as any)?.reminders ?? false}
+                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { reminders: checked } })}
+                  disabled={updateV2LeagueMutation.isPending}
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="polls" className="text-text-primary cursor-pointer">Polls</Label>
+                <Switch
+                  id="polls"
+                  data-testid="switch-polls"
+                  checked={(v2League.featureFlags as any)?.polls ?? false}
+                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { polls: checked } })}
+                  disabled={updateV2LeagueMutation.isPending}
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="highlights" className="text-text-primary cursor-pointer">Highlights</Label>
                 <Switch
                   id="highlights"
                   data-testid="switch-highlights"
@@ -1032,34 +1140,12 @@ export function DashboardPage() {
                 />
               </div>
               <div className="flex items-center justify-between">
-                <Label htmlFor="rivalries" className="text-text-primary cursor-pointer">Rivalries Tracking</Label>
+                <Label htmlFor="rivalries" className="text-text-primary cursor-pointer">Rivalries</Label>
                 <Switch
                   id="rivalries"
                   data-testid="switch-rivalries"
                   checked={(v2League.featureFlags as any)?.rivalries ?? false}
                   onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { rivalries: checked } })}
-                  disabled={updateV2LeagueMutation.isPending}
-                  className="data-[state=checked]:bg-brand-teal"
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="creative-trash-talk" className="text-text-primary cursor-pointer">Creative Trash Talk</Label>
-                <Switch
-                  id="creative-trash-talk"
-                  data-testid="switch-creative-trash-talk"
-                  checked={(v2League.featureFlags as any)?.creativeTrashTalk ?? false}
-                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { creativeTrashTalk: checked } })}
-                  disabled={updateV2LeagueMutation.isPending}
-                  className="data-[state=checked]:bg-brand-teal"
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="deep-stats" className="text-text-primary cursor-pointer">Deep Stats Analysis</Label>
-                <Switch
-                  id="deep-stats"
-                  data-testid="switch-deep-stats"
-                  checked={(v2League.featureFlags as any)?.deepStats ?? false}
-                  onCheckedChange={(checked) => updateV2LeagueMutation.mutate({ featureFlags: { deepStats: checked } })}
                   disabled={updateV2LeagueMutation.isPending}
                   className="data-[state=checked]:bg-brand-teal"
                 />
@@ -1182,54 +1268,42 @@ export function DashboardPage() {
                 className="space-y-3"
                 data-testid="radio-group-personality"
               >
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="neutral" id="personality-neutral" data-testid="radio-personality-neutral" />
-                  <Label htmlFor="personality-neutral" className="text-text-primary cursor-pointer">Neutral</Label>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="neutral" id="personality-neutral" data-testid="radio-personality-neutral" />
+                    <Label htmlFor="personality-neutral" className="text-text-primary cursor-pointer">Neutral</Label>
+                  </div>
+                  <span className="text-xs text-text-secondary italic">Your team scored 150 points this week!</span>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="sassy" id="personality-sassy" data-testid="radio-personality-sassy" />
-                  <Label htmlFor="personality-sassy" className="text-text-primary cursor-pointer">Sassy</Label>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="sassy" id="personality-sassy" data-testid="radio-personality-sassy" />
+                    <Label htmlFor="personality-sassy" className="text-text-primary cursor-pointer">Sassy</Label>
+                  </div>
+                  <span className="text-xs text-text-secondary italic">💅 Your team scored 150 points (impressive...)</span>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="formal" id="personality-formal" data-testid="radio-personality-formal" />
-                  <Label htmlFor="personality-formal" className="text-text-primary cursor-pointer">Formal</Label>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="formal" id="personality-formal" data-testid="radio-personality-formal" />
+                    <Label htmlFor="personality-formal" className="text-text-primary cursor-pointer">Formal</Label>
+                  </div>
+                  <span className="text-xs text-text-secondary italic">Please be advised: Your team scored 150 points</span>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="meme-y" id="personality-meme-y" data-testid="radio-personality-meme-y" />
-                  <Label htmlFor="personality-meme-y" className="text-text-primary cursor-pointer">Meme-y</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="custom" id="personality-custom" data-testid="radio-personality-custom" />
-                  <Label htmlFor="personality-custom" className="text-text-primary cursor-pointer">Custom</Label>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="meme" id="personality-meme" data-testid="radio-personality-meme" />
+                    <Label htmlFor="personality-meme" className="text-text-primary cursor-pointer">Meme</Label>
+                  </div>
+                  <span className="text-xs text-text-secondary italic">Your team scored 150 points 🔥💯 no cap fr fr</span>
                 </div>
               </RadioGroup>
 
-              {personalityStyle === 'custom' && (
-                <Textarea
-                  value={customTemplate}
-                  onChange={(e) => setCustomTemplate(e.target.value)}
-                  placeholder="Enter custom personality template..."
-                  data-testid="textarea-custom-personality"
-                  className="min-h-[100px] bg-surface-elevated border-border-default text-text-primary"
-                />
-              )}
-
-              <div className="border border-border-subtle rounded-lg p-4 bg-surface-elevated">
-                <Label className="text-text-secondary text-xs mb-2 block">Preview</Label>
-                {previewLoading ? (
-                  <Skeleton className="h-16 w-full bg-surface-hover" />
-                ) : (
-                  <p className="text-sm text-text-primary italic">{personalityPreview?.data?.preview || previewText}</p>
-                )}
-              </div>
-
               <Button
                 onClick={() => {
-                  const style = personalityStyle === 'custom' ? customTemplate : personalityStyle;
-                  updateV2LeagueMutation.mutate({ personality: { style } });
+                  updateV2LeagueMutation.mutate({ personality: { style: personalityStyle } });
                 }}
                 data-testid="button-save-personality"
-                disabled={updateV2LeagueMutation.isPending || (personalityStyle === 'custom' && !customTemplate)}
+                disabled={updateV2LeagueMutation.isPending}
                 className="w-full bg-brand-teal hover:bg-brand-teal/90 text-white"
               >
                 <Save className="w-4 h-4 mr-2" />
@@ -1243,56 +1317,140 @@ export function DashboardPage() {
             <CardHeader>
               <CardTitle className="text-text-primary flex items-center gap-2">
                 <Calendar className="w-5 h-5" />
-                Weekly Digest
+                Digest Controls
               </CardTitle>
-              <p className="text-sm text-text-secondary mt-1">Manage digest generation and posting</p>
+              <p className="text-sm text-text-secondary mt-1">Manage automatic digest scheduling</p>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="border border-border-subtle rounded-lg p-4 bg-surface-elevated">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-text-secondary">Next Scheduled</span>
-                  <Clock className="w-4 h-4 text-text-muted" />
+              <div>
+                <Label htmlFor="digest-frequency" className="text-text-secondary mb-2 block">Digest Frequency</Label>
+                <Select
+                  value={v2League.digestFrequency || "off"}
+                  onValueChange={(value) => updateV2LeagueMutation.mutate({ digestFrequency: value })}
+                  disabled={updateV2LeagueMutation.isPending}
+                >
+                  <SelectTrigger id="digest-frequency" data-testid="select-digest-frequency" className="bg-surface-elevated border-border-default text-text-primary">
+                    <SelectValue placeholder="Select frequency" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-surface-card border-border-default">
+                    <SelectItem value="off" className="text-text-primary hover:bg-surface-hover">Off</SelectItem>
+                    <SelectItem value="daily" className="text-text-primary hover:bg-surface-hover">Daily</SelectItem>
+                    <SelectItem value="weekly" className="text-text-primary hover:bg-surface-hover">Weekly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {isDemoMode && (
+                <div className="space-y-3">
+                  <div className="text-xs text-text-muted">
+                    <p>🔧 Dev Mode: Run digest manually</p>
+                  </div>
+                  <Button
+                    onClick={() => {
+                      if (confirm('Are you sure you want to post the digest to Discord now?')) {
+                        runDigestMutation.mutate();
+                      }
+                    }}
+                    data-testid="button-run-digest-now"
+                    disabled={runDigestMutation.isPending}
+                    className="w-full bg-brand-teal hover:bg-brand-teal/90 text-white"
+                  >
+                    {runDigestMutation.isPending && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
+                    {!runDigestMutation.isPending && <Zap className="w-4 h-4 mr-2" />}
+                    {runDigestMutation.isPending ? 'Posting...' : 'Run Now'}
+                  </Button>
                 </div>
-                <p className="text-lg font-semibold text-text-primary">
-                  {(v2League as any).nextDigestAt ? new Date((v2League as any).nextDigestAt).toLocaleString() : 'Not scheduled'}
-                </p>
-              </div>
-
-              <div className="space-y-3">
-                <Button
-                  onClick={() => previewDigestMutation.mutate()}
-                  data-testid="button-preview-digest"
-                  disabled={previewDigestMutation.isPending}
-                  variant="secondary"
-                  className="w-full text-text-primary border border-border-default hover:bg-surface-hover"
-                >
-                  {previewDigestMutation.isPending && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
-                  {!previewDigestMutation.isPending && <Search className="w-4 h-4 mr-2" />}
-                  {previewDigestMutation.isPending ? 'Generating...' : 'Preview Digest'}
-                </Button>
-
-                <Button
-                  onClick={() => {
-                    if (confirm('Are you sure you want to post the digest to Discord now?')) {
-                      runDigestMutation.mutate();
-                    }
-                  }}
-                  data-testid="button-run-digest"
-                  disabled={runDigestMutation.isPending}
-                  className="w-full bg-brand-teal hover:bg-brand-teal/90 text-white"
-                >
-                  {runDigestMutation.isPending && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
-                  {!runDigestMutation.isPending && <Zap className="w-4 h-4 mr-2" />}
-                  {runDigestMutation.isPending ? 'Posting...' : 'Run Digest Now'}
-                </Button>
-              </div>
-
-              <div className="text-xs text-text-muted pt-2 border-t border-border-subtle">
-                <p>⚠️ Running digest now will post to the configured digest channel immediately.</p>
-              </div>
+              )}
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {/* Phase 6: Rules Library Card */}
+      {leagueId && (
+        <Card className="bg-surface-card border-border-subtle shadow-depth2" data-testid="card-rules-library">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-text-primary flex items-center gap-2">
+                  <BookOpen className="w-5 h-5" />
+                  Rules Library
+                </CardTitle>
+                <p className="text-sm text-text-secondary mt-1">Manage and reindex your league constitution documents</p>
+              </div>
+              <Button
+                onClick={() => setIsRulesModalOpen(true)}
+                data-testid="button-add-rules-document"
+                className="bg-brand-teal hover:bg-brand-teal/90 text-white"
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                Add Rules Document
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {documentsLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+              </div>
+            ) : !documentsData?.documents || documentsData.documents.length === 0 ? (
+              <div className="text-center py-8 text-text-secondary" data-testid="empty-rules-library">
+                <FileText className="w-10 h-10 mx-auto mb-2 text-text-muted" />
+                <p>No documents indexed yet</p>
+                <p className="text-sm mt-1">Add your league constitution to enable AI-powered rules search</p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-border-subtle hover:bg-transparent">
+                    <TableHead className="text-text-secondary">Title</TableHead>
+                    <TableHead className="text-text-secondary">Version</TableHead>
+                    <TableHead className="text-text-secondary">Chunks</TableHead>
+                    <TableHead className="text-text-secondary">Last Indexed</TableHead>
+                    <TableHead className="text-text-secondary text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {documentsData.documents.map((doc) => (
+                    <TableRow key={doc.id} className="border-border-subtle" data-testid={`row-document-${doc.id}`}>
+                      <TableCell className="font-medium text-text-primary" data-testid={`text-title-${doc.id}`}>
+                        {doc.title}
+                      </TableCell>
+                      <TableCell className="text-text-secondary" data-testid={`text-version-${doc.id}`}>
+                        {doc.version}
+                      </TableCell>
+                      <TableCell className="text-text-secondary" data-testid={`text-chunks-${doc.id}`}>
+                        {doc.chunksCount}
+                      </TableCell>
+                      <TableCell className="text-text-secondary" data-testid={`text-indexed-${doc.id}`}>
+                        {new Date(doc.lastIndexed).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            if (confirm('Reindex this document? This will regenerate all embeddings.')) {
+                              reindexDocumentMutation.mutate(doc.id);
+                            }
+                          }}
+                          disabled={reindexDocumentMutation.isPending}
+                          data-testid={`button-reindex-${doc.id}`}
+                          className="text-brand-teal hover:text-brand-teal/80"
+                        >
+                          <RefreshCw className={`w-4 h-4 mr-1 ${reindexDocumentMutation.isPending ? 'animate-spin' : ''}`} />
+                          Re-index
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* League Settings Card */}
@@ -2524,6 +2682,86 @@ export function DashboardPage() {
         </Card>
       )}
 
+      {/* Phase 5: Reminders Section */}
+      {leagueId && (
+        <Card className="bg-surface-card border-border-subtle shadow-depth2">
+          <CardHeader>
+            <CardTitle className="text-text-primary flex items-center gap-2">
+              <Bell className="w-5 h-5" />
+              Reminders
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Preset Toggles Section */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold text-text-primary">Preset Reminders</h3>
+              
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 rounded-lg bg-surface-elevated border border-border-subtle">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Calendar className="w-4 h-4 text-brand-teal" />
+                      <span className="font-medium text-text-primary">Lineup Lock Reminder</span>
+                    </div>
+                    <p className="text-xs text-text-secondary mt-1">Sunday 12:30 PM ET</p>
+                  </div>
+                  <Switch
+                    data-testid="switch-reminder-lineup-lock"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between p-3 rounded-lg bg-surface-elevated border border-border-subtle">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-brand-pink" />
+                      <span className="font-medium text-text-primary">Waivers Reminder</span>
+                    </div>
+                    <p className="text-xs text-text-secondary mt-1">Wednesday 9:00 AM local</p>
+                  </div>
+                  <Switch
+                    data-testid="switch-reminder-waivers"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between p-3 rounded-lg bg-surface-elevated border border-border-subtle">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-yellow-400" />
+                      <span className="font-medium text-text-primary">Trade Deadline Reminder</span>
+                    </div>
+                    <p className="text-xs text-text-secondary mt-1">Daily at noon (checks deadline proximity)</p>
+                  </div>
+                  <Switch
+                    data-testid="switch-reminder-trade-deadline"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Custom Reminders Section */}
+            <div className="space-y-4 border-t border-border-subtle pt-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-text-primary">Custom Reminders</h3>
+                <Button
+                  size="sm"
+                  data-testid="button-add-custom-reminder"
+                  className="bg-brand-teal hover:bg-brand-teal/90 text-white"
+                >
+                  <Bell className="w-4 h-4 mr-2" />
+                  Add Custom
+                </Button>
+              </div>
+
+              {/* Custom reminders list will go here */}
+              <div className="text-center py-8 text-text-secondary" data-testid="empty-custom-reminders">
+                <Bell className="w-10 h-10 mx-auto mb-2 text-text-muted" />
+                <p>No custom reminders yet</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Owner Mapping Dialog */}
       <Dialog
         open={isOwnerDialogOpen}
@@ -2815,6 +3053,100 @@ export function DashboardPage() {
               className="flex-1"
             >
               Close
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      {/* Phase 6: Add Rules Document Dialog */}
+      <Dialog
+        open={isRulesModalOpen}
+        onClose={() => {
+          setIsRulesModalOpen(false);
+          setDocumentTitle('');
+          setDocumentVersion('v1.0');
+          setDocumentContent('');
+        }}
+        title="Add Rules Document"
+        size="lg"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium text-text-secondary block mb-2">
+              Title <span className="text-red-400">*</span>
+            </label>
+            <Input
+              value={documentTitle}
+              onChange={(e) => setDocumentTitle(e.target.value)}
+              placeholder="League Constitution 2024"
+              data-testid="input-document-title"
+              className="bg-surface-elevated border-border-default text-text-primary"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium text-text-secondary block mb-2">
+              Version
+            </label>
+            <Input
+              value={documentVersion}
+              onChange={(e) => setDocumentVersion(e.target.value)}
+              placeholder="v1.0"
+              data-testid="input-document-version"
+              className="bg-surface-elevated border-border-default text-text-primary"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium text-text-secondary block mb-2">
+              Content <span className="text-red-400">*</span>
+            </label>
+            <Textarea
+              value={documentContent}
+              onChange={(e) => setDocumentContent(e.target.value)}
+              placeholder="Paste your league constitution here..."
+              rows={12}
+              data-testid="textarea-document-content"
+              className="bg-surface-elevated border-border-default text-text-primary font-mono text-sm"
+            />
+            <p className="text-xs text-text-muted mt-1">
+              Paste your league rules or constitution. The system will automatically parse and index it.
+            </p>
+          </div>
+
+          <div className="flex gap-3 pt-4">
+            <Button
+              onClick={() => {
+                setIsRulesModalOpen(false);
+                setDocumentTitle('');
+                setDocumentVersion('v1.0');
+                setDocumentContent('');
+              }}
+              data-testid="button-cancel-document"
+              variant="secondary"
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (!documentTitle.trim() || !documentContent.trim()) {
+                  toast.error('Validation error', {
+                    description: 'Title and content are required',
+                  });
+                  return;
+                }
+                addDocumentMutation.mutate({
+                  title: documentTitle,
+                  version: documentVersion,
+                  content: documentContent,
+                });
+              }}
+              data-testid="button-save-document"
+              disabled={addDocumentMutation.isPending}
+              className="flex-1 bg-brand-teal hover:bg-brand-teal/90 text-white"
+            >
+              {addDocumentMutation.isPending ? 'Indexing...' : 'Add Document'}
             </Button>
           </div>
         </div>

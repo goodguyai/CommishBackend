@@ -248,6 +248,47 @@ export class Scheduler extends EventEmitter {
     this.unscheduleReminders(leagueId);
     this.unscheduleLeaguePhase3(leagueId);
   }
+
+  // Phase 5: Schedule reminder job from database
+  scheduleReminderJob(
+    reminderId: string,
+    leagueId: string,
+    cronExpression: string,
+    channelId: string,
+    message: string,
+    timezone: string = "America/New_York"
+  ) {
+    const taskKey = `reminder_job_${reminderId}`;
+
+    // Unschedule existing task if already scheduled (idempotent)
+    if (this.tasks.has(taskKey)) {
+      this.unschedule(taskKey);
+    }
+
+    const task = cron.createTask(
+      cronExpression,
+      () => {
+        this.emit("reminder_job_due", {
+          reminderId,
+          leagueId,
+          channelId,
+          message,
+        });
+      },
+      {
+        timezone,
+      }
+    );
+
+    this.tasks.set(taskKey, task);
+    task.start();
+
+    console.log(`Scheduled reminder job ${reminderId} for league ${leagueId}: ${cronExpression} (${timezone})`);
+  }
+
+  unscheduleReminderJob(reminderId: string) {
+    this.unschedule(`reminder_job_${reminderId}`);
+  }
 }
 
 export const scheduler = new Scheduler();

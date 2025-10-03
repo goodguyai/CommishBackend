@@ -4,6 +4,7 @@ import connectPgSimple from "connect-pg-simple";
 import pg from "pg";
 import { registerRoutes } from "./routes";
 import { scheduler } from "./lib/scheduler";
+import { storage } from "./storage";
 import { serveStatic, log } from "./vite";
 import { validateEnvironment, getEnv } from "./services/env";
 import { generateRequestId } from "./lib/crypto";
@@ -25,6 +26,11 @@ app.use((req, res, next) => {
   // Attach requestId to request for use in routes
   (req as any).requestId = requestId;
   res.locals.requestId = requestId;
+  
+  // Phase 8.1: Add X-Request-Id header to all API responses
+  if (path.startsWith('/api')) {
+    res.setHeader('X-Request-Id', requestId);
+  }
 
   // Capture res.json
   const originalResJson = res.json;
@@ -168,6 +174,34 @@ app.use((req, res, next) => {
   
   // Phase 3: Initialize global content poster (every 5 minutes)
   scheduler.scheduleContentPoster();
+
+  // Phase 5: Load all enabled reminders on startup
+  (async () => {
+    try {
+      const allLeagues = await storage.getAllLeagues();
+      for (const league of allLeagues) {
+        const reminders = await storage.getReminders(league.id);
+        const enabledReminders = reminders.filter(r => r.enabled);
+        
+        for (const reminder of enabledReminders) {
+          scheduler.scheduleReminderJob(
+            reminder.id,
+            reminder.leagueId,
+            reminder.cron,
+            reminder.channelId || league.channelId || "",
+            reminder.message || "Reminder",
+            reminder.timezone || league.timezone || "America/New_York"
+          );
+        }
+        
+        if (enabledReminders.length > 0) {
+          console.log(`Loaded ${enabledReminders.length} reminders for league ${league.name}`);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to load reminders on startup:", error);
+    }
+  })();
 
   // Error handler middleware
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {

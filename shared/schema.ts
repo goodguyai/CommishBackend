@@ -104,6 +104,7 @@ export const leagues = pgTable("leagues", {
     maxTokens: 1000,
     provider: "deepseek"
   }),
+  digestFrequency: text("digest_frequency").default("off"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -126,10 +127,12 @@ export const documents = pgTable("documents", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   leagueId: uuid("league_id").references(() => leagues.id).notNull(),
   type: documentTypeEnum("type").notNull(),
+  title: text("title").notNull().default("League Constitution"),
   url: text("url"),
   content: text("content"),
   version: text("version").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export const rules = pgTable("rules", {
@@ -255,6 +258,8 @@ export const reminders = pgTable("reminders", {
   leagueId: uuid("league_id").references(() => leagues.id).notNull(),
   type: text("type").notNull(), // 'lineup_lock' | 'waivers' | 'trade_deadline' | 'bye_week' | 'custom'
   cron: text("cron").notNull(),
+  message: text("message"),
+  channelId: text("channel_id"),
   timezone: text("timezone").default("UTC").notNull(),
   enabled: boolean("enabled").default(true).notNull(),
   lastFired: timestamp("last_fired"),
@@ -490,6 +495,8 @@ export const insertReminderSchema = createInsertSchema(reminders).pick({
   leagueId: true,
   type: true,
   cron: true,
+  message: true,
+  channelId: true,
   timezone: true,
   enabled: true,
   metadata: true,
