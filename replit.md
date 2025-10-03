@@ -48,6 +48,48 @@ Preferred communication style: Simple, everyday language.
 - **AI Assistant (DeepSeek)**: Model info, request metrics, response times, cache hit rates, token usage with progress bar
 - **Recent Activity Log**: System events with timestamps (Sleeper sync, command execution, digest generation, reindexing)
 
+**Phase 2 - Dispute Prevention & Vibes Monitor (October 2025):**
+- **Database Schema**: Migration 0006_phase2_disputes_vibes.sql
+  - sentiment_logs: Message toxicity/sentiment tracking
+  - mod_actions: Moderation action logging
+  - disputes: Dispute management with status workflow (open→under_review→resolved/dismissed)
+  - trade_evaluations: Trade fairness evaluations with unique constraint per league/trade
+- **Services**: VibesService (sentiment scoring), ModerationService (thread freeze, rule clarification), TradeFairnessService (trade evaluation)
+- **API Endpoints (v2)**: 
+  - POST /api/v2/vibes/score - Score message toxicity
+  - POST /api/v2/mod/freeze - Freeze thread
+  - POST /api/v2/mod/clarify-rule - Post rule clarification
+  - POST /api/v2/disputes - Create dispute
+  - PATCH /api/v2/disputes/:id - Update dispute
+  - POST /api/v2/trades/evaluate - Evaluate trade fairness
+  - GET /api/v2/disputes - List disputes with filtering
+- **Discord Integration**:
+  - Toxicity monitoring with automated commissioner DM alerts (feature flag: vibesMonitor)
+  - Slash commands: /freeze, /clarify, /trade_fairness
+  - Interactive button handlers for toxicity alerts
+- **Dashboard UI**: Vibes Monitor (threshold slider, alert preferences), Disputes list (status tabs, resolution modal), Trade Fairness Snapshot (search by trade ID), Moderation Tools (freeze thread, clarify rule forms)
+
+**Phase 3 - Engagement Engine (October 2025):**
+- **Database Schema**: Migration 0007_phase3_engagement.sql
+  - highlights: Weekly highlight moments (comeback, blowout, bench_tragedy, top_scorer)
+  - rivalries: Head-to-head tracking with canonicalized team ordering
+  - content_queue: Scheduled Discord post queue with status tracking
+- **Services**: HighlightsService (compute highlights, idempotent), RivalriesService (canonicalized rivalry tracking), ContentService (enqueue, rate-limited posting)
+- **API Endpoints (v2)**:
+  - POST /api/v2/highlights/compute - Compute week highlights
+  - GET /api/v2/highlights - List highlights
+  - POST /api/v2/rivalries/update - Update rivalry records
+  - GET /api/v2/rivalries - List rivalries
+  - POST /api/v2/content/enqueue - Queue content for posting
+  - GET /api/v2/content/queue - List queued content
+  - POST /api/v2/content/run - Admin endpoint to post queued content
+- **Scheduler Extensions**:
+  - Sunday 8 PM: Enqueue digest + highlights (league timezone)
+  - Monday 9 AM: Enqueue rivalry cards (league timezone)
+  - Every 5 minutes: Post queued content (UTC, rate-limited)
+  - Idempotent job guards prevent duplicate cron tasks
+- **Dashboard UI**: Highlights tab (week picker, highlight cards with badges), Rivalries dashboard (top matchups, rubber match badges), Content Queue admin table (status filtering, re-enqueue), Feature toggles (creativeTrashTalk, deepStats, highlights, rivalries)
+
 ## System Architecture
 
 ### UI/UX Decisions
@@ -85,12 +127,12 @@ The frontend uses React with TypeScript, Vite, and shadcn/ui components built on
 
 ### Technical Implementations
 - **Frontend**: React, TypeScript, Vite, Wouter (routing), TanStack Query (server state), Zustand (client state). Dashboard features owner mapping, reminder management, and league settings with TanStack Query state management.
-- **Backend**: Node.js with Express, TypeScript. Modular service-oriented pattern for Discord, Sleeper, DeepSeek LLM, and RAG functionalities.
+- **Backend**: Node.js with Express, TypeScript. Modular service-oriented pattern for Discord, Sleeper, DeepSeek LLM, and RAG functionalities. Phase 2/3 v2 API routes with Zod validation, commissioner auth, and event emissions.
 - **Database**: PostgreSQL with Drizzle ORM and pgvector extension for vector storage. Supabase is used for managed hosting.
 - **Discord Integration**: Ed25519 signature verification, slash commands, OAuth2, component interactions.
 - **AI/RAG System**: Processes league constitutions, uses OpenAI for text embeddings, DeepSeek LLM for chat completions and function calling, and pgvector for similarity search. Features passage-scoped extraction, configurable top-k results, and confidence thresholds.
 - **Sleeper Integration**: Read-only integration with Sleeper's public API for league data, rosters, and matchups, with in-memory caching and scheduled sync jobs.
-- **Scheduling System**: node-cron for weekly digests, data synchronization, and event-driven operations. Includes timezone-aware reminder scheduling with multi-interval support and feature toggles.
+- **Scheduling System**: node-cron for weekly digests, data synchronization, and event-driven operations. Includes timezone-aware reminder scheduling with multi-interval support and feature toggles. Phase 3 engagement scheduler (highlights, rivalries, content posting) with idempotent job guards and timezone-aware cron expressions.
 - **Features**: Constitution upload/pasting with automatic indexing and versioning, quick polls with Discord integration, and an auto-meme feature triggered by blowout game scores.
 
 ### System Design Choices
