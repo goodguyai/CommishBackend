@@ -124,6 +124,15 @@ export interface IStorage {
   // Member/Owner Mapping methods (Phase 1)
   getMemberByDiscordId(leagueId: string, discordUserId: string): Promise<Member | undefined>;
   createOrUpdateMember(data: InsertMember): Promise<string>;
+  getMembers(leagueId: string): Promise<Member[]>;
+  upsertMember(data: {
+    leagueId: string;
+    discordUserId: string;
+    sleeperOwnerId?: string;
+    sleeperTeamName?: string;
+    discordUsername?: string;
+    role?: 'COMMISH' | 'MANAGER';
+  }): Promise<Member>;
 
   // Reminder methods (Phase 1)
   getReminders(leagueId: string): Promise<Reminder[]>;
@@ -722,6 +731,57 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error in createOrUpdateMember:', error);
       throw error;
+    }
+  }
+
+  async getMembers(leagueId: string): Promise<Member[]> {
+    return this.db.select()
+      .from(schema.members)
+      .where(eq(schema.members.leagueId, leagueId))
+      .orderBy(schema.members.sleeperTeamName);
+  }
+
+  async upsertMember(data: {
+    leagueId: string;
+    discordUserId: string;
+    sleeperOwnerId?: string;
+    sleeperTeamName?: string;
+    discordUsername?: string;
+    role?: 'COMMISH' | 'MANAGER';
+  }): Promise<Member> {
+    const existing = await this.db.select()
+      .from(schema.members)
+      .where(
+        and(
+          eq(schema.members.leagueId, data.leagueId),
+          eq(schema.members.discordUserId, data.discordUserId)
+        )
+      )
+      .limit(1);
+    
+    if (existing.length > 0) {
+      const [updated] = await this.db.update(schema.members)
+        .set({
+          sleeperOwnerId: data.sleeperOwnerId,
+          sleeperTeamName: data.sleeperTeamName,
+          discordUsername: data.discordUsername,
+          role: data.role || 'MANAGER',
+        })
+        .where(eq(schema.members.id, existing[0].id))
+        .returning();
+      return updated;
+    } else {
+      const [inserted] = await this.db.insert(schema.members)
+        .values({
+          leagueId: data.leagueId,
+          discordUserId: data.discordUserId,
+          sleeperOwnerId: data.sleeperOwnerId,
+          sleeperTeamName: data.sleeperTeamName,
+          discordUsername: data.discordUsername,
+          role: data.role || 'MANAGER',
+        })
+        .returning();
+      return inserted;
     }
   }
 
@@ -1493,6 +1553,51 @@ export class MemStorage implements IStorage {
       return existing.id;
     } else {
       return await this.createMember(data);
+    }
+  }
+
+  async getMembers(leagueId: string): Promise<Member[]> {
+    return Array.from(this.members.values())
+      .filter(m => m.leagueId === leagueId)
+      .sort((a, b) => {
+        const nameA = a.sleeperTeamName || '';
+        const nameB = b.sleeperTeamName || '';
+        return nameA.localeCompare(nameB);
+      });
+  }
+
+  async upsertMember(data: {
+    leagueId: string;
+    discordUserId: string;
+    sleeperOwnerId?: string;
+    sleeperTeamName?: string;
+    discordUsername?: string;
+    role?: 'COMMISH' | 'MANAGER';
+  }): Promise<Member> {
+    const existing = await this.getMember(data.leagueId, data.discordUserId);
+    
+    if (existing) {
+      Object.assign(existing, {
+        sleeperOwnerId: data.sleeperOwnerId,
+        sleeperTeamName: data.sleeperTeamName,
+        discordUsername: data.discordUsername,
+        role: data.role || 'MANAGER',
+      });
+      return existing;
+    } else {
+      const id = this.generateId();
+      const newMember: Member = {
+        id,
+        leagueId: data.leagueId,
+        discordUserId: data.discordUserId,
+        role: data.role || 'MANAGER',
+        sleeperOwnerId: data.sleeperOwnerId || null,
+        sleeperTeamName: data.sleeperTeamName || null,
+        discordUsername: data.discordUsername || null,
+        createdAt: new Date(),
+      };
+      this.members.set(id, newMember);
+      return newMember;
     }
   }
 

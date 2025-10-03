@@ -1,5 +1,16 @@
 import { z } from "zod";
+import { nanoid } from "nanoid";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import { env } from "./env.js";
+import { events } from "@shared/schema";
+import { eq, and } from "drizzle-orm";
+
+const client = postgres(process.env.DATABASE_URL!, { 
+  max: 1,
+  ssl: process.env.NODE_ENV === 'production' ? 'require' : undefined 
+});
+const db = drizzle(client);
 
 // Discord API types
 export interface DiscordUser {
@@ -271,24 +282,25 @@ export class DiscordService {
   }
 
   // Post message to channel
-  async postMessage(channelId: string, content: any): Promise<string> {
-    const url = `${this.baseUrl}/channels/${channelId}/messages`;
-    
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bot ${this.botToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(content),
+  async postMessage(
+    channelId: string, 
+    payload: { content?: string; embeds?: any[]; components?: any[] }, 
+    idempotencyKey?: string
+  ): Promise<string> {
+    // Delegate to the standalone reliability wrapper
+    const result = await postMessage({
+      channelId,
+      content: payload.content,
+      embeds: payload.embeds,
+      components: payload.components,
+      idempotencyKey,
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to post message: ${response.statusText}`);
+    
+    if (!result.ok || !result.messageId) {
+      throw new Error(result.error || 'Failed to post message');
     }
-
-    const message = await response.json();
-    return message.id;
+    
+    return result.messageId;
   }
 
   // Add reaction to message
@@ -481,6 +493,34 @@ export class DiscordService {
         ],
       },
       {
+        name: "digest",
+        description: "Generate and post the weekly digest immediately",
+      },
+      {
+        name: "poll",
+        description: "Create a quick poll for league members",
+        options: [
+          {
+            name: "question",
+            description: "The poll question",
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: "options",
+            description: "Poll options separated by | (e.g., Yes | No | Maybe)",
+            type: 3, // STRING
+            required: true,
+          },
+          {
+            name: "duration",
+            description: "How long to keep poll open (in hours, default 24)",
+            type: 4, // INTEGER
+            required: false,
+          },
+        ],
+      },
+      {
         name: "reindex",
         description: "Rebuild RAG index (Commissioner only)",
       },
@@ -646,3 +686,149 @@ export class DiscordService {
 }
 
 export const discordService = new DiscordService();
+
+// Centralized postMessage utility with idempotency and rate limit handling
+export interface PostMessageOptions {
+  channelId: string;
+  content?: string;
+  embeds?: any[];
+  components?: any[];
+  idempotencyKey?: string;
+}
+
+export interface PostMessageResult {
+  ok: boolean;
+  messageId?: string;
+  error?: string;
+  rateLimited?: boolean;
+}
+
+async function checkIdempotentPost(idempotencyKey: string): Promise<any | null> {
+  const existing = await db.select()
+    .from(events)
+    .where(
+      and(
+        eq(events.requestId, idempotencyKey),
+        eq(events.type, 'MESSAGE_POSTED')
+      )
+    )
+    .limit(1);
+  
+  return existing.length > 0 ? existing[0] : null;
+}
+
+async function logPostEvent(idempotencyKey: string, payload: any): Promise<void> {
+  await db.insert(events).values({
+    type: 'MESSAGE_POSTED',
+    requestId: idempotencyKey,
+    payload,
+  });
+}
+
+export async function postMessage(options: PostMessageOptions): Promise<PostMessageResult> {
+  const { channelId, content, embeds, components, idempotencyKey } = options;
+  
+  const idemKey = idempotencyKey || nanoid();
+  
+  const existingEvent = await checkIdempotentPost(idemKey);
+  if (existingEvent) {
+    console.log(`[Discord Post] Skipping duplicate post: ${idemKey}`);
+    return {
+      ok: true,
+      messageId: existingEvent.payload.messageId,
+    };
+  }
+  
+  const body: any = {};
+  if (content) body.content = content;
+  if (embeds) body.embeds = embeds;
+  if (components) body.components = components;
+  
+  let attempts = 0;
+  const maxAttempts = 3;
+  let backoffMs = 1000;
+  
+  while (attempts < maxAttempts) {
+    attempts++;
+    
+    try {
+      const response = await fetch(
+        `https://discord.com/api/v10/channels/${channelId}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bot ${process.env.DISCORD_BOT_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        }
+      );
+      
+      if (response.status === 429) {
+        const retryData = await response.json();
+        const retryAfter = retryData.retry_after || backoffMs / 1000;
+        
+        console.warn(`[Discord Post] Rate limited, retry in ${retryAfter}s (attempt ${attempts}/${maxAttempts})`);
+        
+        if (attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+          backoffMs *= 2;
+          continue;
+        } else {
+          await logPostEvent(idemKey, { error: 'Rate limit exceeded', attempts });
+          return {
+            ok: false,
+            error: 'Rate limit exceeded',
+            rateLimited: true,
+          };
+        }
+      }
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[Discord Post] Failed: ${response.status} - ${errorText}`);
+        
+        await logPostEvent(idemKey, { error: `HTTP ${response.status}`, attempts });
+        
+        return {
+          ok: false,
+          error: `Discord API error: ${response.status}`,
+        };
+      }
+      
+      const message = await response.json();
+      
+      await logPostEvent(idemKey, {
+        messageId: message.id,
+        channelId,
+        attempts,
+        success: true,
+      });
+      
+      return {
+        ok: true,
+        messageId: message.id,
+      };
+      
+    } catch (e: any) {
+      console.error(`[Discord Post] Exception on attempt ${attempts}:`, e.message);
+      
+      if (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+        backoffMs *= 2;
+        continue;
+      } else {
+        await logPostEvent(idemKey, { error: e.message, attempts });
+        return {
+          ok: false,
+          error: e.message,
+        };
+      }
+    }
+  }
+  
+  return {
+    ok: false,
+    error: 'Max retries exceeded',
+  };
+}

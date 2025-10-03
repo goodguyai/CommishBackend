@@ -1101,6 +1101,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // === OWNER MAPPING ENDPOINTS ===
+
+  // GET /api/v2/owners - Get team members with their mappings for a league
+  app.get("/api/v2/owners", async (req, res) => {
+    try {
+      const { leagueId } = req.query;
+      
+      if (!leagueId || typeof leagueId !== 'string') {
+        return res.status(400).json({ ok: false, code: "MISSING_LEAGUE_ID", message: "leagueId is required" });
+      }
+      
+      const members = await storage.getMembers(leagueId);
+      
+      const owners = members.map(m => ({
+        id: m.id,
+        leagueId: m.leagueId,
+        teamId: m.sleeperOwnerId,
+        teamName: m.sleeperTeamName,
+        discordUserId: m.discordUserId,
+        discordUsername: m.discordUsername,
+        role: m.role,
+      }));
+      
+      res.json(owners);
+    } catch (e) {
+      console.error('[Owners GET]', e);
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to fetch owners" });
+    }
+  });
+
+  // POST /api/v2/owners/map - Upsert a member mapping
+  app.post("/api/v2/owners/map", async (req, res) => {
+    try {
+      const { leagueId, teamId, discordUserId, teamName, discordUsername } = req.body;
+      
+      if (!leagueId || !teamId || !discordUserId) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "MISSING_FIELDS", 
+          message: "leagueId, teamId, and discordUserId are required" 
+        });
+      }
+      
+      await storage.upsertMember({
+        leagueId,
+        discordUserId,
+        sleeperOwnerId: teamId,
+        sleeperTeamName: teamName,
+        discordUsername,
+        role: 'MANAGER',
+      });
+      
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[Owners Map]', e);
+      res.status(500).json({ ok: false, code: "MAP_FAILED", message: "Failed to map owner" });
+    }
+  });
+
   // === PHASE 3 ENGAGEMENT ENDPOINTS ===
 
   // 1. POST /api/v2/highlights/compute - Compute and store week highlights
@@ -2115,7 +2174,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Check permissions for admin commands
         const isCommish = league ? await isUserCommish(league.id, userId) : false;
-        const adminCommands = ["config", "reindex", "freeze", "clarify", "trade_fairness"];
+        const adminCommands = ["config", "digest", "reindex", "freeze", "clarify", "trade_fairness"];
         
         if (adminCommands.includes(commandName!) && !isCommish) {
           return res.json({
@@ -2145,6 +2204,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             break;
           case "config":
             response = await handleConfigCommand(interaction, league!, requestId);
+            break;
+          case "digest":
+            response = await handleDigestCommand(interaction, league!, requestId);
+            break;
+          case "poll":
+            response = await handlePollCommand(interaction, league!, requestId);
             break;
           case "reindex":
             response = await handleReindexCommand(interaction, league!, requestId);
@@ -3654,6 +3719,21 @@ async function handleHelpCommand(interaction: any) {
         inline: false,
       },
       {
+        name: "📊 /digest (Commissioner only)",
+        value: "Generate and post the weekly digest immediately",
+        inline: false,
+      },
+      {
+        name: "📊 /poll <question> <options>",
+        value: "Create a quick poll for league members (options separated by |)",
+        inline: false,
+      },
+      {
+        name: "👤 /whoami",
+        value: "Show your member info and role in the league",
+        inline: false,
+      },
+      {
         name: "⚙️ /config <setting> (Commissioner only)",
         value: "Configure bot settings",
         inline: false,
@@ -3872,6 +3952,168 @@ async function handleConfigCommand(interaction: any, league: any, requestId: str
       },
     };
   }
+}
+
+async function handleDigestCommand(interaction: any, league: any, requestId: string) {
+  setTimeout(async () => {
+    try {
+      if (!league.channelId) {
+        await discordService.followUpInteraction(interaction.token, {
+          content: "❌ No channel configured for digests. Please set one with `/config`.",
+          flags: 64,
+        });
+        return;
+      }
+
+      if (!league.sleeperLeagueId) {
+        await discordService.followUpInteraction(interaction.token, {
+          content: "❌ No Sleeper league connected. Please complete setup first.",
+          flags: 64,
+        });
+        return;
+      }
+
+      const sleeperData = await sleeperService.syncLeagueData(league.sleeperLeagueId);
+      const digest = await generateDigestContent(league, sleeperData);
+
+      let description = digest.sections.map(s => `**${s.title}**\n${s.content}`).join("\n\n");
+      
+      if (description.length > 3800) {
+        description = description.substring(0, 3797) + "...";
+      }
+
+      const embed = {
+        title: `📊 ${digest.leagueName} - Weekly Digest`.substring(0, 256),
+        description,
+        color: 0x00D2FF,
+        footer: { text: `THE COMMISH • Generated ${new Date(digest.timestamp).toLocaleString()}` },
+        timestamp: new Date(digest.timestamp).toISOString(),
+      };
+
+      await discordService.postMessage(league.channelId, { embeds: [embed] });
+      
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId: league.id,
+        payload: { command: "digest_manual", success: true },
+      });
+
+      await discordService.followUpInteraction(interaction.token, {
+        content: "✅ Digest posted successfully!",
+        flags: 64,
+      });
+    } catch (error) {
+      console.error("Digest command failed:", error);
+      await discordService.followUpInteraction(interaction.token, {
+        content: "❌ Failed to generate digest. Please try again.",
+        flags: 64,
+      });
+    }
+  }, 100);
+
+  return {
+    type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+    data: { flags: 64 },
+  };
+}
+
+async function handlePollCommand(interaction: any, league: any, requestId: string) {
+  const question = interaction.data?.options?.find((o: any) => o.name === "question")?.value;
+  const optionsStr = interaction.data?.options?.find((o: any) => o.name === "options")?.value;
+  const duration = interaction.data?.options?.find((o: any) => o.name === "duration")?.value || 24;
+  
+  if (!question || !optionsStr) {
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Please provide both a question and options.",
+        flags: 64,
+      },
+    };
+  }
+  
+  const options = optionsStr.split('|').map((opt: string) => opt.trim()).filter((opt: string) => opt.length > 0);
+  
+  if (options.length < 2) {
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Please provide at least 2 options separated by |",
+        flags: 64,
+      },
+    };
+  }
+  
+  if (options.length > 10) {
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Maximum 10 poll options allowed.",
+        flags: 64,
+      },
+    };
+  }
+
+  setTimeout(async () => {
+    try {
+      const userId = interaction.member?.user?.id || interaction.user?.id;
+      const expiresAt = new Date(Date.now() + duration * 60 * 60 * 1000);
+      
+      const pollId = await storage.createPoll({
+        leagueId: league.id,
+        question,
+        options,
+        createdBy: userId,
+        expiresAt,
+        status: 'open',
+      });
+      
+      const embed = {
+        title: "📊 Poll",
+        description: question,
+        color: 0x009898,
+        fields: options.map((opt: string, idx: number) => ({
+          name: `${idx + 1}. ${opt}`,
+          value: '0 votes',
+          inline: false,
+        })),
+        footer: {
+          text: `Poll closes in ${duration} hours • React with numbers to vote`,
+        },
+      };
+      
+      const messageId = await discordService.postMessage(league.channelId, { embeds: [embed] });
+      
+      await storage.updatePoll(pollId, { discordMessageId: messageId });
+      
+      const reactions = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+      for (let i = 0; i < Math.min(options.length, 10); i++) {
+        await discordService.addReaction(league.channelId, messageId, reactions[i]);
+      }
+
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId: league.id,
+        payload: { command: "poll_created", pollId },
+      });
+
+      await discordService.followUpInteraction(interaction.token, {
+        content: "✅ Poll created successfully!",
+        flags: 64,
+      });
+    } catch (error) {
+      console.error("Poll command failed:", error);
+      await discordService.followUpInteraction(interaction.token, {
+        content: "❌ Failed to create poll. Please try again.",
+        flags: 64,
+      });
+    }
+  }, 100);
+  
+  return {
+    type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+    data: { flags: 64 },
+  };
 }
 
 async function handleReindexCommand(interaction: any, league: any, requestId: string) {

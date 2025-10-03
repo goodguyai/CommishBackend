@@ -32,7 +32,8 @@ export const eventTypeEnum = pgEnum("event_type", [
   "COMMAND_EXECUTED",
   "RULES_INDEX_FAILED",
   "MISCONFIGURED",
-  "ERROR_OCCURRED"
+  "ERROR_OCCURRED",
+  "MESSAGE_POSTED"
 ]);
 export const disputeStatusEnum = pgEnum("dispute_status", ["open", "under_review", "resolved", "dismissed"]);
 export const contentStatusEnum = pgEnum("content_status", ["queued", "posted", "skipped"]);
