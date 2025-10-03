@@ -92,7 +92,11 @@ test('05 Discord channels listing (if guildId provided)', async ({ page }) => {
 });
 
 test('06 Owners mapping UI + API', async ({ page }) => {
-  await page.goto(`${APP}/app`, { waitUntil: 'networkidle' });
+  // Activate demo first (tests run in isolation, can't rely on test 02)
+  await page.goto(APP);
+  await page.waitForSelector('[data-testid="cta-try-demo"]', { timeout: 10000 });
+  await page.getByTestId('cta-try-demo').click();
+  await page.waitForURL(/\/(app|dashboard)/, { timeout: 10000 });
   
   // Wait for dashboard to load, then wait for owner mapping card
   await page.waitForSelector('[data-testid="dashboard-root"]', { timeout: 10000 });

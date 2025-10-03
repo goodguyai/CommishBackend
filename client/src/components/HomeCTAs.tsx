@@ -19,6 +19,11 @@ export function HomeCTAs() {
       });
       
       if (result.ok) {
+        // Store the demo league ID so Dashboard can use it
+        if (result.leagueId) {
+          localStorage.setItem('selectedLeagueId', result.leagueId);
+        }
+        
         toast.success('Demo activated! Redirecting to dashboard...');
         setTimeout(() => setLocation('/app'), 1000);
       }
