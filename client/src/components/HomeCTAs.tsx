@@ -38,23 +38,18 @@ export function HomeCTAs() {
   const handleBetaActivation = async () => {
     setIsActivatingBeta(true);
     try {
-      const result = await api<{ ok: boolean; next: string }>('/api/app/beta/activate', {
-        method: 'POST',
+      // Get Discord OAuth URL
+      const result = await api<{ url: string }>('/api/v2/discord/auth-url', {
+        method: 'GET',
       });
       
-      if (result.ok) {
-        toast.success('Beta activated! Redirecting to setup...');
-        setTimeout(() => setLocation(result.next || '/onboarding'), 1000);
+      if (result.url) {
+        // Redirect to Discord OAuth
+        window.location.href = result.url;
       }
     } catch (error) {
-      const err = error as Error;
-      if (err.message.includes('401')) {
-        toast.error('Authentication required for beta access');
-      } else {
-        toast.error('Failed to activate beta');
-      }
+      toast.error('Failed to start beta activation');
       console.error(error);
-    } finally {
       setIsActivatingBeta(false);
     }
   };
