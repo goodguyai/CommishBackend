@@ -130,6 +130,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   rivalriesService = new RivalriesService();
   contentService = new ContentService();
 
+  // Forward scheduler events to eventBus
+  scheduler.on("digest_due", (data) => eventBus.emit("digest_due", data));
+  scheduler.on("sync_due", (data) => eventBus.emit("sync_due", data));
+  scheduler.on("cleanup_due", (data) => eventBus.emit("cleanup_due", data));
+  scheduler.on("reminder_due", (data) => eventBus.emit("reminder_due", data));
+  scheduler.on("highlights_due", (data) => eventBus.emit("highlights_due", data));
+  scheduler.on("rivalry_due", (data) => eventBus.emit("rivalry_due", data));
+  scheduler.on("content_poster_due", () => eventBus.emit("content_poster_due"));
+
   // Setup event handlers
   eventBus.on("digest_due", async (data) => {
     try {
@@ -375,6 +384,125 @@ export async function registerRoutes(app: Express): Promise<Server> {
         type: "ERROR_OCCURRED",
         leagueId: data.leagueId,
         payload: { error: "reminder_send_failed", message: String(error) },
+      });
+    }
+  });
+
+  // Phase 3: Highlights + Digest enqueuing (Sunday 8 PM)
+  eventBus.on("highlights_due", async (data) => {
+    try {
+      console.log(`[Scheduler] Highlights due for league ${data.leagueId}`);
+      
+      const league = await storage.getLeague(data.leagueId);
+      if (!league || !league.channelId) {
+        console.warn(`Cannot process highlights: League ${data.leagueId} not found or has no channel`);
+        return;
+      }
+
+      const featureFlags = league.featureFlags as any;
+      
+      // Compute week highlights
+      if (featureFlags?.highlights) {
+        try {
+          await highlightsService.computeWeekHighlights({ leagueId: data.leagueId, week: data.week });
+          console.log(`[Scheduler] Computed highlights for league ${data.leagueId} week ${data.week}`);
+          
+          // Enqueue highlights content for later posting
+          const scheduledAt = new Date(Date.now() + 5 * 60 * 1000); // Post 5 minutes later
+          await contentService.enqueue({
+            leagueId: data.leagueId,
+            channelId: league.channelId,
+            scheduledAt,
+            template: 'highlight',
+            payload: { week: data.week },
+          });
+          console.log(`[Scheduler] Enqueued highlights content for league ${data.leagueId}`);
+        } catch (error) {
+          console.error(`[Scheduler] Failed to compute/enqueue highlights for league ${data.leagueId}:`, error);
+        }
+      }
+
+      // Enqueue digest content
+      if (featureFlags?.autoDigest !== false) {
+        try {
+          const scheduledAt = new Date(Date.now() + 10 * 60 * 1000); // Post 10 minutes later
+          await contentService.enqueue({
+            leagueId: data.leagueId,
+            channelId: league.channelId,
+            scheduledAt,
+            template: 'digest',
+            payload: { week: data.week },
+          });
+          console.log(`[Scheduler] Enqueued digest content for league ${data.leagueId}`);
+        } catch (error) {
+          console.error(`[Scheduler] Failed to enqueue digest for league ${data.leagueId}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error(`[Scheduler] Failed to process highlights_due for league ${data.leagueId}:`, error);
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        leagueId: data.leagueId,
+        payload: { error: "highlights_processing_failed", message: String(error) },
+      });
+    }
+  });
+
+  // Phase 3: Rivalry card enqueuing (Monday 9 AM)
+  eventBus.on("rivalry_due", async (data) => {
+    try {
+      console.log(`[Scheduler] Rivalry update due for league ${data.leagueId}`);
+      
+      const league = await storage.getLeague(data.leagueId);
+      if (!league || !league.channelId) {
+        console.warn(`Cannot process rivalry: League ${data.leagueId} not found or has no channel`);
+        return;
+      }
+
+      const featureFlags = league.featureFlags as any;
+      
+      if (featureFlags?.rivalries) {
+        try {
+          // Update rivalries for current week
+          await rivalriesService.updateHeadToHead({ leagueId: data.leagueId, week: data.week });
+          console.log(`[Scheduler] Updated rivalries for league ${data.leagueId} week ${data.week}`);
+          
+          // Enqueue rivalry card content for later posting
+          const scheduledAt = new Date(Date.now() + 5 * 60 * 1000); // Post 5 minutes later
+          await contentService.enqueue({
+            leagueId: data.leagueId,
+            channelId: league.channelId,
+            scheduledAt,
+            template: 'rivalry',
+            payload: { week: data.week },
+          });
+          console.log(`[Scheduler] Enqueued rivalry content for league ${data.leagueId}`);
+        } catch (error) {
+          console.error(`[Scheduler] Failed to update/enqueue rivalry for league ${data.leagueId}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error(`[Scheduler] Failed to process rivalry_due for league ${data.leagueId}:`, error);
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        leagueId: data.leagueId,
+        payload: { error: "rivalry_processing_failed", message: String(error) },
+      });
+    }
+  });
+
+  // Phase 3: Content queue poster (every 5 minutes)
+  eventBus.on("content_poster_due", async () => {
+    try {
+      console.log(`[Scheduler] Content poster running`);
+      const posted = await contentService.postQueued(new Date());
+      console.log(`[Scheduler] Posted ${posted} queued content items`);
+    } catch (error) {
+      console.error(`[Scheduler] Failed to post queued content:`, error);
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        leagueId: null,
+        payload: { error: "content_poster_failed", message: String(error) },
       });
     }
   });
@@ -1923,13 +2051,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Schedule jobs for this league
       if (league) {
+        const timezone = league.timezone || 'America/New_York';
+        
         scheduler.scheduleWeeklyDigest(
           leagueId, 
-          league.timezone || 'America/New_York',
+          timezone,
           (league as any).digestDay || 'Sunday',
           (league as any).digestTime || '09:00'
         );
         scheduler.scheduleSyncJob(leagueId);
+        
+        // Phase 3: Schedule highlights digest (Sunday 8 PM)
+        const getCurrentWeek = () => {
+          const now = new Date();
+          const start = new Date(now.getFullYear(), 8, 1); // Sept 1
+          const diff = now.getTime() - start.getTime();
+          const week = Math.floor(diff / (7 * 24 * 60 * 60 * 1000)) + 1;
+          return Math.max(1, Math.min(18, week));
+        };
+        
+        scheduler.scheduleHighlightsDigest(leagueId, timezone, getCurrentWeek);
+        scheduler.scheduleRivalryCard(leagueId, timezone, getCurrentWeek);
+        
+        console.log(`Scheduled Phase 3 jobs for league ${leagueId}`);
       }
 
       res.json({ id: leagueId, league });
@@ -3439,20 +3583,37 @@ async function handleConfigCommand(interaction: any, league: any, requestId: str
     // Update the league in storage
     await storage.updateLeague(league.id, updateData);
     
-    // Re-schedule digest if digest config changed
+    // Re-schedule digest and Phase 3 jobs if digest config or timezone changed
     if (subcommand === 'digest' || subcommand === 'timezone') {
-      // Unschedule existing digest job
+      // Unschedule existing jobs
       scheduler.unschedule(`digest_${league.id}`);
+      scheduler.unscheduleLeaguePhase3(league.id);
       
       // Re-schedule with updated settings
       const updatedLeague = await storage.getLeague(league.id);
       if (updatedLeague) {
+        const timezone = updatedLeague.timezone || 'America/New_York';
+        
         scheduler.scheduleWeeklyDigest(
           league.id,
-          updatedLeague.timezone || 'America/New_York',
+          timezone,
           updatedLeague.digestDay || 'Sunday',
           updatedLeague.digestTime || '09:00'
         );
+        
+        // Phase 3: Re-schedule highlights and rivalry jobs
+        const getCurrentWeek = () => {
+          const now = new Date();
+          const start = new Date(now.getFullYear(), 8, 1); // Sept 1
+          const diff = now.getTime() - start.getTime();
+          const week = Math.floor(diff / (7 * 24 * 60 * 60 * 1000)) + 1;
+          return Math.max(1, Math.min(18, week));
+        };
+        
+        scheduler.scheduleHighlightsDigest(league.id, timezone, getCurrentWeek);
+        scheduler.scheduleRivalryCard(league.id, timezone, getCurrentWeek);
+        
+        console.log(`Re-scheduled Phase 3 jobs for league ${league.id}`);
       }
     }
     

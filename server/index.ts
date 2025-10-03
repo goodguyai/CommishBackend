@@ -118,6 +118,9 @@ app.use((req, res, next) => {
 
   // Initialize global cleanup job for expired wizard sessions
   scheduler.scheduleGlobalCleanup();
+  
+  // Phase 3: Initialize global content poster (every 5 minutes)
+  scheduler.scheduleContentPoster();
 
   // Error handler middleware
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {

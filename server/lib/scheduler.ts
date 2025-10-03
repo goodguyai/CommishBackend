@@ -72,6 +72,11 @@ export class Scheduler extends EventEmitter {
   }
 
   scheduleGlobalCleanup() {
+    // Idempotent guard: stop existing task if already scheduled
+    if (this.tasks.has("global_cleanup")) {
+      this.unschedule("global_cleanup");
+    }
+
     // Run daily at 3 AM UTC to clean up expired wizard sessions
     const task = cron.createTask(
       "0 3 * * *",
@@ -153,6 +158,95 @@ export class Scheduler extends EventEmitter {
     Array.from(this.tasks.keys())
       .filter(key => key.startsWith(prefix))
       .forEach(key => this.unschedule(key));
+  }
+
+  // Phase 3: Schedule highlights + digest enqueuing (Sunday 8 PM, league timezone)
+  scheduleHighlightsDigest(
+    leagueId: string,
+    timezone: string = "America/New_York",
+    getCurrentWeek: () => number = () => 1
+  ) {
+    // Sunday at 8 PM in league timezone
+    const cronTime = "0 20 * * 0";
+
+    const task = cron.createTask(
+      cronTime,
+      () => {
+        const week = getCurrentWeek();
+        this.emit("highlights_due", { leagueId, week, timezone });
+      },
+      {
+        timezone,
+      }
+    );
+
+    this.tasks.set(`highlights_${leagueId}`, task);
+    task.start();
+    
+    console.log(`Scheduled highlights digest for league ${leagueId}: Sunday at 20:00 (${timezone})`);
+  }
+
+  // Phase 3: Schedule rivalry card enqueuing (Monday 9 AM, league timezone)
+  scheduleRivalryCard(
+    leagueId: string,
+    timezone: string = "America/New_York",
+    getCurrentWeek: () => number = () => 1
+  ) {
+    // Monday at 9 AM in league timezone
+    const cronTime = "0 9 * * 1";
+
+    const task = cron.createTask(
+      cronTime,
+      () => {
+        const week = getCurrentWeek();
+        this.emit("rivalry_due", { leagueId, week, timezone });
+      },
+      {
+        timezone,
+      }
+    );
+
+    this.tasks.set(`rivalry_${leagueId}`, task);
+    task.start();
+    
+    console.log(`Scheduled rivalry card for league ${leagueId}: Monday at 09:00 (${timezone})`);
+  }
+
+  // Phase 3: Schedule global content poster (every 5 minutes)
+  scheduleContentPoster() {
+    // Idempotent guard: stop existing task if already scheduled
+    if (this.tasks.has("content_poster")) {
+      this.unschedule("content_poster");
+    }
+
+    // Every 5 minutes
+    const cronTime = "*/5 * * * *";
+
+    const task = cron.createTask(
+      cronTime,
+      () => {
+        this.emit("content_poster_due");
+      },
+      {
+        timezone: "UTC"
+      }
+    );
+
+    this.tasks.set("content_poster", task);
+    task.start();
+    
+    console.log("Scheduled content poster: every 5 minutes (UTC)");
+  }
+
+  unscheduleLeaguePhase3(leagueId: string) {
+    this.unschedule(`highlights_${leagueId}`);
+    this.unschedule(`rivalry_${leagueId}`);
+  }
+
+  unscheduleAllLeagueJobs(leagueId: string) {
+    this.unscheduleLeague(leagueId);
+    this.unscheduleReminders(leagueId);
+    this.unscheduleLeaguePhase3(leagueId);
   }
 }
 
