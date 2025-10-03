@@ -12,11 +12,67 @@ import { RAGService } from "./services/rag";
 import { generateDigestContent } from "./services/digest";
 import { EventBus } from "./services/events";
 import { scheduler } from "./lib/scheduler";
+import { VibesService } from "./services/vibes";
+import { ModerationService } from "./services/moderation";
+import { TradeFairnessService } from "./services/tradeFairness";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema } from "@shared/schema";
+
+// Zod schemas for Phase 2 API request validation
+const vibesScoreSchema = z.object({
+  leagueId: z.string().uuid(),
+  channelId: z.string(),
+  messageId: z.string(),
+  authorId: z.string(),
+  text: z.string().min(1),
+});
+
+const modFreezeSchema = z.object({
+  leagueId: z.string().uuid(),
+  channelId: z.string(),
+  minutes: z.number().min(1).max(1440),
+  reason: z.string().optional(),
+});
+
+const modClarifyRuleSchema = z.object({
+  leagueId: z.string().uuid(),
+  channelId: z.string(),
+  question: z.string().min(1),
+});
+
+const createDisputeSchema = z.object({
+  leagueId: z.string().uuid(),
+  kind: z.enum(["trade", "rule", "behavior"]),
+  subjectId: z.string().optional(),
+  openedBy: z.string(),
+  details: z.record(z.any()).optional(),
+});
+
+const updateDisputeSchema = z.object({
+  status: z.enum(["open", "under_review", "resolved", "dismissed"]),
+  resolution: z.record(z.any()).optional(),
+});
+
+const evaluateTradeSchema = z.object({
+  leagueId: z.string().uuid(),
+  tradeId: z.string(),
+  proposal: z.object({
+    team1: z.object({
+      gives: z.array(z.string()),
+      receives: z.array(z.string()),
+    }),
+    team2: z.object({
+      gives: z.array(z.string()),
+      receives: z.array(z.string()),
+    }),
+  }),
+});
 
 // Module-level variables that will be initialized after env validation
 let ragService: RAGService;
 let eventBus: EventBus;
+let vibesService: VibesService;
+let moderationService: ModerationService;
+let tradeFairnessService: TradeFairnessService;
 
 // Session store for OAuth tokens (simple in-memory store for demo)
 const oAuthSessions = new Map<string, {
@@ -37,6 +93,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize services after environment validation
   ragService = new RAGService(storage);
   eventBus = new EventBus(storage);
+  vibesService = new VibesService(storage);
+  moderationService = new ModerationService(storage);
+  tradeFairnessService = new TradeFairnessService(storage);
 
   // Setup event handlers
   eventBus.on("digest_due", async (data) => {
@@ -866,6 +925,283 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error getting setup status:", error);
       res.status(500).json({ error: "Failed to get setup status" });
+    }
+  });
+
+  // === PHASE 2 API ENDPOINTS (v2) ===
+
+  // Helper for auth check (admin key OR commissioner role)
+  async function checkAuthV2(req: any, leagueId: string, requireCommissioner: boolean = true): Promise<{ authorized: boolean; userId?: string; error?: string }> {
+    // Check admin key first
+    const adminKey = req.headers["x-admin-key"];
+    if (env.app.adminKey && adminKey === env.app.adminKey) {
+      return { authorized: true };
+    }
+
+    // If commissioner role required, check userId
+    if (requireCommissioner) {
+      const userId = req.body.userId || req.headers["x-user-id"];
+      if (!userId) {
+        return { authorized: false, error: "userId required in body or X-User-Id header" };
+      }
+
+      const isCommish = await isUserCommish(leagueId, userId);
+      if (!isCommish) {
+        return { authorized: false, error: "Commissioner role required" };
+      }
+
+      return { authorized: true, userId };
+    }
+
+    return { authorized: false, error: "Unauthorized" };
+  }
+
+  // 1. POST /api/v2/vibes/score - Score message sentiment/toxicity
+  app.post("/api/v2/vibes/score", async (req, res) => {
+    try {
+      // Validate request body
+      const validation = vibesScoreSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      }
+
+      const { leagueId, channelId, messageId, authorId, text } = validation.data;
+
+      // Auth check (admin key OR commissioner)
+      const auth = await checkAuthV2(req, leagueId, true);
+      if (!auth.authorized) {
+        return res.status(401).json({ error: auth.error || "Unauthorized" });
+      }
+
+      // Score message
+      const result = await vibesService.scoreMessage({
+        leagueId,
+        channelId,
+        messageId,
+        authorId,
+        text,
+      });
+
+      // Emit event
+      eventBus.emit("vibes_scored", {
+        leagueId,
+        channelId,
+        messageId,
+        authorId,
+        toxicity: result.toxicity,
+        sentiment: result.sentiment,
+      });
+
+      res.json({
+        toxicity: result.toxicity,
+        sentiment: result.sentiment,
+      });
+    } catch (error) {
+      console.error("Vibes score error:", error);
+      res.status(500).json({ error: "Failed to score message", code: "VIBES_SCORE_FAILED" });
+    }
+  });
+
+  // 2. POST /api/v2/mod/freeze - Freeze thread
+  app.post("/api/v2/mod/freeze", async (req, res) => {
+    try {
+      // Validate request body
+      const validation = modFreezeSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      }
+
+      const { leagueId, channelId, minutes, reason } = validation.data;
+
+      // Auth check (commissioner required)
+      const auth = await checkAuthV2(req, leagueId, true);
+      if (!auth.authorized) {
+        return res.status(401).json({ error: auth.error || "Unauthorized" });
+      }
+
+      // Freeze thread
+      const actionId = await moderationService.freezeThread({
+        leagueId,
+        channelId,
+        minutes,
+        reason,
+      });
+
+      // Emit event
+      eventBus.emit("thread_frozen", {
+        leagueId,
+        channelId,
+        minutes,
+        reason,
+        actionId,
+      });
+
+      res.json({
+        ok: true,
+        actionId,
+      });
+    } catch (error) {
+      console.error("Mod freeze error:", error);
+      res.status(500).json({ error: "Failed to freeze thread", code: "MOD_FREEZE_FAILED" });
+    }
+  });
+
+  // 3. POST /api/v2/mod/clarify-rule - Clarify rule via RAG
+  app.post("/api/v2/mod/clarify-rule", async (req, res) => {
+    try {
+      // Validate request body
+      const validation = modClarifyRuleSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      }
+
+      const { leagueId, channelId, question } = validation.data;
+
+      // Auth check (commissioner required)
+      const auth = await checkAuthV2(req, leagueId, true);
+      if (!auth.authorized) {
+        return res.status(401).json({ error: auth.error || "Unauthorized" });
+      }
+
+      // Clarify rule
+      const messageId = await moderationService.clarifyRule({
+        leagueId,
+        channelId,
+        ruleQuery: question,
+      });
+
+      // Emit event
+      eventBus.emit("rule_clarified", {
+        leagueId,
+        channelId,
+        question,
+        messageId,
+      });
+
+      res.json({
+        ok: true,
+        messageId,
+      });
+    } catch (error) {
+      console.error("Mod clarify rule error:", error);
+      res.status(500).json({ error: "Failed to clarify rule", code: "MOD_CLARIFY_FAILED" });
+    }
+  });
+
+  // 4. POST /api/v2/disputes - Open dispute
+  app.post("/api/v2/disputes", async (req, res) => {
+    try {
+      // Validate request body
+      const validation = createDisputeSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      }
+
+      const { leagueId, kind, subjectId, openedBy, details } = validation.data;
+
+      // Create dispute
+      const disputeId = await storage.createDispute({
+        leagueId,
+        kind,
+        subjectId,
+        openedBy,
+        details,
+      });
+
+      const dispute = await storage.getDispute(disputeId);
+
+      // Emit event
+      eventBus.emit("dispute_opened", {
+        leagueId,
+        disputeId,
+        kind,
+        openedBy,
+      });
+
+      res.json(dispute);
+    } catch (error) {
+      console.error("Create dispute error:", error);
+      res.status(500).json({ error: "Failed to create dispute", code: "DISPUTE_CREATE_FAILED" });
+    }
+  });
+
+  // 5. PATCH /api/v2/disputes/:id - Update dispute
+  app.patch("/api/v2/disputes/:id", async (req, res) => {
+    try {
+      const disputeId = req.params.id;
+
+      // Validate request body
+      const validation = updateDisputeSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      }
+
+      const { status, resolution } = validation.data;
+
+      // Get existing dispute
+      const existingDispute = await storage.getDispute(disputeId);
+      if (!existingDispute) {
+        return res.status(404).json({ error: "Dispute not found" });
+      }
+
+      // Update dispute
+      await storage.updateDispute(disputeId, {
+        status,
+        resolution,
+      });
+
+      const updatedDispute = await storage.getDispute(disputeId);
+
+      // Emit event if resolved or dismissed
+      if (status === "resolved" || status === "dismissed") {
+        eventBus.emit("dispute_resolved", {
+          leagueId: existingDispute.leagueId,
+          disputeId,
+          status,
+          resolution,
+        });
+      }
+
+      res.json(updatedDispute);
+    } catch (error) {
+      console.error("Update dispute error:", error);
+      res.status(500).json({ error: "Failed to update dispute", code: "DISPUTE_UPDATE_FAILED" });
+    }
+  });
+
+  // 6. POST /api/v2/trades/evaluate - Evaluate trade fairness
+  app.post("/api/v2/trades/evaluate", async (req, res) => {
+    try {
+      // Validate request body
+      const validation = evaluateTradeSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+      }
+
+      const { leagueId, tradeId, proposal } = validation.data;
+
+      // Evaluate trade
+      const result = await tradeFairnessService.evaluateTrade({
+        leagueId,
+        tradeId,
+        proposal,
+      });
+
+      // Emit event
+      eventBus.emit("trade_evaluated", {
+        leagueId,
+        tradeId,
+        score: result.score,
+        rationale: result.rationale,
+      });
+
+      res.json({
+        fairness: result.score,
+        rationale: result.rationale,
+      });
+    } catch (error) {
+      console.error("Trade evaluate error:", error);
+      res.status(500).json({ error: "Failed to evaluate trade", code: "TRADE_EVALUATE_FAILED" });
     }
   });
 
@@ -2376,23 +2712,17 @@ async function handleRulesCommand(interaction: any, league: any, requestId: stri
           return `${index + 1}. **${citation.ruleKey}**${section}\n   "${excerpt}${citation.text?.length > 150 ? '...' : ''}"`;
         });
 
-      // Check confidence level
-      const confidence = response.confidence || 1.0;
-      const confidenceWarning = confidence < 0.7 
-        ? '\n\n⚠️ *Low confidence - please verify with your commissioner*' 
-        : '';
-
       const embed = {
         title: "📋 Rules Query Result",
-        description: response.answer + confidenceWarning,
-        color: confidence < 0.7 ? 0xFBBF24 : 0x5865F2, // Yellow for low confidence
+        description: response.answer,
+        color: 0x5865F2,
         fields: normalizedCitations.length > 0 ? [{
           name: "📚 Citations",
           value: normalizedCitations.join('\n\n'),
           inline: false,
         }] : [],
         footer: {
-          text: `Confidence: ${(confidence * 100).toFixed(0)}% • Tokens: ${response.tokensUsed} • ${requestId}`,
+          text: `Tokens: ${response.tokensUsed} • ${requestId}`,
         },
       };
 
@@ -2542,22 +2872,17 @@ async function handleScoringCommand(interaction: any, league: any, requestId: st
             return `${index + 1}. **${citation.ruleKey}**${section}\n   "${excerpt}${citation.text?.length > 150 ? '...' : ''}"`;
           });
 
-        const confidence = response.confidence || 1.0;
-        const confidenceWarning = confidence < 0.7 
-          ? '\n\n⚠️ *Low confidence - please verify with your commissioner*' 
-          : '';
-
         const embed = {
           title: "🏈 Scoring Query Result",
-          description: response.answer + confidenceWarning,
-          color: confidence < 0.7 ? 0xFBBF24 : 0x10B981,
+          description: response.answer,
+          color: 0x10B981,
           fields: normalizedCitations.length > 0 ? [{
             name: "📚 Citations",
             value: normalizedCitations.join('\n\n'),
             inline: false,
           }] : [],
           footer: {
-            text: `Confidence: ${(confidence * 100).toFixed(0)}% • Tokens: ${response.tokensUsed} • ${requestId}`,
+            text: `Tokens: ${response.tokensUsed} • ${requestId}`,
           },
         };
 

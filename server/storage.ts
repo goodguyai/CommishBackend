@@ -144,6 +144,8 @@ export interface IStorage {
   // Phase 2 methods
   createModAction(data: InsertModAction): Promise<string>;
   createDispute(data: InsertDispute): Promise<string>;
+  getDispute(id: string): Promise<Dispute | undefined>;
+  updateDispute(id: string, updates: Partial<Dispute>): Promise<void>;
   createTradeEvaluation(data: InsertTradeEvaluation): Promise<string>;
 
   // Migration methods
@@ -818,6 +820,19 @@ export class DatabaseStorage implements IStorage {
     return result[0].id;
   }
 
+  async getDispute(id: string): Promise<Dispute | undefined> {
+    const results = await this.db.select()
+      .from(schema.disputes)
+      .where(eq(schema.disputes.id, id));
+    return results[0];
+  }
+
+  async updateDispute(id: string, updates: Partial<Dispute>): Promise<void> {
+    await this.db.update(schema.disputes)
+      .set(updates)
+      .where(eq(schema.disputes.id, id));
+  }
+
   async createTradeEvaluation(data: InsertTradeEvaluation): Promise<string> {
     const result = await this.db.insert(schema.tradeEvaluations)
       .values(data)
@@ -1456,6 +1471,17 @@ export class MemStorage implements IStorage {
     };
     this.disputes.set(id, newDispute);
     return id;
+  }
+
+  async getDispute(id: string): Promise<Dispute | undefined> {
+    return this.disputes.get(id);
+  }
+
+  async updateDispute(id: string, updates: Partial<Dispute>): Promise<void> {
+    const existing = this.disputes.get(id);
+    if (existing) {
+      this.disputes.set(id, { ...existing, ...updates });
+    }
   }
 
   async createTradeEvaluation(data: InsertTradeEvaluation): Promise<string> {
