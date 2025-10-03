@@ -11,7 +11,9 @@ import type {
   Vote, InsertVote, Reminder, InsertReminder,
   SentimentLog, InsertSentimentLog, TradeInsight, InsertTradeInsight,
   ModAction, InsertModAction, Dispute, InsertDispute,
-  TradeEvaluation, InsertTradeEvaluation
+  TradeEvaluation, InsertTradeEvaluation,
+  Highlight, InsertHighlight, Rivalry, InsertRivalry,
+  ContentQueue, InsertContentQueue
 } from "@shared/schema";
 import { EmbeddingResult } from "./services/rag";
 import { env } from "./services/env";
@@ -148,6 +150,16 @@ export interface IStorage {
   getDisputesByLeague(leagueId: string): Promise<Dispute[]>;
   updateDispute(id: string, updates: Partial<Dispute>): Promise<void>;
   createTradeEvaluation(data: InsertTradeEvaluation): Promise<string>;
+
+  // Phase 3 methods
+  createHighlight(highlight: InsertHighlight): Promise<string>;
+  getHighlightsByLeagueWeek(leagueId: string, week: number): Promise<Highlight[]>;
+  deleteHighlightsByLeagueWeek(leagueId: string, week: number): Promise<void>;
+  createOrUpdateRivalry(rivalry: InsertRivalry): Promise<string>;
+  getRivalry(leagueId: string, teamA: string, teamB: string): Promise<Rivalry | undefined>;
+  createContentQueueItem(item: InsertContentQueue): Promise<string>;
+  getQueuedContent(now: Date): Promise<ContentQueue[]>;
+  updateContentQueueStatus(id: string, status: string, postedMessageId?: string): Promise<void>;
 
   // Migration methods
   runRawSQL(query: string): Promise<any>;
@@ -848,6 +860,82 @@ export class DatabaseStorage implements IStorage {
     return result[0].id;
   }
 
+  // Phase 3 methods implementation
+  async createHighlight(highlight: InsertHighlight): Promise<string> {
+    const result = await this.db.insert(schema.highlights)
+      .values(highlight)
+      .returning({ id: schema.highlights.id });
+    return result[0].id;
+  }
+
+  async getHighlightsByLeagueWeek(leagueId: string, week: number): Promise<Highlight[]> {
+    return this.db.select().from(schema.highlights)
+      .where(and(
+        eq(schema.highlights.leagueId, leagueId),
+        eq(schema.highlights.week, week)
+      ))
+      .orderBy(desc(schema.highlights.createdAt));
+  }
+
+  async deleteHighlightsByLeagueWeek(leagueId: string, week: number): Promise<void> {
+    await this.db.delete(schema.highlights)
+      .where(and(
+        eq(schema.highlights.leagueId, leagueId),
+        eq(schema.highlights.week, week)
+      ));
+  }
+
+  async createOrUpdateRivalry(rivalry: InsertRivalry): Promise<string> {
+    const existing = await this.getRivalry(rivalry.leagueId, rivalry.teamA, rivalry.teamB);
+    
+    if (existing) {
+      await this.db.update(schema.rivalries)
+        .set(rivalry)
+        .where(eq(schema.rivalries.id, existing.id));
+      return existing.id;
+    } else {
+      const result = await this.db.insert(schema.rivalries)
+        .values(rivalry)
+        .returning({ id: schema.rivalries.id });
+      return result[0].id;
+    }
+  }
+
+  async getRivalry(leagueId: string, teamA: string, teamB: string): Promise<Rivalry | undefined> {
+    const rivalries = await this.db.select().from(schema.rivalries)
+      .where(and(
+        eq(schema.rivalries.leagueId, leagueId),
+        eq(schema.rivalries.teamA, teamA),
+        eq(schema.rivalries.teamB, teamB)
+      ));
+    return rivalries[0];
+  }
+
+  async createContentQueueItem(item: InsertContentQueue): Promise<string> {
+    const result = await this.db.insert(schema.contentQueue)
+      .values(item)
+      .returning({ id: schema.contentQueue.id });
+    return result[0].id;
+  }
+
+  async getQueuedContent(now: Date): Promise<ContentQueue[]> {
+    return this.db.select().from(schema.contentQueue)
+      .where(and(
+        eq(schema.contentQueue.status, "queued"),
+        sql`${schema.contentQueue.scheduledAt} <= ${now}`
+      ))
+      .orderBy(schema.contentQueue.scheduledAt);
+  }
+
+  async updateContentQueueStatus(id: string, status: string, postedMessageId?: string): Promise<void> {
+    await this.db.update(schema.contentQueue)
+      .set({ 
+        status: status as "queued" | "posted" | "skipped",
+        postedMessageId: postedMessageId || null
+      })
+      .where(eq(schema.contentQueue.id, id));
+  }
+
   // Migration methods implementation
   async runRawSQL(query: string): Promise<any> {
     return this.db.execute(sql.raw(query));
@@ -877,6 +965,9 @@ export class MemStorage implements IStorage {
   private modActions: Map<string, ModAction> = new Map();
   private disputes: Map<string, Dispute> = new Map();
   private tradeEvaluations: Map<string, TradeEvaluation> = new Map();
+  private highlights: Map<string, Highlight> = new Map();
+  private rivalries: Map<string, Rivalry> = new Map();
+  private contentQueueItems: Map<string, ContentQueue> = new Map();
 
   // Helper to generate IDs
   private generateId(): string {
@@ -1508,6 +1599,85 @@ export class MemStorage implements IStorage {
     };
     this.tradeEvaluations.set(id, newEvaluation);
     return id;
+  }
+
+  // Phase 3 methods implementation
+  async createHighlight(highlight: InsertHighlight): Promise<string> {
+    const id = this.generateId();
+    const newHighlight: Highlight = {
+      id,
+      ...highlight,
+      createdAt: new Date()
+    };
+    this.highlights.set(id, newHighlight);
+    return id;
+  }
+
+  async getHighlightsByLeagueWeek(leagueId: string, week: number): Promise<Highlight[]> {
+    return Array.from(this.highlights.values())
+      .filter(h => h.leagueId === leagueId && h.week === week)
+      .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
+  }
+
+  async deleteHighlightsByLeagueWeek(leagueId: string, week: number): Promise<void> {
+    this.highlights.forEach((highlight, id) => {
+      if (highlight.leagueId === leagueId && highlight.week === week) {
+        this.highlights.delete(id);
+      }
+    });
+  }
+
+  async createOrUpdateRivalry(rivalry: InsertRivalry): Promise<string> {
+    const existing = await this.getRivalry(rivalry.leagueId, rivalry.teamA, rivalry.teamB);
+    
+    if (existing) {
+      Object.assign(existing, rivalry);
+      return existing.id;
+    } else {
+      const id = this.generateId();
+      const newRivalry: Rivalry = {
+        id,
+        ...rivalry,
+        lastMeetingWeek: rivalry.lastMeetingWeek ?? null,
+        meta: rivalry.meta ?? null
+      };
+      this.rivalries.set(id, newRivalry);
+      return id;
+    }
+  }
+
+  async getRivalry(leagueId: string, teamA: string, teamB: string): Promise<Rivalry | undefined> {
+    return Array.from(this.rivalries.values())
+      .find(r => r.leagueId === leagueId && r.teamA === teamA && r.teamB === teamB);
+  }
+
+  async createContentQueueItem(item: InsertContentQueue): Promise<string> {
+    const id = this.generateId();
+    const newItem: ContentQueue = {
+      id,
+      ...item,
+      status: item.status ?? "queued",
+      postedMessageId: item.postedMessageId ?? null,
+      createdAt: new Date()
+    };
+    this.contentQueueItems.set(id, newItem);
+    return id;
+  }
+
+  async getQueuedContent(now: Date): Promise<ContentQueue[]> {
+    return Array.from(this.contentQueueItems.values())
+      .filter(item => item.status === "queued" && item.scheduledAt <= now)
+      .sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime());
+  }
+
+  async updateContentQueueStatus(id: string, status: string, postedMessageId?: string): Promise<void> {
+    const item = this.contentQueueItems.get(id);
+    if (item) {
+      item.status = status as "queued" | "posted" | "skipped";
+      if (postedMessageId) {
+        item.postedMessageId = postedMessageId;
+      }
+    }
   }
 
   // Migration methods implementation (no-op for in-memory storage)

@@ -35,6 +35,7 @@ export const eventTypeEnum = pgEnum("event_type", [
   "ERROR_OCCURRED"
 ]);
 export const disputeStatusEnum = pgEnum("dispute_status", ["open", "under_review", "resolved", "dismissed"]);
+export const contentStatusEnum = pgEnum("content_status", ["queued", "posted", "skipped"]);
 
 // Core tables
 export const accounts = pgTable("accounts", {
@@ -288,6 +289,40 @@ export const tradeInsights = pgTable("trade_insights", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const highlights = pgTable("highlights", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  week: integer("week").notNull(),
+  kind: text("kind").notNull(),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const rivalries = pgTable("rivalries", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  teamA: text("team_a").notNull(),
+  teamB: text("team_b").notNull(),
+  aWins: integer("a_wins").notNull().default(0),
+  bWins: integer("b_wins").notNull().default(0),
+  lastMeetingWeek: integer("last_meeting_week"),
+  meta: jsonb("meta"),
+}, (table) => ({
+  uniqRivalry: unique("uniq_rivalry").on(table.leagueId, table.teamA, table.teamB),
+}));
+
+export const contentQueue = pgTable("content_queue", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  channelId: text("channel_id").notNull(),
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+  template: text("template").notNull(),
+  payload: jsonb("payload").notNull(),
+  status: contentStatusEnum("status").notNull().default("queued"),
+  postedMessageId: text("posted_message_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Insert schemas
 export const insertAccountSchema = createInsertSchema(accounts).pick({
   email: true,
@@ -458,6 +493,33 @@ export const insertTradeInsightSchema = createInsertSchema(tradeInsights).pick({
   recommendation: true,
 });
 
+export const insertHighlightSchema = createInsertSchema(highlights).pick({
+  leagueId: true,
+  week: true,
+  kind: true,
+  payload: true,
+});
+
+export const insertRivalrySchema = createInsertSchema(rivalries).pick({
+  leagueId: true,
+  teamA: true,
+  teamB: true,
+  aWins: true,
+  bWins: true,
+  lastMeetingWeek: true,
+  meta: true,
+});
+
+export const insertContentQueueSchema = createInsertSchema(contentQueue).pick({
+  leagueId: true,
+  channelId: true,
+  scheduledAt: true,
+  template: true,
+  payload: true,
+  status: true,
+  postedMessageId: true,
+});
+
 // Types
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
@@ -498,6 +560,12 @@ export type TradeEvaluation = typeof tradeEvaluations.$inferSelect;
 export type InsertTradeEvaluation = z.infer<typeof insertTradeEvaluationSchema>;
 export type TradeInsight = typeof tradeInsights.$inferSelect;
 export type InsertTradeInsight = z.infer<typeof insertTradeInsightSchema>;
+export type Highlight = typeof highlights.$inferSelect;
+export type InsertHighlight = z.infer<typeof insertHighlightSchema>;
+export type Rivalry = typeof rivalries.$inferSelect;
+export type InsertRivalry = z.infer<typeof insertRivalrySchema>;
+export type ContentQueue = typeof contentQueue.$inferSelect;
+export type InsertContentQueue = z.infer<typeof insertContentQueueSchema>;
 
 // Keep legacy user schema for compatibility
 export const users = pgTable("users", {
