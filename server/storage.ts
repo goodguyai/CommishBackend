@@ -44,6 +44,7 @@ export interface IStorage {
   // Member methods
   getMember(leagueId: string, discordUserId: string): Promise<Member | undefined>;
   getLeagueMembers(leagueId: string): Promise<Member[]>;
+  getMembersByLeague(leagueId: string): Promise<Member[]>;
   createMember(member: InsertMember): Promise<string>;
   updateMemberRole(leagueId: string, discordUserId: string, role: "COMMISH" | "MANAGER"): Promise<void>;
   deleteMember(leagueId: string, discordUserId: string): Promise<void>;
@@ -150,6 +151,7 @@ export interface IStorage {
   getDisputesByLeague(leagueId: string): Promise<Dispute[]>;
   updateDispute(id: string, updates: Partial<Dispute>): Promise<void>;
   createTradeEvaluation(data: InsertTradeEvaluation): Promise<string>;
+  getTradeEvaluation(leagueId: string, tradeId: string): Promise<TradeEvaluation | undefined>;
 
   // Phase 3 methods
   createHighlight(highlight: InsertHighlight): Promise<string>;
@@ -283,6 +285,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getLeagueMembers(leagueId: string): Promise<Member[]> {
+    return this.db.select().from(schema.members).where(eq(schema.members.leagueId, leagueId));
+  }
+
+  async getMembersByLeague(leagueId: string): Promise<Member[]> {
     return this.db.select().from(schema.members).where(eq(schema.members.leagueId, leagueId));
   }
 
@@ -862,6 +868,18 @@ export class DatabaseStorage implements IStorage {
     return result[0].id;
   }
 
+  async getTradeEvaluation(leagueId: string, tradeId: string): Promise<TradeEvaluation | undefined> {
+    const results = await this.db.select()
+      .from(schema.tradeEvaluations)
+      .where(and(
+        eq(schema.tradeEvaluations.leagueId, leagueId),
+        eq(schema.tradeEvaluations.tradeId, tradeId)
+      ))
+      .orderBy(desc(schema.tradeEvaluations.createdAt))
+      .limit(1);
+    return results[0];
+  }
+
   // Phase 3 methods implementation
   async createHighlight(highlight: InsertHighlight): Promise<string> {
     const result = await this.db.insert(schema.highlights)
@@ -1084,6 +1102,9 @@ export class MemStorage implements IStorage {
     return Array.from(this.members.values()).find(m => m.leagueId === leagueId && m.discordUserId === discordUserId);
   }
   async getLeagueMembers(leagueId: string): Promise<Member[]> {
+    return Array.from(this.members.values()).filter(m => m.leagueId === leagueId);
+  }
+  async getMembersByLeague(leagueId: string): Promise<Member[]> {
     return Array.from(this.members.values()).filter(m => m.leagueId === leagueId);
   }
   async createMember(member: InsertMember): Promise<string> {
@@ -1624,6 +1645,13 @@ export class MemStorage implements IStorage {
     return id;
   }
 
+  async getTradeEvaluation(leagueId: string, tradeId: string): Promise<TradeEvaluation | undefined> {
+    const evaluations = Array.from(this.tradeEvaluations.values())
+      .filter(e => e.leagueId === leagueId && e.tradeId === tradeId)
+      .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
+    return evaluations[0];
+  }
+
   // Phase 3 methods implementation
   async createHighlight(highlight: InsertHighlight): Promise<string> {
     const id = this.generateId();
@@ -1661,6 +1689,8 @@ export class MemStorage implements IStorage {
       const newRivalry: Rivalry = {
         id,
         ...rivalry,
+        aWins: rivalry.aWins ?? 0,
+        bWins: rivalry.bWins ?? 0,
         lastMeetingWeek: rivalry.lastMeetingWeek ?? null,
         meta: rivalry.meta ?? null
       };

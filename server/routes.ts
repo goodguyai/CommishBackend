@@ -18,7 +18,7 @@ import { TradeFairnessService } from "./services/tradeFairness";
 import { HighlightsService } from "./services/highlights";
 import { RivalriesService } from "./services/rivalries";
 import { ContentService } from "./services/content";
-import { insertMemberSchema, insertReminderSchema, insertVoteSchema } from "@shared/schema";
+import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member } from "@shared/schema";
 
 // Zod schemas for Phase 2 API request validation
 const vibesScoreSchema = z.object({
@@ -1171,7 +1171,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         if (vibesMonitorEnabled && result.toxicity >= threshold) {
           const members = await storage.getMembersByLeague(leagueId);
-          const commissioner = members.find(m => m.role === "COMMISH");
+          const commissioner = members.find((m: Member) => m.role === "COMMISH");
           
           if (commissioner?.discordUserId) {
             try {
@@ -1805,8 +1805,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!env.discord.botToken || !env.discord.clientId) {
         discordStatus = "not_configured";
         issues.push({ service: "discord", reason: "Bot credentials not configured" });
-      } else if (discordService.client?.user) {
-        discordStatus = "connected";
       } else {
         discordStatus = "disconnected";
         issues.push({ service: "discord", reason: "Bot not connected to gateway" });
@@ -3660,8 +3658,8 @@ async function handleConfigCommand(interaction: any, league: any, requestId: str
         scheduler.scheduleWeeklyDigest(
           league.id,
           timezone,
-          updatedLeague.digestDay || 'Sunday',
-          updatedLeague.digestTime || '09:00'
+          'Sunday',
+          '09:00'
         );
         
         // Phase 3: Re-schedule highlights and rivalry jobs
@@ -4198,7 +4196,7 @@ async function handleToxicityClarifyButton(req: any, res: any, interaction: any)
         question,
         relevantRules.map(r => r.rule),
         { leagueName: league.name },
-        league.tone
+        league.tone ?? undefined
       );
 
       const seenCitations = new Set<string>();
