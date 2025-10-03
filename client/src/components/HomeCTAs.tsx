@@ -79,7 +79,7 @@ export function HomeCTAs() {
             onClick={handleDemoActivation}
             disabled={isActivatingDemo}
             className="w-full bg-yellow-600 hover:bg-yellow-700 text-white"
-            data-testid="button-demo-activate"
+            data-testid="cta-try-demo"
           >
             {isActivatingDemo ? 'Activating...' : 'Try Demo Now'}
           </Button>
@@ -109,7 +109,7 @@ export function HomeCTAs() {
             onClick={handleBetaActivation}
             disabled={isActivatingBeta}
             className="w-full bg-green-600 hover:bg-green-700 text-white"
-            data-testid="button-beta-activate"
+            data-testid="cta-activate-beta"
           >
             {isActivatingBeta ? 'Activating...' : 'Activate Beta'}
           </Button>

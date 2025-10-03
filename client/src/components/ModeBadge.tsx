@@ -10,7 +10,7 @@ export function ModeBadge({ mode }: ModeBadgeProps) {
     return (
       <Badge 
         className="bg-yellow-500/10 text-yellow-500 border border-yellow-500/20 gap-1"
-        data-testid="badge-demo"
+        data-testid="badge-mode-demo"
       >
         <Zap className="w-3 h-3" />
         DEMO

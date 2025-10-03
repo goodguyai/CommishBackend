@@ -395,7 +395,7 @@ export function OnboardingPage() {
           </CardHeader>
           <CardContent>
             {currentStep === 'discord' && (
-              <div className="space-y-4">
+              <div className="space-y-4" data-testid="setup-step-discord">
                 <p className="text-[#9CA3AF] text-sm">
                   Connect your Discord server to enable slash commands and automated features.
                 </p>
@@ -489,7 +489,7 @@ export function OnboardingPage() {
             )}
 
             {currentStep === 'sleeper' && (
-              <div className="space-y-4">
+              <div className="space-y-4" data-testid="setup-step-sleeper">
                 <p className="text-[#9CA3AF] text-sm">
                   Connect your Sleeper league to sync rosters, matchups, and standings.
                 </p>
@@ -581,7 +581,7 @@ export function OnboardingPage() {
             )}
 
             {currentStep === 'rules' && (
-              <div className="space-y-4">
+              <div className="space-y-4" data-testid="setup-step-rules">
                 <p className="text-[#9CA3AF] text-sm">
                   Paste your league constitution so THE COMMISH can answer rules questions.
                 </p>

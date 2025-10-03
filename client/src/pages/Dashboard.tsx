@@ -945,7 +945,7 @@ export function DashboardPage() {
   const isDemoMode = leagueData?.league?.featureFlags && (leagueData.league.featureFlags as any)?.demo === true;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="dashboard-root">
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-3">

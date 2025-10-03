@@ -1,0 +1,273 @@
+Heck yeah — we can have the agent “click around,” capture what breaks, and then fix it. Here’s a single copy-paste work order that (a) keeps all your guardrails, (b) drives an automated end-to-end UX crawl with Playwright, (c) logs/records every error, and (d) fixes issues in a sane order.
+
+⸻
+
+🚦 Paste this to Replit Agent
+
+GUARDRAILS (do not change)
+	•	APP_BASE_URL=https://thecommish.replit.app (no trailing slash).
+	•	Supabase only for DB. Any schema edits must be new idempotent migrations; do not mutate tables in place.
+	•	Read env via the centralized env service only (no new process.env in routes).
+	•	Keep /api/discord/interactions on express.raw + Ed25519 verification.
+	•	Keep Vite /api guards intact; no catch-all that swallows APIs.
+	•	Prefer /api/v2/* for new endpoints.
+	•	Don’t remove the Discord reliability wrapper (idempotency + 429 backoff).
+
+Goal: Run an automated UX walk of the app (Setup wizard → Dashboard → Owners → Reminders → RAG → Engagement), capture every console/network/API error with screenshots/HAR/Request-IDs, then fix issues and re-run until green.
+
+⸻
+
+0) Preflight (quick)
+	1.	Confirm health & request-ID timing logs are live:
+
+curl -s "$APP_BASE_URL/api/health" | jq
+
+	2.	Confirm you can read one league (pick any existing leagueId you see in logs or setup status):
+
+curl -s "$APP_BASE_URL/api/v2/leagues/<LEAGUE_ID>" | jq
+
+
+⸻
+
+1) Add a tiny “observability shim” for the crawl (server only)
+	•	Ensure every /api/* response sets cache-busting + request-id. If not already:
+	•	In the API middleware (where you add request IDs), set:
+	•	Cache-Control: no-store, must-revalidate
+	•	X-Request-Id: <uuid>
+	•	Log: [req:<id>] <method> <path> -> <status> <ms>
+
+(If this is already done, skip.)
+
+⸻
+
+2) Install Playwright + scripts
+
+Add dev deps and scripts:
+
+npm i -D @playwright/test
+npx playwright install --with-deps
+
+Add to package.json:
+
+{
+  "scripts": {
+    "qa:crawl": "playwright test qa/e2e.spec.ts --reporter=list"
+  }
+}
+
+
+⸻
+
+3) Create the click-through test (qa/e2e.spec.ts)
+
+Create qa/e2e.spec.ts with this exact content and replace placeholders noted in comments:
+
+import { test, expect } from '@playwright/test';
+
+// ----- CONFIG -----
+const APP = process.env.APP_BASE_URL || 'https://thecommish.replit.app';
+
+// Use real IDs from your setup/dashboard if you have them
+// Otherwise the test will try to create/select what's available.
+const KNOWN = {
+  guildId: process.env.TEST_GUILD_ID || '', // optional
+  channelId: process.env.TEST_CHANNEL_ID || '', // optional
+  leagueId: process.env.TEST_LEAGUE_ID || '', // optional
+  sleeperUser: process.env.TEST_SLEEPER_USER || '', // optional
+  adminKey: process.env.ADMIN_KEY || ''
+};
+
+// Attach console/network logging to each test
+test.beforeEach(async ({ page }, testInfo) => {
+  page.on('console', msg => console.log(`[console][${testInfo.title}]`, msg.type(), msg.text()));
+  page.on('pageerror', err => console.log(`[pageerror][${testInfo.title}]`, err.message));
+  page.on('requestfailed', req => console.log(`[requestfailed][${testInfo.title}]`, req.method(), req.url(), req.failure()?.errorText));
+});
+
+// Helper: verify JSON API returns JSON, not HTML
+async function expectJson(page, url: string) {
+  const res = await page.request.get(url, { headers: { 'Pragma': 'no-cache', 'Cache-Control': 'no-cache' }});
+  const ct = res.headers()['content-type'] || '';
+  expect(ct).toContain('application/json');
+  const status = res.status();
+  expect(status).toBeLessThan(500);
+  return res.json();
+}
+
+test('01 Home page loads and CTAs exist', async ({ page }) => {
+  await page.goto(APP, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('cta-try-demo')).toBeVisible();
+  await expect(page.getByTestId('cta-activate-beta')).toBeVisible();
+  await page.screenshot({ path: 'qa__01_home.png', fullPage: true });
+});
+
+test('02 Demo activation flow (no auth required)', async ({ page }) => {
+  await page.goto(APP, { waitUntil: 'networkidle' });
+  await page.getByTestId('cta-try-demo').click();
+  await expect(page.getByTestId('badge-mode-demo')).toBeVisible();
+  await expect(page.getByTestId('dashboard-root')).toBeVisible();
+  await page.screenshot({ path: 'qa__02_demo_dashboard.png', fullPage: true });
+});
+
+test('03 Setup Wizard visible and resumable', async ({ page }) => {
+  await page.goto(`${APP}/setup`, { waitUntil: 'domcontentloaded' });
+  // Step headers visible
+  await expect(page.getByTestId('setup-step-discord')).toBeVisible();
+  await expect(page.getByTestId('setup-step-sleeper')).toBeVisible();
+  await expect(page.getByTestId('setup-step-rules')).toBeVisible();
+  await page.screenshot({ path: 'qa__03_setup.png', fullPage: true });
+});
+
+test('04 API sanity: health/events/leagues endpoints return JSON', async ({ page }) => {
+  await expectJson(page, `${APP}/api/health`);
+  await expectJson(page, `${APP}/api/events?limit=3`);
+  // Try v2 leagues detail (may be empty if none)
+  if (KNOWN.leagueId) {
+    await expectJson(page, `${APP}/api/v2/leagues/${KNOWN.leagueId}`);
+  }
+});
+
+test('05 Discord channels listing (if guildId provided)', async ({ page }) => {
+  test.skip(!KNOWN.guildId, 'No TEST_GUILD_ID provided');
+  const data = await expectJson(page, `${APP}/api/v2/discord/channels?guildId=${KNOWN.guildId}`);
+  expect(Array.isArray(data)).toBeTruthy();
+});
+
+test('06 Owners mapping UI + API', async ({ page }) => {
+  // UI
+  await page.goto(`${APP}/dashboard`, { waitUntil: 'networkidle' });
+  await expect(page.getByTestId('owners-card')).toBeVisible();
+  await page.screenshot({ path: 'qa__06_owners.png', fullPage: true });
+
+  // API (may be empty if league not linked)
+  if (KNOWN.leagueId) {
+    const owners = await expectJson(page, `${APP}/api/v2/owners?leagueId=${KNOWN.leagueId}`);
+    expect(Array.isArray(owners)).toBeTruthy();
+  }
+});
+
+test('07 Reminders create/list (custom)', async ({ page }) => {
+  test.skip(!KNOWN.leagueId, 'No TEST_LEAGUE_ID set for reminders');
+  // Create reminder
+  const create = await page.request.post(`${APP}/api/v2/reminders`, {
+    headers: { 'Content-Type': 'application/json' },
+    data: {
+      leagueId: KNOWN.leagueId,
+      channelId: KNOWN.channelId || null,
+      text: 'Set your lineup!',
+      cron: '0 15 * * SAT'
+    }
+  });
+  expect(create.status()).toBeLessThan(500);
+
+  // List reminders
+  const list = await expectJson(page, `${APP}/api/v2/reminders?leagueId=${KNOWN.leagueId}`);
+  expect(Array.isArray(list)).toBeTruthy();
+});
+
+test('08 RAG: index & search (MVP text)', async ({ page }) => {
+  test.skip(!KNOWN.leagueId, 'No TEST_LEAGUE_ID set for RAG');
+  // Index tiny doc
+  const idx = await page.request.post(`${APP}/api/rag/index/${KNOWN.leagueId}`, {
+    headers: { 'Content-Type': 'application/json' },
+    data: { content: 'SECTION 1: Draft is in August.', contentType: 'text/plain', title: 'TestDoc', version: 'test' }
+  });
+  expect([200,201].includes(idx.status())).toBeTruthy();
+
+  // Search
+  const srch = await page.request.post(`${APP}/api/rag/search/${KNOWN.leagueId}`, {
+    headers: { 'Content-Type': 'application/json' },
+    data: { query: 'When is the draft?' }
+  });
+  expect(srch.status()).toBeLessThan(500);
+});
+
+test('09 Engagement: quick poll create', async ({ page }) => {
+  test.skip(!KNOWN.leagueId, 'No TEST_LEAGUE_ID set for polls');
+  const res = await page.request.post(`${APP}/api/v2/polls`, {
+    headers: { 'Content-Type': 'application/json' },
+    data: { leagueId: KNOWN.leagueId, question: 'Who wins?', options: ['Me','You'], durationMinutes: 10 }
+  });
+  expect(res.status()).toBeLessThan(500);
+});
+
+test('10 Digest preview (admin-only)', async ({ page }) => {
+  test.skip(!KNOWN.leagueId || !KNOWN.adminKey, 'Need TEST_LEAGUE_ID and ADMIN_KEY');
+  const res = await page.request.post(`${APP}/api/v2/digest/preview?leagueId=${KNOWN.leagueId}`, {
+    headers: { 'X-Admin-Key': KNOWN.adminKey }
+  });
+  expect(res.status()).toBeLessThan(500);
+});
+
+Notes:
+	•	The test automatically logs console errors, page errors, and failed requests to stdout.
+	•	It also writes screenshots like qa__02_demo_dashboard.png for quick triage.
+	•	You can pass envs in Replit Secrets: TEST_GUILD_ID, TEST_CHANNEL_ID, TEST_LEAGUE_ID, TEST_SLEEPER_USER.
+
+Run it:
+
+APP_BASE_URL=https://thecommish.replit.app npm run qa:crawl
+
+
+⸻
+
+4) Triage & auto-fix loop
+
+Parse failures and fix in this order (stop at first failing layer):
+	1.	HTML instead of JSON on any /api/*
+	•	Re-check Vite guards are intact and API routes mounted before catch-alls.
+	•	If CDN cache bites again, add a temporary /api/v2/… alias for affected routes and test those; keep both live until cache expires.
+	2.	401/CSRF on /api/v2/* POST/PUT/DELETE
+	•	Ensure CSRF token is injected in frontend calls and verified server-side.
+	•	For the Playwright crawl, you can temporarily disable CSRF only for the qa:crawl user-agent or add a test CSRF token header.
+	3.	Discord posting errors
+	•	Confirm every post path uses the reliability wrapper (idempotency key + 429 retry_after backoff 1s/2s/4s).
+	•	Verify bot permissions for target channel.
+	4.	Reminders not listing/firing
+	•	Ensure GET /api/v2/reminders returns list; scheduler registers jobs on boot; job writes an “executed” event row (idempotent).
+	5.	RAG errors
+	•	Enforce embedding dimension; clamp total chunks; verify provider/model from env service; reject >1MB payloads.
+	6.	Owner mapping UI
+	•	Autocomplete of Discord users pulls from /api/v2/discord/channels?guildId= + /members (or cached list).
+	•	POST /api/v2/owners/map must be idempotent (upsert on conflict).
+
+Re-run:
+
+npm run qa:crawl
+
+Repeat until green.
+
+⸻
+
+5) (Optional) Export artifacts
+
+When the crawl fails, save artifacts for quick review:
+	•	Screenshots: qa__*.png
+	•	Server logs: grep for [request] + [req:<id>]
+	•	(Optional) Add page.context().tracing.start({ screenshots: true, snapshots: true }) to capture a trace.
+
+⸻
+
+6) Acceptance checklist (agent must tick all)
+	•	Home shows both CTAs; Demo flow works; Setup wizard resumes state.
+	•	Dashboard loads with Feature Toggles, Channel Routing, Personality Preview, Digest controls.
+	•	Owners card lets me map at least one Discord user → team.
+	•	Reminders: create + list works; job registered (visible in logs/events).
+	•	RAG: small doc indexes; /rules answers with a source line.
+	•	Engagement: quick poll creation works (and result message posts when closed).
+	•	Slash commands respond: /help, /rules, /digest, /poll, /whoami, /reindex.
+	•	All /api/* responses have Cache-Control: no-store and X-Request-Id.
+	•	No console errors on the main flows (Playwright logs clean).
+
+⸻
+
+7) Report back
+	•	Post a short triage table (route → error → fix).
+	•	Attach the qa__*.png screenshots and the final test output.
+	•	Update replit.md with any new endpoints or UI controls added.
+
+⸻
+
+If you want me to stay hands-on
+
+Once the agent finishes the first run, drop me the Playwright output (failures) or any qa__*.png screenshots, and I’ll translate those straight into the smallest possible patches and re-run steps.
