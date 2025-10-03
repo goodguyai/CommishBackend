@@ -1,0 +1,259 @@
+Heck yeah—time to make this thing feel complete for commissioners. Here’s a tight, copy-paste work order for Replit that keeps all guardrails intact and moves the needle on real quality-of-life: dashboard controls, owner mapping UI, reminders, RAG polish, engagement UI, and QA. It’s sequenced, specific, and comes with acceptance checks.
+
+⸻
+
+🚀 “Feel Complete” Sprint — Commissioner QoL & UX Polish
+
+0) Guardrails (do not change)
+	•	APP_BASE_URL = https://thecommish.replit.app (no trailing slash).
+	•	DB = Supabase only. No Neon/Replit DB. Migrations only for schema changes; idempotent (IF NOT EXISTS) and no destructive alters.
+	•	env service only (no new process.env reads in routes/services).
+	•	Keep /api/discord/interactions on express.raw + Ed25519 verification.
+	•	Keep server/vite.ts /api/* guards intact; don’t introduce new app.use("*") that can swallow /api.
+	•	Prefer /api/v2/ for new endpoints.
+
+⸻
+
+1) Quick wins: API freshness & logs (if not already shipped)
+	1.	Add no-cache headers to all /api/* responses.
+	2.	Add request ID + timing logs ([req-abc123] GET /api/... 200 42ms).
+
+Accept
+
+curl -I "$APP_BASE_URL/api/health" | grep -i cache-control
+curl -s "$APP_BASE_URL/api/health" | jq '.status'   # "ok"
+
+
+⸻
+
+2) Commissioner Dashboard — control center
+
+Goal: A single place to toggle features, pick channels, set personality, and run a digest.
+
+2.1 Feature toggles (persisted)
+	•	UI: card “League Features” with switches:
+	•	autoMeme, digestEnabled, highlights, rivalries, creativeTrashTalk, deepStats.
+	•	Backend:
+	•	GET /api/v2/leagues/:leagueId → returns featureFlags.
+	•	PATCH /api/v2/leagues/:leagueId body: { featureFlags: {...} } (merge & persist).
+
+2.2 Channel routing
+	•	UI: “Where should things post?” with dropdowns per feature:
+	•	digests, reminders, polls, highlights.
+	•	Persist JSON object leagues.channels.{featureKey} = channelId.
+	•	Backend:
+	•	Extend same PATCH to accept { channels: { digests, reminders, polls, highlights } }.
+	•	GET /api/v2/discord/channels?guildId= → list of name/id bot-writable channels.
+
+2.3 Bot personality + live preview
+	•	UI: radio group Neutral / Sassy / Formal / Meme-y / Custom.
+	•	Live preview box: transforms a sample line (server-side).
+	•	Backend:
+	•	GET /api/v2/personality/preview?style=...&text=... → { preview }
+	•	Persist leagues.personality = { style, customTemplate? }.
+
+2.4 Digest controls
+	•	UI:
+	•	“Next scheduled digest: ”
+	•	Buttons: Preview digest (modal JSON/text card) & Run digest now (posts to Discord).
+	•	Backend (admin-key guarded):
+	•	POST /api/v2/digest/preview?leagueId=...
+	•	POST /api/v2/digest/run?leagueId=...
+
+Accept
+
+# toggles
+curl -s "$APP_BASE_URL/api/v2/leagues/<LEAGUE_ID>" | jq '.featureFlags'
+curl -s -X PATCH "$APP_BASE_URL/api/v2/leagues/<LEAGUE_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"featureFlags":{"digestEnabled":true}}' | jq '.ok'
+
+# digest
+curl -s -X POST "$APP_BASE_URL/api/v2/digest/preview?leagueId=<LEAGUE_ID>" -H "X-Admin-Key: $ADMIN_KEY" | jq '.summary'
+
+
+⸻
+
+3) Owner Mapping UI — Discord user ↔ team
+
+Goal: Mentions & personalization that actually tag the right people.
+
+3.1 Backend
+	•	GET /api/v2/owners?leagueId=... → array of { teamId, teamName, discordUserId? }.
+	•	POST /api/v2/owners/map body { leagueId, teamId, discordUserId } → upsert.
+	•	Storage: if not already present, add idempotent migration for owner_links table (or reuse members with a dedicated unique index). No destructive changes.
+
+3.2 Frontend
+	•	Dashboard card: left column League Teams, right column Discord Users.
+	•	Simple select per team (MVP) with typeahead for @users.
+	•	Warning banner if any teams unmapped.
+
+Accept
+
+curl -s "$APP_BASE_URL/api/v2/owners?leagueId=<LEAGUE_ID>" | jq '.[0]'
+curl -s -X POST "$APP_BASE_URL/api/v2/owners/map" \
+  -H "Content-Type: application/json" \
+  -d '{"leagueId":"<LEAGUE_ID>","teamId":"<TEAM_ID>","discordUserId":"<DISCORD_ID>"}' | jq '.ok'
+
+
+⸻
+
+4) Reminders & schedules — real QoL
+
+Goal: Commissioners flip a switch; league gets timely nudges.
+
+4.1 Presets (server-side defaults)
+	•	Lineup locks (Sat & Sun mornings + 60/30 min pre-kick).
+	•	Waivers (Tue night & Wed morning).
+	•	Trade deadline countdown (daily last week).
+	•	Persist structure: leagues.reminders = { presetKeys:[], custom:[] }.
+
+4.2 Custom reminders
+	•	UI: “Create reminder” form (text + channel + schedule).
+	•	Backend:
+	•	POST /api/v2/reminders body { leagueId, channelId, text, cron | isoSchedule } → stores to reminders table.
+	•	GET /api/v2/reminders?leagueId=... → list.
+	•	Scheduler:
+	•	On boot, register jobs from DB.
+	•	Idempotent execution: write events(jobId, runAt); skip if exists.
+	•	Centralized post wrapper (429 backoff, max retries 3, idempotency key).
+
+Accept
+
+curl -s -X POST "$APP_BASE_URL/api/v2/reminders" \
+  -H "Content-Type: application/json" \
+  -d '{"leagueId":"<LEAGUE_ID>","channelId":"<CHANNEL_ID>","text":"Set your lineup!","cron":"0 14 * * SAT"}' | jq '.ok'
+
+
+⸻
+
+5) RAG polish — /rules answers with receipts
+
+Goal: Helpful answers, clear sources.
+
+5.1 Rules library UI
+	•	Dashboard shows indexed docs { title, version, chunks, updatedAt }.
+	•	Button “Re-index latest” → calls POST /api/rag/index/:leagueId with last doc content.
+
+5.2 Answer card style
+	•	/rules embed:
+	•	Top answer
+	•	“Source:  §”
+	•	“Did this help? 👍/👎” (reaction; MVP logs to events).
+
+5.3 Index safeguards
+	•	Validate embedding dimension matches env.
+	•	Chunk size ~512–1024 tokens; hard cap total chunks per request.
+	•	Content hash caching already implemented—keep it.
+
+Accept
+	•	Paste rules in wizard; /rules returns an embed with a Source line.
+
+⸻
+
+6) Engagement UI — Polls, Highlights, Rivalries
+
+Goal: Push-button fun, never flaky.
+
+6.1 Polls
+	•	Dashboard Quick Poll card mirrors /poll slash command.
+	•	Post reactions, auto-close after duration, publish results.
+	•	POST /api/v2/polls → returns message link.
+
+6.2 Highlights
+	•	Weekly auto-highlights card; “Meme this” button if autoMeme on.
+	•	Use post wrapper (idempotent + 429 safe).
+
+6.3 Rivalries
+	•	Display canonicalized H2H; “Set as featured rivalry” toggle (shows on Dashboard).
+
+Accept
+	•	Create poll from dashboard; appears in Discord; results embed on close.
+
+⸻
+
+7) Slash commands — minimum complete
+
+Ensure the following are registered & handled:
+	•	/help
+	•	/rules question:<text>
+	•	/scoring question:<text>
+	•	/digest
+	•	/poll
+	•	/whoami
+	•	/reindex
+
+Accept
+	•	All visible in your guild and respond without errors.
+
+⸻
+
+8) Reliability — Discord post pipeline everywhere
+	•	Central postMessage uses:
+	•	idempotency key (per content hash or explicit key)
+	•	429 retry via retry_after
+	•	writes events on success/failure
+	•	Wire it through: digests, reminders, polls, highlights, welcome messages.
+
+Accept
+	•	Burst 5 posts quickly → they serialize with backoff; no duplicate embeds.
+
+⸻
+
+9) Security touches
+	•	Session cookie: HttpOnly, Secure (prod), SameSite=Lax.
+	•	CSRF token for browser POST/PUT/DELETE to /api/v2/*.
+	•	Central zod validation for all inputs → { ok:false, code, message } on error.
+
+Accept
+	•	POST without CSRF → 403; with token → 200.
+
+⸻
+
+10) QA script & docs
+	•	Add qa-polish.sh that exercises:
+	•	health, events
+	•	league GET/PATCH (toggles)
+	•	owners map
+	•	reminder create
+	•	digest preview
+	•	polls create
+	•	Update QA_RESULTS.md with outputs.
+	•	Update /help embed (links to dashboard & setup).
+	•	Update replit.md for new endpoints and UI.
+
+Accept
+
+bash qa-polish.sh   # exits 0; ✔ checks printed
+
+
+⸻
+
+11) Migrations (only if required)
+	•	Single idempotent migration (e.g., migrations/00xx_polish_qol.sql) to add:
+	•	owner_links (if not using members)
+	•	reminders
+	•	leagues.channels JSONB column (if missing)
+	•	Do not drop/alter existing columns/types/indexes destructively.
+
+⸻
+
+12) Final pass (human-visible polish)
+	•	Add micro-interactions: button loading spinners; success checkmarks; subtle toasts.
+	•	Empty states with helpful hints.
+	•	“All green” dashboard state + a subtle confetti on first completion.
+
+Accept
+	•	Click-through from /setup → /dashboard feels smooth; no dead-ends; everything “just works”.
+
+⸻
+
+TL;DR priorities (if you need to timebox)
+	1.	Dashboard toggles + channels + personality + digest controls
+	2.	Owner mapping UI (teams → users)
+	3.	Reminders presets + custom + scheduler idempotency
+	4.	RAG answer card with source + rules library
+	5.	Polls UI + highlights safety
+	6.	QA script + /help + docs
+
+If you want, I can follow up with a tiny set of verification curls as soon as Replit says it finished this sprint, but this should be plenty to keep the agent busy and on the rails.

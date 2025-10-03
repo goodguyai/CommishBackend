@@ -1,0 +1,119 @@
+Awesome. Here’s the tight next move so Replit can keep rolling without you babysitting it.
+
+⸻
+
+✅ Paste this to Replit (continue the QoL sprint)
+
+Message to Replit Agent:
+
+Guardrails (do not change)
+	•	APP_BASE_URL=https://thecommish.replit.app (no trailing slash).
+	•	Database is Supabase only. Any schema change must be a new idempotent migration; absolutely no destructive alters.
+	•	Read config via the centralized env service (no new process.env usage in routes/services).
+	•	Keep /api/discord/interactions using express.raw + Ed25519 verification.
+	•	Keep server/vite.ts /api/ guards as-is; don’t add new catch-alls that can swallow APIs.
+	•	Prefer /api/v2/ for new endpoints.
+
+Goals (execute all):
+	1.	Commissioner Dashboard – control center
+	•	Feature toggles: autoMeme, digestEnabled, highlights, rivalries, creativeTrashTalk, deepStats.
+	•	Backend: GET /api/v2/leagues/:leagueId, PATCH /api/v2/leagues/:leagueId to merge { featureFlags, channels, personality }.
+	•	Channel routing: persist leagues.channels = { digests, reminders, polls, highlights }; use GET /api/v2/discord/channels?guildId=....
+	•	Personality + live preview: GET /api/v2/personality/preview?style=...&text=... returns { preview }.
+	•	Digest controls: admin-key guarded
+	•	POST /api/v2/digest/preview?leagueId=...
+	•	POST /api/v2/digest/run?leagueId=...
+	2.	Owner Mapping UI (Discord user ↔ team)
+	•	Backend:
+	•	GET /api/v2/owners?leagueId=... → { teamId, teamName, discordUserId? }[]
+	•	POST /api/v2/owners/map → body { leagueId, teamId, discordUserId } (idempotent upsert)
+	•	Frontend: simple per-team select with typeahead for @users; banner if unmapped teams.
+	•	If a table is needed, add a single idempotent migration (e.g., owner_links)—no destructive changes.
+	3.	Reminders & schedules
+	•	Presets: Lineup locks (Sat/Sun + pre-kick), Waivers (Tue/Wed), Trade deadline countdown.
+	•	Custom reminders:
+	•	POST /api/v2/reminders body { leagueId, channelId, text, cron | isoSchedule }
+	•	GET /api/v2/reminders?leagueId=...
+	•	Scheduler: register DB jobs on boot; idempotent posting (events log, skip duplicates); use the unified Discord post wrapper (429-aware, retries 1s/2s/4s).
+	4.	RAG polish
+	•	Dashboard Rules Library: list indexed docs { title, version, chunks, updatedAt }, “Re-index latest”.
+	•	/rules answer card: top answer + Source:  § + 👍/👎 (log to events).
+	•	Safety: enforce embedding dimension match; chunk cap per index call.
+	5.	Engagement UI
+	•	Quick Polls card → POST /api/v2/polls to create; auto-close & post results.
+	•	Highlights card (weekly) with “Meme this” if autoMeme enabled.
+	•	Rivalries view with “Feature this rivalry” toggle.
+	6.	Reliability & Security
+	•	Ensure all Discord posting routes use the reliability wrapper (idempotency key, 429 backoff, events).
+	•	CSRF protection for browser POST/PUT/DELETE under /api/v2/* and session cookie flags (HttpOnly, Secure in prod, SameSite=Lax).
+	•	Central zod input validation; error shape { ok:false, code, message }.
+	7.	QA & Docs
+	•	Add qa-polish.sh that runs: health, league GET/PATCH, owners map, reminders create, digest preview, polls create.
+	•	Update /help embed (link to dashboard & setup).
+	•	Update replit.md for new endpoints & dashboard controls.
+
+Do not regress: interactions signature verification, /api/* routing, or Supabase connectivity. Keep the /api freshness headers and request-ID timing logs.
+
+⸻
+
+🔎 After Replit finishes, run these quick checks
+
+Replace placeholders before running.
+
+# Health & freshness
+curl -I "$APP_BASE_URL/api/health" | grep -i cache-control
+curl -s "$APP_BASE_URL/api/health" | jq '.status'
+
+# Get league config (copy your leagueId from dashboard or setup)
+LEAGUE_ID="YOUR_LEAGUE_ID"
+GUILD_ID="YOUR_GUILD_ID"
+
+curl -s "$APP_BASE_URL/api/v2/leagues/$LEAGUE_ID" | jq
+
+# Toggle a feature
+curl -s -X PATCH "$APP_BASE_URL/api/v2/leagues/$LEAGUE_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"featureFlags":{"digestEnabled":true}}' | jq
+
+# Channels listing (ensure bot is in your server)
+curl -s "$APP_BASE_URL/api/v2/discord/channels?guildId=$GUILD_ID" | jq '.[0]'
+
+# Owner mapping (pick a teamId & discordUserId)
+TEAM_ID="YOUR_TEAM_ID"
+DISCORD_USER_ID="A_MEMBER_ID"
+curl -s -X POST "$APP_BASE_URL/api/v2/owners/map" \
+  -H "Content-Type: application/json" \
+  -d "{\"leagueId\":\"$LEAGUE_ID\",\"teamId\":\"$TEAM_ID\",\"discordUserId\":\"$DISCORD_USER_ID\"}" | jq
+
+# Create a custom reminder (example: Saturdays 10am UTC)
+CHANNEL_ID="A_TEXT_CHANNEL_ID"
+curl -s -X POST "$APP_BASE_URL/api/v2/reminders" \
+  -H "Content-Type: application/json" \
+  -d "{\"leagueId\":\"$LEAGUE_ID\",\"channelId\":\"$CHANNEL_ID\",\"text\":\"Set your lineup!\",\"cron\":\"0 10 * * SAT\"}" | jq
+
+# Digest preview (admin-key guarded)
+curl -s -X POST "$APP_BASE_URL/api/v2/digest/preview?leagueId=$LEAGUE_ID" -H "X-Admin-Key: $ADMIN_KEY" | jq '.summary'
+
+# Quick poll (via dashboard UI; if exposed via API:)
+curl -s -X POST "$APP_BASE_URL/api/v2/polls" \
+  -H "Content-Type: application/json" \
+  -d "{\"leagueId\":\"$LEAGUE_ID\",\"question\":\"Who wins week 1?\",\"options\":[\"Me\",\"You\"],\"durationMinutes\":30}" | jq
+
+
+⸻
+
+🧭 If something looks off
+	•	HTML instead of JSON? Check vite guards stayed intact and API routes are mounted before any catch-all. Also try a new path (e.g., /api/v2/...) to bust stale CDN caches.
+	•	Discord posting fails? Confirm bot is in the guild, channel permissions allow Send Messages/Embeds, and wrapper handles 429 with retries (check events table).
+	•	Reminders not firing? Verify scheduler registers jobs on boot and writes an idempotent event row per execution.
+
+⸻
+
+✨ Optional polish (if time permits)
+	•	Add subtle button loaders + success checkmarks across dashboard actions.
+	•	Empty states with “What’s this?” links.
+	•	First-time “all green” dashboard → confetti burst (once).
+
+⸻
+
+If you want, after Replit says it’s done, send me the leagueId you used and I’ll give you a 60-second smoke plan tailored to your server to confirm end-to-end (owner map → reminder → digest → /rules).
