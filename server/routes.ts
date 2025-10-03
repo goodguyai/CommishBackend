@@ -12,6 +12,7 @@ import { RAGService } from "./services/rag";
 import { generateDigestContent } from "./services/digest";
 import { EventBus } from "./services/events";
 import { scheduler } from "./lib/scheduler";
+import { insertMemberSchema, insertReminderSchema, insertVoteSchema } from "@shared/schema";
 
 // Module-level variables that will be initialized after env validation
 let ragService: RAGService;
@@ -1997,6 +1998,295 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
   });
+
+  // === PHASE 1 ENDPOINTS ===
+
+  // Owner Mapping (Members) Endpoints
+  
+  // GET /api/leagues/:leagueId/members - Get all members for a league
+  app.get("/api/leagues/:leagueId/members", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+      }
+
+      const members = await storage.getLeagueMembers(leagueId);
+      res.json({ members });
+    } catch (error) {
+      console.error("Failed to get members:", error);
+      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get members" } });
+    }
+  });
+
+  // POST /api/leagues/:leagueId/members - Create/update member mapping
+  app.post("/api/leagues/:leagueId/members", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+      }
+
+      const memberData = insertMemberSchema.parse({ ...req.body, leagueId });
+      const memberId = await storage.createOrUpdateMember(memberData);
+      const member = await storage.getMember(leagueId, memberData.discordUserId);
+
+      res.status(201).json({ id: memberId, member });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid member data", details: error.errors } });
+      }
+      console.error("Failed to create/update member:", error);
+      res.status(500).json({ error: { code: "CREATE_FAILED", message: "Failed to create/update member" } });
+    }
+  });
+
+  // GET /api/members/discord/:discordUserId - Get member by Discord ID (optional param: leagueId)
+  app.get("/api/members/discord/:discordUserId", async (req, res) => {
+    try {
+      const { discordUserId } = req.params;
+      const { leagueId } = req.query;
+
+      if (leagueId && typeof leagueId === "string") {
+        const member = await storage.getMemberByDiscordId(leagueId, discordUserId);
+        if (!member) {
+          return res.status(404).json({ error: { code: "NOT_FOUND", message: "Member not found" } });
+        }
+        return res.json({ member });
+      }
+
+      return res.status(400).json({ error: { code: "MISSING_LEAGUE_ID", message: "leagueId query parameter is required" } });
+    } catch (error) {
+      console.error("Failed to get member by Discord ID:", error);
+      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get member" } });
+    }
+  });
+
+  // Reminders Endpoints
+
+  // GET /api/leagues/:leagueId/reminders - Get all reminders
+  app.get("/api/leagues/:leagueId/reminders", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+      }
+
+      const reminders = await storage.getReminders(leagueId);
+      res.json({ reminders });
+    } catch (error) {
+      console.error("Failed to get reminders:", error);
+      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get reminders" } });
+    }
+  });
+
+  // POST /api/leagues/:leagueId/reminders - Create reminder
+  app.post("/api/leagues/:leagueId/reminders", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+      }
+
+      const reminderData = insertReminderSchema.parse({ ...req.body, leagueId });
+      const reminderId = await storage.createReminder(reminderData);
+      
+      res.status(201).json({ id: reminderId });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid reminder data", details: error.errors } });
+      }
+      console.error("Failed to create reminder:", error);
+      res.status(500).json({ error: { code: "CREATE_FAILED", message: "Failed to create reminder" } });
+    }
+  });
+
+  // PATCH /api/reminders/:id - Update reminder
+  app.patch("/api/reminders/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      const updateData = insertReminderSchema.partial().parse(req.body);
+      await storage.updateReminder(id, updateData);
+      
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid reminder data", details: error.errors } });
+      }
+      console.error("Failed to update reminder:", error);
+      res.status(500).json({ error: { code: "UPDATE_FAILED", message: "Failed to update reminder" } });
+    }
+  });
+
+  // DELETE /api/reminders/:id - Delete reminder
+  app.delete("/api/reminders/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      await storage.deleteReminder(id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Failed to delete reminder:", error);
+      res.status(500).json({ error: { code: "DELETE_FAILED", message: "Failed to delete reminder" } });
+    }
+  });
+
+  // Polls/Votes Endpoints
+
+  // POST /api/polls/:pollId/votes - Create vote
+  app.post("/api/polls/:pollId/votes", async (req, res) => {
+    try {
+      const { pollId } = req.params;
+      
+      const poll = await storage.getPoll(pollId);
+      if (!poll) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "Poll not found" } });
+      }
+
+      if (poll.status !== "open") {
+        return res.status(400).json({ error: { code: "POLL_CLOSED", message: "Poll is not open for voting" } });
+      }
+
+      const voteData = insertVoteSchema.parse({ ...req.body, pollId });
+      
+      try {
+        const voteId = await storage.createVote(voteData);
+        res.status(201).json({ id: voteId });
+      } catch (voteError: any) {
+        if (voteError.message?.includes("unique") || voteError.code === "23505") {
+          return res.status(400).json({ error: { code: "ALREADY_VOTED", message: "User has already voted in this poll" } });
+        }
+        throw voteError;
+      }
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid vote data", details: error.errors } });
+      }
+      console.error("Failed to create vote:", error);
+      res.status(500).json({ error: { code: "CREATE_FAILED", message: "Failed to create vote" } });
+    }
+  });
+
+  // GET /api/polls/:pollId/votes - Get all votes
+  app.get("/api/polls/:pollId/votes", async (req, res) => {
+    try {
+      const { pollId } = req.params;
+      
+      const poll = await storage.getPoll(pollId);
+      if (!poll) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "Poll not found" } });
+      }
+
+      const votes = await storage.getVotes(pollId);
+      res.json({ votes });
+    } catch (error) {
+      console.error("Failed to get votes:", error);
+      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get votes" } });
+    }
+  });
+
+  // GET /api/polls/:pollId/votes/counts - Get vote counts by choice
+  app.get("/api/polls/:pollId/votes/counts", async (req, res) => {
+    try {
+      const { pollId } = req.params;
+      
+      const poll = await storage.getPoll(pollId);
+      if (!poll) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "Poll not found" } });
+      }
+
+      const counts = await storage.getVoteCounts(pollId);
+      res.json({ counts });
+    } catch (error) {
+      console.error("Failed to get vote counts:", error);
+      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get vote counts" } });
+    }
+  });
+
+  // PATCH /api/polls/:pollId/status - Update poll status
+  app.patch("/api/polls/:pollId/status", async (req, res) => {
+    try {
+      const { pollId } = req.params;
+      const { status } = req.body;
+
+      if (!status || !["open", "closed"].includes(status)) {
+        return res.status(400).json({ error: { code: "INVALID_STATUS", message: "Status must be 'open' or 'closed'" } });
+      }
+
+      const poll = await storage.getPoll(pollId);
+      if (!poll) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "Poll not found" } });
+      }
+
+      await storage.updatePollStatus(pollId, status);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Failed to update poll status:", error);
+      res.status(500).json({ error: { code: "UPDATE_FAILED", message: "Failed to update poll status" } });
+    }
+  });
+
+  // League Settings Endpoint
+
+  // PATCH /api/leagues/:leagueId/settings - Update league settings
+  app.patch("/api/leagues/:leagueId/settings", async (req, res) => {
+    const startTime = Date.now();
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    try {
+      const { leagueId } = req.params;
+      
+      const updateData = z.object({
+        featureFlags: z.record(z.unknown()).optional(),
+        tone: z.string().optional(),
+        timezone: z.string().optional(),
+        modelPrefs: z.record(z.unknown()).optional(),
+      }).parse(req.body);
+
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+      }
+
+      await storage.updateLeague(leagueId, updateData);
+      const updatedLeague = await storage.getLeague(leagueId);
+
+      const latency = Date.now() - startTime;
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId,
+        payload: { command: "league_settings_updated", updates: Object.keys(updateData) },
+        requestId,
+        latency,
+      });
+
+      res.json({ success: true, league: updatedLeague });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid settings data", details: error.errors } });
+      }
+      console.error("Failed to update league settings:", error);
+      const latency = Date.now() - startTime;
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        payload: { error: String(error), endpoint: "/api/leagues/:leagueId/settings" },
+        requestId,
+        latency,
+      });
+      res.status(500).json({ error: { code: "UPDATE_FAILED", message: "Failed to update league settings" } });
+    }
+  });
+
+  // === END PHASE 1 ENDPOINTS ===
 
   const httpServer = createServer(app);
   return httpServer;
