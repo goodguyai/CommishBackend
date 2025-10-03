@@ -145,6 +145,7 @@ export interface IStorage {
   createModAction(data: InsertModAction): Promise<string>;
   createDispute(data: InsertDispute): Promise<string>;
   getDispute(id: string): Promise<Dispute | undefined>;
+  getDisputesByLeague(leagueId: string): Promise<Dispute[]>;
   updateDispute(id: string, updates: Partial<Dispute>): Promise<void>;
   createTradeEvaluation(data: InsertTradeEvaluation): Promise<string>;
 
@@ -827,6 +828,13 @@ export class DatabaseStorage implements IStorage {
     return results[0];
   }
 
+  async getDisputesByLeague(leagueId: string): Promise<Dispute[]> {
+    const results = await this.db.select()
+      .from(schema.disputes)
+      .where(eq(schema.disputes.leagueId, leagueId));
+    return results;
+  }
+
   async updateDispute(id: string, updates: Partial<Dispute>): Promise<void> {
     await this.db.update(schema.disputes)
       .set(updates)
@@ -1475,6 +1483,10 @@ export class MemStorage implements IStorage {
 
   async getDispute(id: string): Promise<Dispute | undefined> {
     return this.disputes.get(id);
+  }
+
+  async getDisputesByLeague(leagueId: string): Promise<Dispute[]> {
+    return Array.from(this.disputes.values()).filter(d => d.leagueId === leagueId);
   }
 
   async updateDispute(id: string, updates: Partial<Dispute>): Promise<void> {
