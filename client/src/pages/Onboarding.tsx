@@ -61,8 +61,37 @@ export function OnboardingPage() {
   const [leagueId, setLeagueId] = useState<string>('');
 
   useEffect(() => {
+    const checkResumeState = async () => {
+      try {
+        const user = await api<{ userId: string; accountId: string; leagueId?: string }>('/api/app/me');
+        
+        if (user.accountId) {
+          setAccountId(user.accountId);
+        }
+        
+        if (user.leagueId) {
+          const league = await api<any>(`/api/leagues/${user.leagueId}`);
+          if (league.activatedAt) {
+            toast.success('Your league is already set up!');
+            setLocation('/app');
+            return;
+          }
+          
+          setCurrentStep('rules');
+          setLeagueId(user.leagueId);
+          return;
+        }
+        
+        const sessionData = await api<{ guilds: any[] }>('/api/v2/setup/discord-session');
+        if (sessionData.guilds && sessionData.guilds.length > 0) {
+          setGuilds(sessionData.guilds);
+        }
+      } catch (e) {
+        console.log('Starting fresh wizard');
+      }
+    };
+    
     const params = new URLSearchParams(window.location.search);
-    const step = params.get('step');
     const error = params.get('error');
     const success = params.get('success');
     
@@ -92,24 +121,7 @@ export function OnboardingPage() {
       toast.success('Discord connected successfully!');
     }
     
-    // Always fetch session data when on discord step
-    if (step === 'discord' || currentStep === 'discord') {
-      fetchSessionGuilds();
-    }
-  }, [currentStep]);
-
-  useEffect(() => {
-    const fetchUserInfo = async () => {
-      try {
-        const user = await api<{ userId: string; accountId: string }>('/api/app/me');
-        if (user.accountId) {
-          setAccountId(user.accountId);
-        }
-      } catch (e) {
-        console.error('Failed to fetch user info:', e);
-      }
-    };
-    fetchUserInfo();
+    checkResumeState();
   }, []);
 
   const fetchSessionGuilds = async () => {
@@ -125,6 +137,9 @@ export function OnboardingPage() {
         }
       } else {
         setGuilds([]);
+        if (data.guilds && data.guilds.length === 0) {
+          toast.error('No servers found where you have Manage Server permission. Please make sure you\'re an admin on at least one Discord server.');
+        }
       }
     } catch (e) {
       console.error('[Fetch Guilds]', e);
@@ -153,6 +168,13 @@ export function OnboardingPage() {
       const { channels: fetchedChannels } = await api<{ channels: DiscordChannel[] }>(
         `/api/v2/discord/channels?guildId=${guildId}`
       );
+      
+      if (fetchedChannels.length === 0) {
+        toast.error('No writable channels found. Make sure the bot has permission to post in at least one channel.');
+        setChannels([]);
+        return;
+      }
+      
       setChannels(fetchedChannels);
     } catch (e) {
       toast.error('Failed to fetch channels');
@@ -186,6 +208,7 @@ export function OnboardingPage() {
       if (result.ok) {
         setLeagueId(result.leagueId);
         toast.success('Discord connected successfully!');
+        await new Promise(resolve => setTimeout(resolve, 500));
         setCurrentStep('sleeper');
       }
     } catch (e) {
@@ -209,7 +232,7 @@ export function OnboardingPage() {
       );
       setSleeperLeagues(leagues);
       if (leagues.length === 0) {
-        toast.info('No leagues found for this user');
+        toast.info(`No leagues found for "${sleeperUsername}" in ${sleeperSeason}. Check spelling or try a different season.`);
       }
     } catch (e) {
       toast.error('Failed to fetch Sleeper leagues');
@@ -241,6 +264,7 @@ export function OnboardingPage() {
 
       if (result.ok) {
         toast.success('Sleeper league connected!');
+        await new Promise(resolve => setTimeout(resolve, 500));
         setCurrentStep('rules');
       }
     } catch (e) {

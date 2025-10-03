@@ -101,9 +101,11 @@ app.use((req, res, next) => {
   // Validate environment variables first - fail fast if missing
   validateEnvironment();
 
-  // Prevent caching of API responses
+  // API freshness: no-cache headers for all API responses
   app.use("/api", (_req, res, next) => {
-    res.set("Cache-Control", "no-store");
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     next();
   });
 

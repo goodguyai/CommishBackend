@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import express from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
+import { nanoid } from "nanoid";
 import { storage } from "./storage";
 import { env, getEnv } from "./services/env";
 import { verifyDiscordSignature, generateRequestId } from "./lib/crypto";
@@ -504,6 +505,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         payload: { error: "content_poster_failed", message: String(error) },
       });
     }
+  });
+
+  // API freshness: no-cache headers
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  });
+
+  // Request ID and timing middleware
+  app.use('/api', (req, res, next) => {
+    const reqId = nanoid(8);
+    (req as any).id = reqId;
+    const start = Date.now();
+    
+    // Log when response finishes
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      console.log(`[${reqId}] ${req.method} ${req.path} - ${res.statusCode} ${duration}ms`);
+    });
+    
+    next();
   });
 
   // Dev: Register Discord commands (requires admin key)

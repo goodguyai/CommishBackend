@@ -1,0 +1,266 @@
+Love it. Since Beta activation (Discord + Sleeper + rules indexing) is in, the fastest way to keep momentum is a polish & reliability sprint that makes the app feel “alive,” closes gaps commissioners will notice, and hardens the edges. Below is a one-shot, copy-paste work order for Replit with guardrails, a prioritized task list, tight acceptance tests, and UX/behavior details. It’s designed so the agent can run a lot in one go without going off the rails.
+
+⸻
+
+🚀 POLISH & RELIABILITY SPRINT — “Make THE COMMISH feel complete”
+
+0) Guardrails (don’t change)
+	•	Keep APP_BASE_URL=https://thecommish.replit.app (no trailing slash).
+	•	Database = Supabase only. No Neon/Replit DB. Schema changes only via migrations.
+	•	Use the centralized env service; no new process.env reads inside routes/services.
+	•	Keep /api/discord/interactions on express.raw + Ed25519 verification.
+	•	Keep server/vite.ts /api guards and route order intact. No new catch-alls that swallow /api/*.
+	•	Prefer /api/v2/* for any new endpoints (avoid CDN ghosts).
+
+⸻
+
+1) API freshness & observability (quick wins)
+
+Goal: API never caches stale HTML; easier to debug.
+
+1.1 No-cache headers for all API responses
+	•	Add middleware before all /api/* routes:
+	•	Cache-Control: no-store, no-cache, must-revalidate
+	•	Pragma: no-cache
+	•	Expires: 0
+
+1.2 Per-request ids + timing logs
+	•	Small middleware: attach req.id (nanoid) and log method path status ms.
+
+Acceptance
+
+curl -I "$APP_BASE_URL/api/health" | grep -i cache-control   # no-store
+curl -s "$APP_BASE_URL/api/health" | jq '.status'            # "ok"
+
+
+⸻
+
+2) UX polish: Setup wizard “feels alive”
+
+Goal: Zero dead-ends, helpful errors, smooth progress.
+
+2.1 Microinteractions
+	•	Add loading spinners on all “Continue” buttons.
+	•	Add subtle success checkmarks after each step completes.
+	•	Use toasts for errors with a “Try again” action.
+
+2.2 Resume setup
+	•	If session has an in-progress wizard, auto-resume correct step on /setup.
+
+2.3 Better empty states
+	•	If Sleeper returns no leagues: show “No leagues found for {username} in {season}. Check spelling or change season.”
+	•	If Discord has no writable channels: show a hint about channel permissions.
+
+Acceptance
+	•	Start wizard, refresh mid-way → resumes same step.
+	•	Error on Sleeper fetch → visible toast + retry works.
+
+⸻
+
+3) Commissioner Dashboard: finish the essentials
+
+Goal: A single place to run the league day-to-day.
+
+3.1 Feature Toggles panel (persist to leagues.featureFlags)
+	•	Toggles: autoMeme, digestEnabled, highlights, rivalries, creativeTrashTalk, deepStats.
+	•	Each toggle shows a short description + “Learn more” tooltip.
+
+3.2 Channel Routing
+	•	For each feature (digests, reminders, polls, highlights), let commissioner pick a channel (dropdown of bot-writable channels). Persist as leagues.channels.{featureKey} JSON.
+
+3.3 Bot Personality
+	•	Radio: Neutral / Sassy / Formal / Meme-y / Custom.
+	•	Live preview box updates as they change. Persist leagues.personality.
+	•	Preview endpoint /api/v2/personality/preview?style=...&text=... (just transforms text server-side; no LLM call here).
+
+3.4 Digest controls
+	•	Show next scheduled digest time.
+	•	Buttons: “Run digest now” (posts to Discord) and “Preview digest” (renders JSON + screenshot-like card in UI).
+	•	Wire to existing digest generator; use admin-key protected POST under the hood.
+
+Acceptance
+
+# After saving toggles:
+curl -s "$APP_BASE_URL/api/leagues/<LEAGUE_ID>" | jq '.featureFlags.autoMeme'   # true/false
+
+# Trigger digest preview:
+curl -s -X POST "$APP_BASE_URL/api/v2/digest/preview?leagueId=<LEAGUE_ID>" -H "X-Admin-Key: $ADMIN_KEY" | jq '.summary'
+
+
+⸻
+
+4) Owner Mapping (Discord user ↔ fantasy team)
+
+Goal: Personal mentions in reminders, trades, and highlights.
+
+4.1 Backend
+	•	GET /api/v2/owners?leagueId=... → list fantasy teams + mapped Discord users.
+	•	POST /api/v2/owners/map { leagueId, teamId, discordUserId } → upsert mapping.
+	•	Store in members or a dedicated owner_links table via migration (idempotent, no destructive ops).
+
+4.2 Frontend
+	•	Drag-and-drop (or dual list) UI: map team cards to Discord users (autocomplete on @users).
+	•	Show warnings for unmapped teams (so /remind lineup can @mention properly).
+
+Acceptance
+
+curl -s "$APP_BASE_URL/api/v2/owners?leagueId=<LEAGUE_ID>" | jq '.[0]'
+curl -s -X POST "$APP_BASE_URL/api/v2/owners/map" -H "Content-Type: application/json" \
+  -d '{"leagueId":"<LEAGUE_ID>","teamId":"<TEAM_ID>","discordUserId":"<DISCORD_ID>"}' | jq '.ok'
+
+
+⸻
+
+5) Reminders & schedules (quality-of-life)
+
+Goal: Useful automation with safe defaults.
+
+5.1 Reminder presets
+	•	Toggles: lineup lock (Sat & Sun morning, 60/30 min pre-kickoff), waiver day (Tue night/Wed morning), trade deadline countdown (last week daily).
+	•	Persist as cron-like strings or structured JSON on leagues.reminders.
+
+5.2 Post composer
+	•	Form to craft a custom reminder (text + schedule), scoped to league channel.
+	•	Save to a reminders table (migration) and schedule via existing scheduler on boot.
+
+5.3 Safe job runner
+	•	Ensure jobs are idempotent (use events table to dedupe by jobId + runAt).
+	•	Discord 429 handling: exponential backoff + queue.
+
+Acceptance
+
+# Create a custom reminder:
+curl -s -X POST "$APP_BASE_URL/api/v2/reminders" -H "Content-Type: application/json" \
+  -d '{"leagueId":"<LEAGUE_ID>","channel":"<CHANNEL_ID>","text":"Set your lineup!","cron":"0 14 * * SAT"}' | jq '.ok'
+
+# See it scheduled:
+curl -s "$APP_BASE_URL/api/events?limit=10" | jq '.[] | select(.type=="reminder_scheduled")'
+
+
+⸻
+
+6) RAG quality & Rules UX
+
+Goal: /rules answers feel smart and traceable.
+
+6.1 Rules library
+	•	Keep a list of indexed documents per league; show title/version/date.
+	•	Button: “Re-index latest rules” → posts /reindex command, updates immediately.
+
+6.2 Answer card style
+	•	For /rules, send an embed with: top answer + “source: {doc title} §{section}” + “Not sure? Type /rules_addendum to teach me” (MVP stub).
+
+6.3 Index safeguards
+	•	Validate dimension = env; hash content for caching (already present).
+	•	Add server-side chunking sanity: 512–1024 tokens per chunk; cap total chunks to prevent abuse.
+
+Acceptance
+	•	Paste rules in Step 3 → /rules in Discord returns an embed with a source line.
+	•	Re-index button swaps to new text correctly.
+
+⸻
+
+7) Engagement: Polls, Highlights, Rivalries polish
+
+Goal: Pressable fun that never breaks.
+
+7.1 Polls
+	•	/poll "question" | opt1 | opt2 | opt3 → posts reactions automatically; closes after N hours; prints results.
+	•	Dashboard “Quick Poll” card mirrors the command.
+
+7.2 Highlights
+	•	Weekly highlights card with top scorer, blowout, bench tragedy, comeback.
+	•	Adds a “Meme this” button if autoMeme is on (random meme/GIF with guardrails).
+
+7.3 Rivalries
+	•	Rivalry canonicalization (case-insensitive team names).
+	•	Embed shows H2H record; button “Set as featured rivalry” (pins to dashboard).
+
+Acceptance
+	•	Create poll in dashboard → appears in Discord; auto-close works; result embed posts.
+	•	Highlights job runs post-week; embed posted; no 429s.
+
+⸻
+
+8) Slash commands: Minimum complete set
+	•	/help – lists key commands and links to dashboard.
+	•	/rules question:<text> – RAG search; ephemeral.
+	•	/scoring question:<text> – same, but scoped to scoring doc if separated.
+	•	/digest – on-demand digest in the configured channel.
+	•	/poll – quick poll creation.
+	•	/whoami – shows mapped team + role.
+	•	/reindex – starts reindex (ephemeral “started”).
+
+Acceptance
+	•	In Discord, all commands visible + respond without errors in your guild.
+
+⸻
+
+9) Reliability: Discord/posting pipeline
+	•	Wrap all Discord POSTs with:
+	•	Idempotency key (X-Idempotency-Key locally tracked, or our own DB lock) to avoid dupes.
+	•	429 handler with retry/backoff and max attempts.
+	•	Centralized postMessage utility returns {ok, messageId, error}.
+	•	Write events on success/failure for audit.
+
+Acceptance
+	•	Simulate a short burst (5 posts in 2s) → all succeed with spacing, no rate-limit failures.
+
+⸻
+
+10) Security tidy-up
+	•	Session cookie flags: HttpOnly, Secure (prod), SameSite=Lax.
+	•	CSRF token for browser POST to /api/v2/* (double-submit cookie or header token).
+	•	Validate all inputs with a centralized validator (e.g., zod) returning {ok:false, code, message}.
+
+Acceptance
+	•	POST without CSRF → 403; with token → 200.
+
+⸻
+
+11) Tests & scripts
+	•	Add qa-polish.sh to exercise:
+	•	Health, events
+	•	Owners map
+	•	Feature toggles
+	•	Reminder creation
+	•	Digest preview
+	•	Update QA_RESULTS.md with outputs.
+
+Acceptance
+
+bash qa-polish.sh  # exits 0; prints ✔ for each check
+
+
+⸻
+
+12) Docs & help in-app
+	•	Update /help embed with:
+	•	Link to /setup and dashboard
+	•	Short “What can I do?” list
+	•	“If anything breaks, use /reindex or visit dashboard”
+	•	Update replit.md with new endpoints, admin buttons, and known limits.
+
+⸻
+
+Migrations (only if needed)
+	•	If you need new storage (e.g., owner_links, reminders, leagues.channels JSON column), add a single idempotent migration:
+	•	migrations/<next>__polish_baseline.sql
+	•	Use IF NOT EXISTS for tables/indexes.
+	•	Do not alter/drop existing prod objects.
+
+⸻
+
+Final Acceptance (quick pass)
+	•	/setup feels smooth; stepper never dead-ends.
+	•	Dashboard shows toggles, channel routing, personality with live preview.
+	•	Owner mapping complete; /whoami identifies user.
+	•	Reminders run; digest preview & run-now work.
+	•	/rules returns a useful answer with source.
+	•	Poll → Discord works end-to-end.
+	•	No 429 spam, retries behave, posts are deduped.
+	•	/api/health status “ok”.
+
+⸻
+
+If you want, I can stick around and sanity-check your curl outputs or screenshots after Replit runs this. Once this sprint lands, you’ll have a ship-worthy MVP that actually feels finished: the commissioner can set it up solo, the bot has a personality, and the day-to-day tasks are one click.
