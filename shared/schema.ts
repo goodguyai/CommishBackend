@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, jsonb, integer, real, pgEnum, uuid, boolean, customType } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, jsonb, integer, real, pgEnum, uuid, boolean, customType, unique } from "drizzle-orm/pg-core";
 
 // Custom vector type for pgvector extension
 const vector = (dimension: number = 1536) => customType<{ data: number[]; driverData: string }>({
@@ -77,11 +77,15 @@ export const members = pgTable("members", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   leagueId: uuid("league_id").references(() => leagues.id).notNull(),
   discordUserId: text("discord_user_id").notNull(),
-  role: memberRoleEnum("role").notNull(),
+  role: memberRoleEnum("role").default("MANAGER"),
   sleeperOwnerId: text("sleeper_owner_id"),
   sleeperTeamName: text("sleeper_team_name"),
+  discordUsername: text("discord_username"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => ({
+  uniqLeagueSleeper: unique("uq_members_league_sleeper").on(table.leagueId, table.sleeperOwnerId),
+  uniqLeagueDiscord: unique("uq_members_league_discord").on(table.leagueId, table.discordUserId),
+}));
 
 export const documents = pgTable("documents", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -175,6 +179,8 @@ export const pendingSetup = pgTable("pending_setup", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Note: owner_mappings is now a view on members table (see migration 0005)
+// Keeping this for backward compatibility with existing queries
 export const ownerMappings = pgTable("owner_mappings", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   leagueId: uuid("league_id").references(() => leagues.id).notNull(),
@@ -193,7 +199,55 @@ export const polls = pgTable("polls", {
   options: jsonb("options").notNull(), // Array of strings
   discordMessageId: text("discord_message_id"),
   createdBy: text("created_by").notNull(), // Discord user ID
+  anonymous: boolean("anonymous").default(true).notNull(),
+  status: text("status").default("open").notNull(), // 'open' | 'closed'
   expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const votes = pgTable("votes", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  pollId: uuid("poll_id").references(() => polls.id).notNull(),
+  voterId: text("voter_id").notNull(), // Discord user ID
+  choice: text("choice").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  uniqPollVoter: unique().on(table.pollId, table.voterId),
+}));
+
+export const reminders = pgTable("reminders", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  type: text("type").notNull(), // 'lineup_lock' | 'waivers' | 'trade_deadline' | 'bye_week' | 'custom'
+  cron: text("cron").notNull(),
+  timezone: text("timezone").default("UTC").notNull(),
+  enabled: boolean("enabled").default(true).notNull(),
+  lastFired: timestamp("last_fired"),
+  metadata: jsonb("metadata").default({}),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const sentimentLogs = pgTable("sentiment_logs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  channelId: text("channel_id").notNull(),
+  score: real("score").notNull(), // -1.0 to 1.0
+  windowStart: timestamp("window_start").notNull(),
+  windowEnd: timestamp("window_end").notNull(),
+  sampleSize: integer("sample_size").default(0).notNull(),
+  metadata: jsonb("metadata").default({}),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const tradeInsights = pgTable("trade_insights", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id).notNull(),
+  payload: jsonb("payload").notNull(),
+  fairness: real("fairness"),
+  rationale: text("rationale"),
+  projectionDelta: text("projection_delta"),
+  recommendation: text("recommendation"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -222,6 +276,7 @@ export const insertMemberSchema = createInsertSchema(members).pick({
   role: true,
   sleeperOwnerId: true,
   sleeperTeamName: true,
+  discordUsername: true,
 });
 
 export const insertDocumentSchema = createInsertSchema(documents).pick({
@@ -299,7 +354,43 @@ export const insertPollSchema = createInsertSchema(polls).pick({
   question: true,
   options: true,
   createdBy: true,
+  anonymous: true,
+  status: true,
   expiresAt: true,
+});
+
+export const insertVoteSchema = createInsertSchema(votes).pick({
+  pollId: true,
+  voterId: true,
+  choice: true,
+});
+
+export const insertReminderSchema = createInsertSchema(reminders).pick({
+  leagueId: true,
+  type: true,
+  cron: true,
+  timezone: true,
+  enabled: true,
+  metadata: true,
+});
+
+export const insertSentimentLogSchema = createInsertSchema(sentimentLogs).pick({
+  leagueId: true,
+  channelId: true,
+  score: true,
+  windowStart: true,
+  windowEnd: true,
+  sampleSize: true,
+  metadata: true,
+});
+
+export const insertTradeInsightSchema = createInsertSchema(tradeInsights).pick({
+  leagueId: true,
+  payload: true,
+  fairness: true,
+  rationale: true,
+  projectionDelta: true,
+  recommendation: true,
 });
 
 // Types
@@ -328,6 +419,14 @@ export type OwnerMapping = typeof ownerMappings.$inferSelect;
 export type InsertOwnerMapping = z.infer<typeof insertOwnerMappingSchema>;
 export type Poll = typeof polls.$inferSelect;
 export type InsertPoll = z.infer<typeof insertPollSchema>;
+export type Vote = typeof votes.$inferSelect;
+export type InsertVote = z.infer<typeof insertVoteSchema>;
+export type Reminder = typeof reminders.$inferSelect;
+export type InsertReminder = z.infer<typeof insertReminderSchema>;
+export type SentimentLog = typeof sentimentLogs.$inferSelect;
+export type InsertSentimentLog = z.infer<typeof insertSentimentLogSchema>;
+export type TradeInsight = typeof tradeInsights.$inferSelect;
+export type InsertTradeInsight = z.infer<typeof insertTradeInsightSchema>;
 
 // Keep legacy user schema for compatibility
 export const users = pgTable("users", {

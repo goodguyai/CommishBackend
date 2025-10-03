@@ -1,0 +1,237 @@
+🔥 love it — you’re about to hand the Agent a lot of power. Here’s the extra ammo I’d add to your prompt so it stays aligned, safe, and fast.
+
+Below are copy-paste blocks you can drop into your Replit message under your intro (“Great work so far…”) and the plan. They give the agent guardrails, a Do-Not-Touch list, acceptance checks, smoke tests, coding standards, and a mini-runbook so it can verify its own work.
+
+⸻
+
+1) Prime Directives (paste first)
+
+§Prime Directives
+1) Supabase is the ONLY database. Do not introduce Neon/Replit DB. Do not change schema by code — use SQL migrations only.
+2) Keep APP_BASE_URL=https://thecommish.replit.app. Never switch to localhost routes in code or links.
+3) API routes MUST return JSON; never serve HTML for /api/*.
+4) Preserve existing Discord security: raw body + signature verification for /api/discord/interactions.
+5) Read env ONLY via server/services/env.ts getters. No new direct process.env reads in routes.
+6) Keep vite guards that exclude /api/* from the catch-all. Do not remove or weaken them.
+7) Backward compatibility: do not break existing endpoints. If you add versions, use /api/v2/* and keep v1 working.
+8) Migrations must be idempotent (IF NOT EXISTS) and reversible when possible.
+9) Ship in vertical slices: migration → service → endpoints → UI → tests → smoke test → log summary.
+10) If anything conflicts, adapt to intent without breaking this section.
+
+
+⸻
+
+2) Do-Not-Touch / Must-Keep List
+
+Do-Not-Touch
+- server/vite.ts: keep /api/* guards in both dev and prod paths.
+- server/services/env.ts: single source of truth for config.
+- /api/discord/interactions: must continue to use express.raw and signature verification.
+- Existing migrations: do not modify historical files; add new numbered SQL migrations.
+
+Must-Keep
+- Supabase connection string with sslmode=require.
+- Cache headers: /api/* responses should include 'Cache-Control: no-store'.
+- Error envelope: { error: { code, message } } for failures.
+
+
+⸻
+
+3) Definition of Done (per issue / feature)
+
+Definition of Done
+- ✅ New SQL migration added under migrations/ with IF NOT EXISTS guards.
+- ✅ Service layer implemented in server/services/*.ts with types.
+- ✅ Routes added under /api/*; JSON only; input validated; 4xx/5xx use error envelope.
+- ✅ Unit or contract test (server/tests/*) for service + one happy-path route.
+- ✅ Smoke tests pass (see §Smoke Tests).
+- ✅ Docs updated (replit.md + OPENAPI chunk updated).
+- ✅ Logs show JSON result previews and timing for new endpoints.
+
+
+⸻
+
+4) Minimal OpenAPI spec (so Agent keeps routes consistent)
+
+# openapi.yaml (append or create if missing)
+openapi: 3.0.3
+info: { title: THE COMMISH API, version: 0.1.0 }
+servers: [{ url: https://thecommish.replit.app }]
+paths:
+  /api/leagues/{leagueId}:
+    get:
+      parameters: [{ name: leagueId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: OK } }
+    patch:
+      parameters: [{ name: leagueId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: OK } }
+  /api/polls:
+    post:
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: OK } }
+  /api/terminal/execute:
+    post:
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { leagueId: { type: string }, command: { type: string } }, required: [leagueId, command] } } } }
+      responses: { "200": { description: OK } }
+
+
+⸻
+
+5) Security & Rate-Limit Requirements
+
+Security Requirements
+- Admin endpoints must require X-Admin-Key header == env.app.adminKey.
+- Commissioner-only routes must validate Discord role membership via stored mapping.
+- Validate inputs with zod or a light schema; reject unknown fields.
+- Respect Discord limits: 5 requests/second per route. Add jittered retry (exponential backoff) and embed length clamp (<=4096 chars).
+- Return 429 for abusers; never block the whole app.
+
+
+⸻
+
+6) Observability & Logging
+
+Observability
+- Each request log: method, path, status, ms, and a 150-char JSON preview of response.
+- On error: include error.code and a short message (no secrets).
+- Add metrics counters: league_digests_posted, reminders_sent, rules_queries_answered.
+- Write critical events to events table (install_completed, rules_indexed, digest_posted, dispute_frozen, peace_of_mind_updated).
+
+
+⸻
+
+7) Performance Budgets
+
+Performance Budgets (p95 goals)
+- /api/health < 2.5s total (DB < 400ms; LLM not on critical path).
+- Any GET < 800ms from warm cache; POST < 1.5s unless LLM is required.
+- Indexing runs async; endpoint returns quickly with { accepted: true } and event emitted.
+
+
+⸻
+
+8) Data & Migrations Checklist (Supabase)
+
+Migrations Checklist
+- Include BEGIN/COMMIT.
+- Use IF NOT EXISTS for tables, types, indexes, extensions.
+- Default to schema public unless "extensions" schema is used for extensions.
+- After migration: run SELECT on pg_extension and critical tables; emit migration_applied event.
+
+Retention / PII
+- Do not store message bodies from Discord long-term. Keep messageId, channelId, authorId, summary, toxicity score, timestamp.
+- Allow per-league purge of sentiment data.
+
+
+⸻
+
+9) Feature Flags (so new stuff can be dark-launched)
+
+Feature Flags
+- Add leagues.feature_flags JSONB if missing (or keep existing).
+- Flags: autoMeme, vibesMonitor, tradeFairness, blindTools, creativeTrashTalk, deepStats.
+- All new behavior must check flag first. Default OFF for experimental features.
+
+
+⸻
+
+10) QA / Smoke Tests (Agent should run these after each chunk)
+
+# qa-smoke.sh (Agent: create this and run on each deploy)
+set -e
+B=https://thecommish.replit.app
+echo "1) Health"; curl -s -H 'Cache-Control: no-cache' $B/api/health | jq '.status,.services'
+echo "2) Events"; curl -s $B/api/events?limit=3 | jq '.[].type' | head -3
+echo "3) League (bad id -> JSON error)"; curl -s $B/api/leagues/not-a-uuid | jq '.error.code'
+echo "4) v2 League (cache bypass)"; curl -s $B/api/v2/leagues/not-a-uuid | jq '.error.code'
+echo "5) Poll (invalid -> JSON error)"; curl -s -X POST $B/api/polls -H 'Content-Type: application/json' -d '{}' | jq '.error.code'
+echo "6) Terminal dry run"; curl -s -X POST $B/api/terminal/execute -H 'Content-Type: application/json' -H "X-Admin-Key: $ADMIN_KEY" -d '{"leagueId":"not-a-uuid","command":"league status"}' | jq '.error.code'
+
+
+⸻
+
+11) Coding Standards (so the Agent keeps the repo consistent)
+
+Coding Standards
+- TypeScript strict mode on; no any unless isolated with TODO and reason.
+- Use small functions; one responsibility per function.
+- No new default exports; named exports only.
+- Lint + format: run eslint --fix and prettier on touched files.
+- Test names: should <do something> style; use vitest/jest if present.
+- Commit messages: feat:, fix:, chore:, refactor:, docs:, test:, perf:
+
+
+⸻
+
+12) Rollout / Backout
+
+Rollout
+- New features behind flags; leave flags OFF by default unless specified.
+- Add dashboard switches only after backend verified.
+
+Backout
+- If migration fails, do not partially apply. Abort and report.
+- Keep previous release runnable; do not remove working v1 routes.
+
+Cache / CDN
+- Send 'Cache-Control: no-store' for all /api/*.
+- For routes previously cached as HTML, keep /api/v2/* aliases until CDN TTLs are certainly expired.
+
+
+⸻
+
+13) “Board of 12” nudges (short advisory to keep Agent aligned)
+
+Advisory Nudges (keep in mind)
+- Commissioner pain (r/ffcommish): reminders, fairness, drama. Optimize for peace-of-mind, not “more features.”
+- Player engagement (r/fantasyfootball): highlights > walls of text. Keep digests punchy; add emojis/tone based on selected personality.
+- Platform parity: build on Sleeper first; abstract adapters for ESPN/Yahoo later.
+- Privacy: sentiment is useful but sensitive. Aggregate; avoid storing raw drama. Provide opt-out.
+- Reliability beats cleverness: fail softly, retry intelligently, log everything.
+
+
+⸻
+
+14) Final action block for the Agent (what to do right now)
+
+Execution Order (do in this session)
+1) Ensure vite /api/* guards and server order remain intact (no regressions).
+2) Add/verify migrations for Phase 1 (owner mapping table if missing, reminders config, events types), idempotent.
+3) Implement service + endpoints for:
+   - Owner Mapping (GET/POST/PATCH /api/leagues/:id/owners)
+   - Reminder Packs (GET/PUT /api/leagues/:id/reminders)
+4) Add Dashboard UI: Owner Mapper (drag + drop), Reminders toggles (lineup, waivers, trade deadline, bye weeks), Do-Not-Disturb window.
+5) Polish Rules Q&A responses: include citation snippet + section number + “View rule” link (no schema changes — reuse docs/embeddings).
+6) Add basic tests + run §Smoke Tests; paste outputs into a new QA_RESULTS.md.
+7) Post a concise changelog to replit.md: what changed, endpoints, feature flags touched, how to use.
+
+If a step fails, STOP, print the failing command and the observed error JSON, and propose the minimal diff to fix. Do not proceed until smoke tests pass.
+
+
+⸻
+
+Tiny extras (optional but nice)
+	•	.github/workflows/ci.yml with pnpm install, pnpm lint, pnpm test, ./qa-smoke.sh.
+	•	CODEOWNERS: * @goodguyai.
+	•	CONTRIBUTING.md: short “how we ship vertical slices.”
+	•	SECURITY.md: how to report vulns; never log secrets.
+
+⸻
+
+TL;DR — what to add to your Replit prompt
+	•	§Prime Directives
+	•	Do-Not-Touch / Must-Keep
+	•	Definition of Done
+	•	OpenAPI stub
+	•	Security + rate limits
+	•	Observability + budgets
+	•	Migrations checklist (Supabase)
+	•	Feature flags
+	•	Smoke tests script
+	•	Coding standards
+	•	Rollout/backout + CDN notes
+	•	Advisory nudges
+	•	Execution order block
+
+This gives the agent the context + rails + self-tests it needs to build Phase 1 cleanly, without drifting or breaking supabase/vite/discord invariants. If you want, I can also generate the exact SQL for Phase-1 tables (owner mapping + reminders) next so it has migrations ready to go.

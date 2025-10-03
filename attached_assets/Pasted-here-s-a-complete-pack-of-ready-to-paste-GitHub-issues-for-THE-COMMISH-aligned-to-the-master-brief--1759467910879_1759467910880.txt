@@ -1,0 +1,477 @@
+here’s a complete pack of ready-to-paste GitHub issues for THE COMMISH aligned to the master brief. I grouped them by phase, added labels, dependencies, acceptance criteria, and copy blocks you can drop straight into GitHub (or use with gh issue create).
+
+Tip: create Labels first (below), then paste issues.
+
+⸻
+
+🏷️ Labels (create these first)
+	•	phase:1-hygiene
+	•	phase:2-disputes
+	•	phase:3-engagement
+	•	phase:4-superpowers
+	•	area:api
+	•	area:frontend
+	•	area:services
+	•	area:db
+	•	area:discord
+	•	area:scheduler
+	•	area:rag
+	•	area:infra
+	•	type:feature
+	•	type:bug
+	•	type:docs
+	•	good-first-task
+	•	prio:P0
+	•	prio:P1
+	•	prio:P2
+
+⸻
+
+📋 Milestones
+	•	M1 – Hygiene & Peace-of-Mind (Phase 1)
+	•	M2 – Disputes & Vibes (Phase 2)
+	•	M3 – Engagement Engine (Phase 3)
+	•	M4 – Commish Superpowers (Phase 4)
+	•	M0 – Platform & Observability (Cross-cut)
+
+⸻
+
+🗺️ Project board
+
+Project: THE COMMISH Roadmap
+Columns: Backlog → In Progress → In Review → Done
+
+⸻
+
+📦 Cross-cut (M0)
+
+0.1 — Add migration 0005_co_commish.sql
+
+Title: Migrations: add Phase-1/2 base tables and columns
+Labels: area:db, type:feature, prio:P0
+Milestone: M1 – Hygiene & Peace-of-Mind
+Description:
+Add idempotent migration for:
+	•	leagues.feature_flags JSONB default '{}'
+	•	leagues.personality TEXT default 'neutral'
+	•	members (discord ↔ sleeper mapping, unique constraints)
+	•	reminders (type/cron/timezone/enabled)
+	•	polls + votes
+	•	sentiment_logs
+	•	trade_insights
+	•	ensure vector extension
+
+Acceptance:
+	•	Migration applies cleanly in Supabase
+	•	Tables visible in dashboard
+	•	npm run db:push succeeds without diffs
+
+⸻
+
+0.2 — API never returns HTML (guardrails)
+
+Title: Infra: guarantee /api/* never serves HTML
+Labels: area:infra, type:bug, prio:P0
+Milestone: M1
+Description:
+Confirm server/vite.ts early guard and server/index.ts ordering. Add /api/v2/* aliases until caches expire. Add JSON 404 for /api/*.
+
+Acceptance:
+	•	curl -s $BASE/api/health returns JSON
+	•	curl -s $BASE/api/v2/leagues/<id> returns JSON errors (no HTML)
+	•	Logs show request, status, ms
+
+⸻
+
+0.3 — Observability: structured logs & health metrics
+
+Title: Observability: structured request logs + enhanced /api/health
+Labels: area:infra, type:feature, prio:P1
+Milestone: M1
+Description:
+	•	Log: method, path, status, duration, 200-char preview
+	•	/api/health includes: database_latency, sleeper_latency, discord_ok, rag_ok, scheduler_loaded, silence_active_now
+Acceptance: Health shows fields; logs visible on each API call.
+
+⸻
+
+0.4 — QA harness
+
+Title: QA: add repo-root qa.sh + README quickstart
+Labels: type:docs, area:infra, prio:P1
+Milestone: M1
+Description:
+Provide qa.sh with calls to /api/health, /api/v2/leagues/:id, /api/polls, /api/rag/answer/:leagueId. Update README.
+
+Acceptance: Script runs locally and on Replit shell; all JSON.
+
+⸻
+
+🟩 Phase 1 — Hygiene & Peace-of-Mind (M1)
+
+1.1 — Owner mapping (API + DB)
+
+Title: Owner Mapping: API to list and map Discord users ↔ Sleeper owners
+Labels: phase:1-hygiene, area:api, area:db, type:feature, prio:P0
+Milestone: M1
+Description:
+Endpoints:
+	•	GET /api/members?leagueId=... -> { mapped[], unmapped[] }
+	•	POST /api/members/map { leagueId, sleeperOwnerId, discordUserId }
+
+Rules:
+	•	upsert by (league_id, sleeper_owner_id)
+	•	unique (league_id, discord_user_id)
+
+Acceptance:
+	•	Can map 2+ owners; constraint errors handled as JSON
+	•	Events row logged on mapping
+
+Depends on: 0.1
+
+⸻
+
+1.2 — Owner mapping (Frontend drag/drop)
+
+Title: Owner Mapping: drag/drop UI in Dashboard
+Labels: phase:1-hygiene, area:frontend, type:feature, prio:P1
+Milestone: M1
+Description:
+Panel listing Sleeper teams (left) and Discord users (right). Drag to map; uses 1.1 endpoints.
+
+Acceptance:
+	•	Mapped state persists + reloads
+	•	Shows “@mention ready” badge when mapped
+
+Depends on: 1.1
+
+⸻
+
+1.3 — League Settings: feature flags + personality
+
+Title: League Settings API: read/update feature flags & personality
+Labels: phase:1-hygiene, area:api, area:db, type:feature, prio:P0
+Milestone: M1
+Description:
+Endpoints:
+	•	GET /api/leagues/:id/settings
+	•	PATCH /api/leagues/:id/settings (partial merge with validation)
+
+JSON shape:
+
+{
+  "personality":"neutral|sassy|batman|yoda|commish",
+  "featureFlags":{
+    "reminders":{"lineupLock":true,"waivers":true,"tradeDeadline":true,"byeWeeks":true},
+    "memeMode":{"enabled":false,"sfw":true,"threshold":40},
+    "silenceWindows":[{"day":"SUN","from":"13:00","to":"16:30","tz":"America/New_York"}]
+  }
+}
+
+Acceptance:
+	•	PATCH persists partial updates
+	•	Invalid shapes return 400 with details
+
+Depends on: 0.1
+
+⸻
+
+1.4 — League Settings UI (toggles + silence windows)
+
+Title: League Settings UI: reminder toggles, silence windows, meme mode
+Labels: phase:1-hygiene, area:frontend, type:feature, prio:P1
+Milestone: M1
+Description:
+	•	Toggles for four reminder packs
+	•	Day/time pickers for silence windows
+	•	Meme mode toggle + SFW + threshold slider
+	•	Personality selector (neutral/sassy/batman/yoda/commish)
+
+Acceptance:
+	•	All states roundtrip via 1.3 API
+	•	UI prevents overlap/invalid time ranges
+
+Depends on: 1.3
+
+⸻
+
+1.5 — Reminder scheduler + silence enforcement
+
+Title: Scheduler: lineup/waiver/trade/bye reminders, respect silence windows
+Labels: phase:1-hygiene, area:scheduler, area:services, type:feature, prio:P0
+Milestone: M1
+Description:
+	•	Load reminders from leagues.feature_flags.reminders + reminders table
+	•	Schedule per league timezone
+	•	If scheduled time falls in silenceWindows, queue and post after window
+	•	Log events on send
+
+Acceptance:
+	•	Can toggle a reminder on/off and see effect
+	•	Test silence window: post delayed correctly
+
+Depends on: 1.3, 0.1
+
+⸻
+
+1.6 — Rules Q&A (RAG) polish: snippets + citations
+
+Title: RAG: include section, quote, sources + “Copy to thread”
+Labels: phase:1-hygiene, area:rag, area:discord, type:feature, prio:P1
+Milestone: M1
+Description:
+	•	POST /api/rag/answer/:leagueId { query } -> { answer, quote, section, title, confidence, sources[] }
+	•	Dashboard button to “Copy to thread”, which posts exact citation via bot
+
+Acceptance:
+	•	Answers show quote + section
+	•	Button posts deadpan citation into selected channel
+
+Depends on: existing RAG service
+
+⸻
+
+1.7 — Peace-of-Mind score card
+
+Title: Dashboard: Peace-of-Mind score (league hygiene)
+Labels: phase:1-hygiene, area:frontend, area:services, prio:P2
+Milestone: M1
+Description:
+Calculate score combining: #lineups not set, waivers today status, pending trades, reminders configured.
+Acceptance: Score updates after configuration changes; shows trend arrow.
+
+Depends on: 1.3, 1.5
+
+⸻
+
+🟨 Phase 2 — Disputes & Vibes (M2)
+
+2.1 — Trade Fairness service (MVP)
+
+Title: Trades: fairness snapshot service + API
+Labels: phase:2-disputes, area:services, area:api, prio:P0
+Milestone: M2
+Description:
+	•	services/fairness.ts → computeFairness({ leagueId, offer })
+	•	Blend: projections, positional scarcity, league norms (past trades), roster needs
+	•	POST /api/trades/fairness → { fairness:0..100, rationale, comps[] } and log to trade_insights
+
+Acceptance:
+	•	Returns deterministic snapshot for same input
+	•	Writes trade_insights row
+
+Depends on: 0.1
+
+⸻
+
+2.2 — Trades UI: fairness pill + rationale popover
+
+Title: Trades UI: fairness % pill with “Why?” popover
+Labels: phase:2-disputes, area:frontend, prio:P1
+Milestone: M2
+Description:
+	•	Show % pill on proposed/pending trades
+	•	Popover shows rationale and 1–2 comps
+Acceptance: Visible on desktop & mobile; aria accessible.
+
+Depends on: 2.1
+
+⸻
+
+2.3 — Vibes Monitor (sentiment logs + DM alerts)
+
+Title: Moderation: Vibes Monitor + DM Commish on spikes
+Labels: phase:2-disputes, area:services, area:discord, area:db, prio:P0
+Milestone: M2
+Description:
+	•	services/moderation.ts basic sentiment/toxicity score
+	•	Aggregate per channel/time window → sentiment_logs
+	•	On threshold, DM commish with quick actions: Freeze 15m, Clarify rule, Start blind poll
+
+Acceptance:
+	•	Sentiment rows written
+	•	DM includes action buttons/links that call endpoints
+
+Depends on: 0.1, 1.6
+
+⸻
+
+2.4 — Freeze & Clarify actions
+
+Title: Moderation: /freeze and /clarify endpoints + slash commands
+Labels: phase:2-disputes, area:discord, area:api, prio:P1
+Milestone: M2
+Description:
+	•	POST /api/mod/freeze { leagueId, channelId, minutes } → bot posts polite pause; logs event
+	•	POST /api/mod/clarify { leagueId, channelId, ruleQuery } → RAG citation posted
+	•	Slash commands available to commish only
+
+Acceptance: Commands visible; actions work; events logged.
+
+Depends on: 2.3, 1.6
+
+⸻
+
+2.5 — Blind/anonymous polls
+
+Title: Polls: create/vote/close + anonymous mode
+Labels: phase:2-disputes, area:api, area:discord, area:db, prio:P1
+Milestone: M2
+Description:
+	•	POST /api/polls, POST /api/polls/:id/vote, POST /api/polls/:id/close
+	•	Anonymous votes (store voter_id but never display)
+	•	Discord embed with live tallies
+
+Acceptance:
+	•	Create a poll from UI or command
+	•	Vote once per user; closing works
+
+Depends on: 0.1
+
+⸻
+
+🟦 Phase 3 — Engagement Engine (M3)
+
+3.1 — Weekly Highlights/Reel composer
+
+Title: Engagement: compose 3 weekly highlights + optional image card
+Labels: phase:3-engagement, area:services, area:discord, prio:P1
+Milestone: M3
+Description:
+	•	Detect: comeback swing, bench tragedy, blowout
+	•	Compose headline text (tone via personality)
+	•	Optional: simple image card (Canvas/SVG) hosted; keep MVP text only
+
+Acceptance:
+	•	/digest week N includes highlights block
+	•	Post to Discord renders cleanly
+
+Depends on: digest service
+
+⸻
+
+3.2 — Rivalry Builder
+
+Title: Engagement: rivalry memory (/rivalry @user)
+Labels: phase:3-engagement, area:services, area:frontend, prio:P2
+Milestone: M3
+Description:
+Track H2H record lifetime + season; /rivalry returns concise line (“You lead 5–3 lifetime; 2–1 this season. Rubber match!”).
+Acceptance: Accurate for sample data; message under 180 chars.
+
+⸻
+
+3.3 — Trash-talk writer + Meme mode guardrails
+
+Title: Personality: trash-talk writer + meme thresholds (SFW)
+Labels: phase:3-engagement, area:services, area:discord, prio:P1
+Milestone: M3
+Description:
+	•	Personality pack adapter for all outbound messages
+	•	Meme mode only fires when enabled + threshold hit and SFW
+
+Acceptance:
+	•	Toggle in settings governs behavior
+	•	No media posted when SFW on
+
+Depends on: 1.3
+
+⸻
+
+3.4 — Weekly Awards
+
+Title: Engagement: weekly awards (Sleepyhead, Top Scorer, Bad Beat, etc.)
+Labels: phase:3-engagement, area:services, prio:P2
+Milestone: M3
+Description:
+Compute simple awards from matchup stats and post card.
+
+Acceptance: Awards list posted with short rationale lines.
+
+⸻
+
+🟧 Phase 4 — Commish Superpowers (M4)
+
+4.1 — Terminal verbs (server)
+
+Title: Terminal: implement whitelisted verbs (digest, reindex, simulate trade, set waiver, export rules)
+Labels: phase:4-superpowers, area:api, area:services, prio:P1
+Milestone: M4
+Description:
+POST /api/terminal/run { leagueId, command } → parse + dispatch to safe verbs. Gate by X-Admin-Key or commish role.
+
+Acceptance:
+	•	Each verb executes; errors friendly and structured
+	•	Events logged
+
+⸻
+
+4.2 — Terminal UI (client)
+
+Title: Terminal UI: command line with history & examples
+Labels: phase:4-superpowers, area:frontend, prio:P2
+Milestone: M4
+Description:
+Input with history, examples, and result pane.
+
+Acceptance: Round-trip works for at least 3 verbs.
+
+⸻
+
+4.3 — Deep Stats Dashboard
+
+Title: Analytics: participation, time-to-respond, nags avoided
+Labels: phase:4-superpowers, area:frontend, area:services, prio:P2
+Milestone: M4
+Description:
+Graph metrics over time; CSV export.
+
+Acceptance: Renders for demo league; export produces valid CSV.
+
+⸻
+
+4.4 — Audit Log + Undo
+
+Title: Safety: undo token for bot actions
+Labels: phase:4-superpowers, area:services, area:api, prio:P2
+Milestone: M4
+Description:
+Every bot action writes events with undo_token. Admin endpoint can soft-undo (e.g., delete bot message, close poll).
+
+Acceptance: Undo works for at least polls and test posts.
+
+⸻
+
+🧰 Copy blocks for GitHub CLI (optional)
+
+Example (adjust title/body/labels as you paste):
+
+gh issue create \
+  --title "Owner Mapping: API to list and map Discord users ↔ Sleeper owners" \
+  --body-file issue-1.1.md \
+  --label "phase:1-hygiene,area:api,area:db,type:feature,prio:P0" \
+  --milestone "M1 – Hygiene & Peace-of-Mind" \
+  --project "THE COMMISH Roadmap"
+
+
+⸻
+
+🔗 Dependencies summary
+	•	0.1 (migrations) → blocks 1.1, 1.3, 2.1, 2.3, 2.5
+	•	1.3 (settings API) → blocks 1.4, 1.5, 3.3
+	•	2.1 (fairness svc) → blocks 2.2
+	•	2.3 (vibes monitor) + 1.6 (RAG) → required for 2.4
+	•	digest svc present → used by 3.1, 4.1
+	•	terminal API (4.1) → used by 4.2
+
+⸻
+
+✅ Global acceptance gate before each Milestone closes
+	•	All new endpoints respond JSON (no HTML) and are documented in README
+	•	/api/health shows status:“ok” in staging with scheduler loaded
+	•	No direct process.env.* in routes/services (env.ts only)
+	•	Migrations are idempotent and visible in Supabase UI
+	•	Discord rate-limit safe (embeds ≤4096 chars; retries with backoff)
+	•	QA script (qa.sh) passes end-to-end
+
+⸻

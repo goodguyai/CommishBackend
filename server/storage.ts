@@ -7,7 +7,9 @@ import type {
   Member, InsertMember, Document, InsertDocument, Rule, InsertRule,
   Fact, InsertFact, Deadline, InsertDeadline, Event, InsertEvent,
   DiscordInteraction, PendingSetup, InsertPendingSetup,
-  OwnerMapping, InsertOwnerMapping, Poll, InsertPoll
+  OwnerMapping, InsertOwnerMapping, Poll, InsertPoll,
+  Vote, InsertVote, Reminder, InsertReminder,
+  SentimentLog, InsertSentimentLog, TradeInsight, InsertTradeInsight
 } from "@shared/schema";
 import { EmbeddingResult } from "./services/rag";
 import { env } from "./services/env";
@@ -111,6 +113,30 @@ export interface IStorage {
   createPoll(poll: InsertPoll): Promise<string>;
   updatePoll(id: string, updates: Partial<Poll>): Promise<void>;
   deletePoll(id: string): Promise<void>;
+
+  // Member/Owner Mapping methods (Phase 1)
+  getMemberByDiscordId(leagueId: string, discordUserId: string): Promise<Member | undefined>;
+  createOrUpdateMember(data: InsertMember): Promise<string>;
+
+  // Reminder methods (Phase 1)
+  getReminders(leagueId: string): Promise<Reminder[]>;
+  createReminder(data: InsertReminder): Promise<string>;
+  updateReminder(id: string, data: Partial<InsertReminder>): Promise<void>;
+  deleteReminder(id: string): Promise<void>;
+
+  // Vote methods (Phase 1)
+  createVote(data: InsertVote): Promise<string>;
+  getVotes(pollId: string): Promise<Vote[]>;
+  getVoteCounts(pollId: string): Promise<{ choice: string; count: number }[]>;
+  updatePollStatus(pollId: string, status: string): Promise<void>;
+
+  // Sentiment methods (Phase 1)
+  createSentimentLog(data: InsertSentimentLog): Promise<string>;
+  getSentimentLogs(leagueId: string, since?: Date): Promise<SentimentLog[]>;
+
+  // Trade Insight methods (Phase 1)
+  createTradeInsight(data: InsertTradeInsight): Promise<string>;
+  getTradeInsights(leagueId: string, limit?: number): Promise<TradeInsight[]>;
 
   // Migration methods
   runRawSQL(query: string): Promise<any>;
@@ -628,6 +654,143 @@ export class DatabaseStorage implements IStorage {
     await this.db.delete(schema.polls).where(eq(schema.polls.id, id));
   }
 
+  // Member/Owner Mapping methods (Phase 1)
+  async getMemberByDiscordId(leagueId: string, discordUserId: string): Promise<Member | undefined> {
+    return this.getMember(leagueId, discordUserId);
+  }
+
+  async createOrUpdateMember(data: InsertMember): Promise<string> {
+    try {
+      const result = await this.db.insert(schema.members)
+        .values(data)
+        .onConflictDoUpdate({
+          target: [schema.members.leagueId, schema.members.discordUserId],
+          set: {
+            role: data.role,
+            sleeperOwnerId: data.sleeperOwnerId,
+            sleeperTeamName: data.sleeperTeamName,
+            discordUsername: data.discordUsername,
+          }
+        })
+        .returning({ id: schema.members.id });
+      return result[0].id;
+    } catch (error) {
+      console.error('Error in createOrUpdateMember:', error);
+      throw error;
+    }
+  }
+
+  // Reminder methods (Phase 1)
+  async getReminders(leagueId: string): Promise<Reminder[]> {
+    return this.db.select()
+      .from(schema.reminders)
+      .where(eq(schema.reminders.leagueId, leagueId))
+      .orderBy(desc(schema.reminders.createdAt));
+  }
+
+  async createReminder(data: InsertReminder): Promise<string> {
+    const result = await this.db.insert(schema.reminders)
+      .values(data)
+      .returning({ id: schema.reminders.id });
+    return result[0].id;
+  }
+
+  async updateReminder(id: string, data: Partial<InsertReminder>): Promise<void> {
+    await this.db.update(schema.reminders)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.reminders.id, id));
+  }
+
+  async deleteReminder(id: string): Promise<void> {
+    await this.db.delete(schema.reminders).where(eq(schema.reminders.id, id));
+  }
+
+  // Vote methods (Phase 1)
+  async createVote(data: InsertVote): Promise<string> {
+    try {
+      const result = await this.db.insert(schema.votes)
+        .values(data)
+        .onConflictDoUpdate({
+          target: [schema.votes.pollId, schema.votes.voterId],
+          set: {
+            choice: data.choice,
+          }
+        })
+        .returning({ id: schema.votes.id });
+      return result[0].id;
+    } catch (error) {
+      console.error('Error in createVote:', error);
+      throw error;
+    }
+  }
+
+  async getVotes(pollId: string): Promise<Vote[]> {
+    return this.db.select()
+      .from(schema.votes)
+      .where(eq(schema.votes.pollId, pollId))
+      .orderBy(desc(schema.votes.createdAt));
+  }
+
+  async getVoteCounts(pollId: string): Promise<{ choice: string; count: number }[]> {
+    const results = await this.db.execute(sql`
+      SELECT choice, COUNT(*)::int as count
+      FROM ${schema.votes}
+      WHERE poll_id = ${pollId}
+      GROUP BY choice
+      ORDER BY count DESC
+    `);
+    return (results as unknown as any[]).map(row => ({
+      choice: row.choice,
+      count: row.count
+    }));
+  }
+
+  async updatePollStatus(pollId: string, status: string): Promise<void> {
+    await this.db.update(schema.polls)
+      .set({ status })
+      .where(eq(schema.polls.id, pollId));
+  }
+
+  // Sentiment methods (Phase 1)
+  async createSentimentLog(data: InsertSentimentLog): Promise<string> {
+    const result = await this.db.insert(schema.sentimentLogs)
+      .values(data)
+      .returning({ id: schema.sentimentLogs.id });
+    return result[0].id;
+  }
+
+  async getSentimentLogs(leagueId: string, since?: Date): Promise<SentimentLog[]> {
+    if (since) {
+      return this.db.select()
+        .from(schema.sentimentLogs)
+        .where(and(
+          eq(schema.sentimentLogs.leagueId, leagueId),
+          sql`${schema.sentimentLogs.createdAt} >= ${since}`
+        ))
+        .orderBy(desc(schema.sentimentLogs.createdAt));
+    }
+    return this.db.select()
+      .from(schema.sentimentLogs)
+      .where(eq(schema.sentimentLogs.leagueId, leagueId))
+      .orderBy(desc(schema.sentimentLogs.createdAt));
+  }
+
+  // Trade Insight methods (Phase 1)
+  async createTradeInsight(data: InsertTradeInsight): Promise<string> {
+    const result = await this.db.insert(schema.tradeInsights)
+      .values(data)
+      .returning({ id: schema.tradeInsights.id });
+    return result[0].id;
+  }
+
+  async getTradeInsights(leagueId: string, limit: number = 10): Promise<TradeInsight[]> {
+    return this.db.select()
+      .from(schema.tradeInsights)
+      .where(eq(schema.tradeInsights.leagueId, leagueId))
+      .orderBy(desc(schema.tradeInsights.createdAt))
+      .limit(limit);
+  }
+
   // Migration methods implementation
   async runRawSQL(query: string): Promise<any> {
     return this.db.execute(sql.raw(query));
@@ -650,6 +813,10 @@ export class MemStorage implements IStorage {
   private deadlines: Map<string, Deadline> = new Map();
   private events: Map<string, Event> = new Map();
   private ownerMappings: Map<string, OwnerMapping> = new Map();
+  private reminders: Map<string, Reminder> = new Map();
+  private votes: Map<string, Vote> = new Map();
+  private sentimentLogs: Map<string, SentimentLog> = new Map();
+  private tradeInsights: Map<string, TradeInsight> = new Map();
 
   // Helper to generate IDs
   private generateId(): string {
@@ -747,9 +914,11 @@ export class MemStorage implements IStorage {
     const newMember: Member = { 
       ...member, 
       id, 
+      role: member.role ?? null,
       createdAt: new Date(),
       sleeperOwnerId: member.sleeperOwnerId ?? null,
-      sleeperTeamName: member.sleeperTeamName ?? null
+      sleeperTeamName: member.sleeperTeamName ?? null,
+      discordUsername: member.discordUsername ?? null
     };
     this.members.set(id, newMember);
     return id;
@@ -1052,6 +1221,8 @@ export class MemStorage implements IStorage {
     const newPoll: Poll = {
       id,
       ...poll,
+      status: poll.status ?? "open",
+      anonymous: poll.anonymous ?? true,
       discordMessageId: null,
       expiresAt: poll.expiresAt || null,
       createdAt: new Date(),
@@ -1069,6 +1240,150 @@ export class MemStorage implements IStorage {
 
   async deletePoll(id: string): Promise<void> {
     this.polls.delete(id);
+  }
+
+  // Member/Owner Mapping methods (Phase 1)
+  async getMemberByDiscordId(leagueId: string, discordUserId: string): Promise<Member | undefined> {
+    return this.getMember(leagueId, discordUserId);
+  }
+
+  async createOrUpdateMember(data: InsertMember): Promise<string> {
+    const existing = await this.getMember(data.leagueId, data.discordUserId);
+    if (existing) {
+      Object.assign(existing, data);
+      return existing.id;
+    } else {
+      return await this.createMember(data);
+    }
+  }
+
+  // Reminder methods (Phase 1)
+  async getReminders(leagueId: string): Promise<Reminder[]> {
+    return Array.from(this.reminders.values())
+      .filter(r => r.leagueId === leagueId)
+      .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
+  }
+
+  async createReminder(data: InsertReminder): Promise<string> {
+    const id = this.generateId();
+    const newReminder: Reminder = {
+      id,
+      ...data,
+      timezone: data.timezone ?? "UTC",
+      enabled: data.enabled ?? true,
+      metadata: data.metadata ?? {},
+      lastFired: null,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    this.reminders.set(id, newReminder);
+    return id;
+  }
+
+  async updateReminder(id: string, data: Partial<InsertReminder>): Promise<void> {
+    const existing = this.reminders.get(id);
+    if (existing) {
+      Object.assign(existing, data, { updatedAt: new Date() });
+    }
+  }
+
+  async deleteReminder(id: string): Promise<void> {
+    this.reminders.delete(id);
+  }
+
+  // Vote methods (Phase 1)
+  async createVote(data: InsertVote): Promise<string> {
+    const existing = Array.from(this.votes.values())
+      .find(v => v.pollId === data.pollId && v.voterId === data.voterId);
+    
+    if (existing) {
+      existing.choice = data.choice;
+      return existing.id;
+    }
+
+    const id = this.generateId();
+    const newVote: Vote = {
+      id,
+      ...data,
+      createdAt: new Date()
+    };
+    this.votes.set(id, newVote);
+    return id;
+  }
+
+  async getVotes(pollId: string): Promise<Vote[]> {
+    return Array.from(this.votes.values())
+      .filter(v => v.pollId === pollId)
+      .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
+  }
+
+  async getVoteCounts(pollId: string): Promise<{ choice: string; count: number }[]> {
+    const votes = await this.getVotes(pollId);
+    const counts = new Map<string, number>();
+    
+    votes.forEach(vote => {
+      const current = counts.get(vote.choice) || 0;
+      counts.set(vote.choice, current + 1);
+    });
+
+    return Array.from(counts.entries())
+      .map(([choice, count]) => ({ choice, count }))
+      .sort((a, b) => b.count - a.count);
+  }
+
+  async updatePollStatus(pollId: string, status: string): Promise<void> {
+    const poll = this.polls.get(pollId);
+    if (poll) {
+      poll.status = status;
+    }
+  }
+
+  // Sentiment methods (Phase 1)
+  async createSentimentLog(data: InsertSentimentLog): Promise<string> {
+    const id = this.generateId();
+    const newLog: SentimentLog = {
+      id,
+      ...data,
+      sampleSize: data.sampleSize ?? 0,
+      metadata: data.metadata ?? {},
+      createdAt: new Date()
+    };
+    this.sentimentLogs.set(id, newLog);
+    return id;
+  }
+
+  async getSentimentLogs(leagueId: string, since?: Date): Promise<SentimentLog[]> {
+    let logs = Array.from(this.sentimentLogs.values())
+      .filter(log => log.leagueId === leagueId);
+    
+    if (since) {
+      logs = logs.filter(log => log.createdAt && log.createdAt >= since);
+    }
+
+    return logs.sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
+  }
+
+  // Trade Insight methods (Phase 1)
+  async createTradeInsight(data: InsertTradeInsight): Promise<string> {
+    const id = this.generateId();
+    const newInsight: TradeInsight = {
+      id,
+      ...data,
+      fairness: data.fairness ?? null,
+      rationale: data.rationale ?? null,
+      projectionDelta: data.projectionDelta ?? null,
+      recommendation: data.recommendation ?? null,
+      createdAt: new Date()
+    };
+    this.tradeInsights.set(id, newInsight);
+    return id;
+  }
+
+  async getTradeInsights(leagueId: string, limit: number = 10): Promise<TradeInsight[]> {
+    return Array.from(this.tradeInsights.values())
+      .filter(insight => insight.leagueId === leagueId)
+      .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0))
+      .slice(0, limit);
   }
 
   // Migration methods implementation (no-op for in-memory storage)

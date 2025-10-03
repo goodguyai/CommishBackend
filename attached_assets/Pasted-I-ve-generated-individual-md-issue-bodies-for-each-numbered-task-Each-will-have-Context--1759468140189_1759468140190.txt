@@ -1,0 +1,655 @@
+I’ve generated individual .md issue bodies for each numbered task. Each will have:
+	•	✅ Context
+	•	✅ User story
+	•	✅ Acceptance checklist
+	•	✅ Dependencies / notes
+
+You can save these as issue-<id>.md and use them with GitHub CLI or paste directly into GitHub.
+
+⸻
+
+📂 /issues
+
+⸻
+
+issue-0.1.md — Migration baseline
+
+# Migrations: add Phase-1/2 base tables and columns
+
+## Context
+To support Phase 1 (owner mapping, reminders, league settings) and Phase 2 (disputes/vibes), we need new schema elements in Supabase.
+
+## User Story
+As a developer  
+I want a single idempotent migration  
+So that the database always reflects the schema needed for the Commish features.
+
+## Acceptance
+- Migration file: `migrations/0005_co_commish.sql`
+- Adds/ensures:
+  - `leagues.feature_flags JSONB default '{}'`
+  - `leagues.personality TEXT default 'neutral'`
+  - `members` (discord ↔ sleeper mapping, unique constraints)
+  - `reminders` (type, cron, timezone, enabled)
+  - `polls` + `votes`
+  - `sentiment_logs`
+  - `trade_insights`
+  - `pgvector` + `pgcrypto` extensions
+- Idempotent: safe to run multiple times
+- Applies cleanly in Supabase; visible in dashboard
+
+## Dependencies
+None (foundation task).
+
+
+⸻
+
+issue-0.2.md — API guardrails
+
+# Infra: guarantee `/api/*` never serves HTML
+
+## Context
+CDN/Vite middleware previously intercepted `/api/*` routes, returning HTML instead of JSON. This undermined reliability.
+
+## User Story
+As a league commissioner  
+I want `/api/*` to always return structured JSON responses  
+So that bot features and dashboard UIs never break.
+
+## Acceptance
+- `vite.ts` guard for `/api/*`
+- `server/index.ts` mounts API routes before vite middleware
+- JSON 404 handler for unmatched `/api/*`
+- Temporary `/api/v2/*` aliases created
+- `curl` tests confirm JSON on `/api/v2/leagues/:id` and `/api/v2/polls`
+
+## Dependencies
+Migration baseline (0.1) for full test coverage.
+
+
+⸻
+
+issue-1.1.md — Owner mapping API
+
+# Owner Mapping: API to list and map Discord users ↔ Sleeper owners
+
+## Context
+Commissioners need a way to map Sleeper team owners to Discord users for mentions, reminders, and tracking.
+
+## User Story
+As a commissioner  
+I want to map Sleeper owners to Discord handles  
+So that the bot can @mention correct managers for reminders and trades.
+
+## Acceptance
+- Endpoints:
+  - `GET /api/members?leagueId=...` → `{ mapped[], unmapped[] }`
+  - `POST /api/members/map` → body `{ leagueId, sleeperOwnerId, discordUserId }`
+- Upsert by `(league_id, sleeper_owner_id)`
+- Unique `(league_id, discord_user_id)` constraint
+- Errors return JSON with code/message
+- Event row logged when mapping created/updated
+
+## Dependencies
+- Migration baseline (0.1)
+
+
+⸻
+
+issue-1.2.md — Owner mapping UI
+
+# Owner Mapping: drag/drop UI in Dashboard
+
+## Context
+Commissioners need a clear interface to map Discord users to Sleeper teams.
+
+## User Story
+As a commissioner  
+I want a drag-and-drop UI to link Discord users with their fantasy teams  
+So that I can set up my league quickly without manual mapping.
+
+## Acceptance
+- UI shows two lists: Sleeper teams (left), Discord users (right)
+- Drag-and-drop creates mapping via API (1.1)
+- UI reflects mapped state and reloads correctly
+- Badge appears when mapping complete → “@mention ready”
+
+## Dependencies
+- Owner mapping API (1.1)
+
+
+⸻
+
+issue-1.3.md — League settings API
+
+# League Settings API: read/update feature flags & personality
+
+## Context
+Leagues differ in tone and rules. Need persistent settings with feature flags and bot personality.
+
+## User Story
+As a commissioner  
+I want to configure reminders, meme mode, silence windows, and bot personality  
+So that my league feels personalized and smooth to manage.
+
+## Acceptance
+- Endpoints:
+  - `GET /api/leagues/:id/settings`
+  - `PATCH /api/leagues/:id/settings`
+- JSON shape:
+```json
+{
+  "personality":"neutral|sassy|batman|yoda|commish",
+  "featureFlags":{
+    "reminders":{"lineupLock":true,"waivers":true,"tradeDeadline":true,"byeWeeks":true},
+    "memeMode":{"enabled":false,"sfw":true,"threshold":40},
+    "silenceWindows":[{"day":"SUN","from":"13:00","to":"16:30","tz":"America/New_York"}]
+  }
+}
+
+	•	PATCH merges existing state; invalid shapes return 400
+	•	Settings stored in leagues.feature_flags and leagues.personality
+
+Dependencies
+	•	Migration baseline (0.1)
+
+---
+
+### `issue-1.4.md` — League settings UI
+```md
+# League Settings UI: reminder toggles, silence windows, meme mode
+
+## Context
+Commissioners need a friendly UI to configure settings without editing JSON.
+
+## User Story
+As a commissioner  
+I want toggles and pickers for reminders, silence windows, meme mode, and personality  
+So that I can control league behavior easily.
+
+## Acceptance
+- Toggles for lineup lock, waivers, trade deadline, bye weeks
+- Day/time pickers for silence windows
+- Meme mode toggle + SFW switch + threshold slider
+- Personality dropdown (neutral/sassy/batman/yoda/commish)
+- UI state roundtrips via 1.3 API
+- Prevents invalid overlaps in time ranges
+
+## Dependencies
+- League settings API (1.3)
+
+
+⸻
+
+issue-1.5.md — Reminder scheduler
+
+# Scheduler: lineup/waiver/trade/bye reminders, respect silence windows
+
+## Context
+Commissioners want automation for weekly hygiene tasks like reminding managers.
+
+## User Story
+As a commissioner  
+I want the bot to post reminders automatically  
+So that I don’t have to nag league members constantly.
+
+## Acceptance
+- Scheduler loads reminders from league settings + reminders table
+- Posts at correct times in league timezone
+- Respects silence windows (delays messages until clear)
+- Events logged when reminders sent
+- Toggling reminders on/off updates schedule
+
+## Dependencies
+- League settings API (1.3)
+- Migration baseline (0.1)
+
+
+⸻
+
+issue-1.6.md — Rules Q&A polish
+
+# Rules Q&A (RAG): snippets + citations
+
+## Context
+League rules are often long and confusing. Commissioners need precise answers in disputes.
+
+## User Story
+As a commissioner  
+I want the bot to answer rules questions with citations  
+So that I can resolve disputes quickly and confidently.
+
+## Acceptance
+- Endpoint: `POST /api/rag/answer/:leagueId { query }`
+- Returns `{ answer, quote, section, title, confidence, sources[] }`
+- Dashboard “Copy to thread” button posts citation in Discord
+- Deadpan citation tone when posting to Discord
+
+## Dependencies
+- Existing RAG ingestion/index
+
+
+⸻
+
+issue-1.7.md — Peace-of-Mind score
+
+# Dashboard: Peace-of-Mind score (league hygiene)
+
+## Context
+Commissioners need a single indicator of league “health” to track improvement.
+
+## User Story
+As a commissioner  
+I want a peace-of-mind score visible in the dashboard  
+So that I can see if my league is running smoothly at a glance.
+
+## Acceptance
+- Score combines: #lineups un-set, waivers pending, trades pending, reminders configured
+- UI shows numeric score + trend arrow
+- Updates live after config changes
+
+## Dependencies
+- League settings API (1.3)
+- Reminder scheduler (1.5)
+
+
+⸻
+
+Perfect. Let’s keep building out the GitHub issue set. This drop covers Phase 2 (Dispute prevention & resolution) and Phase 3 (Engagement engine). Same .md issue format so you can drop straight into GitHub.
+
+⸻
+
+📂 /issues
+
+⸻
+
+issue-2.1.md — Trade fairness API
+
+# Trade Fairness API: neutral evidence-backed summaries
+
+## Context
+Trade vetoes are the #1 source of league drama. Commissioners want a neutral snapshot that avoids subjective fights.
+
+## User Story
+As a commissioner  
+I want the bot to summarize trades with evidence-based fairness metrics  
+So that league members see an objective view instead of arguing.
+
+## Acceptance
+- Endpoint: `POST /api/trades/fairness`
+- Input: `{ leagueId, trade: { fromTeamId, toTeamId, playersOut[], playersIn[] } }`
+- Output:
+```json
+{
+  "fairnessScore": 62,
+  "projectionDelta": "+3.4 pts to Team A",
+  "notes":["Team A usually flips RBs weekly","Trade aligns with projections but unusual given history"],
+  "recommendation":"Fair but atypical"
+}
+
+	•	Projections source: Sleeper API + stored averages
+	•	Historic behavior: last N trades per team
+	•	Logged to trade_insights
+
+Dependencies
+	•	Migration baseline (0.1) → trade_insights table
+
+---
+
+### `issue-2.2.md` — Trade fairness UI
+```md
+# Trade Fairness UI: neutral summaries inside dashboard + Discord
+
+## Context
+Commissioners want a quick way to display trade fairness without fanning drama.
+
+## User Story
+As a commissioner  
+I want the bot to post a neutral trade fairness card  
+So that managers see evidence without me intervening directly.
+
+## Acceptance
+- Dashboard card shows:
+  - Fairness %
+  - Projection delta
+  - 1-line neutral recommendation
+- “Post to Discord” button → bot posts embed with same info
+- Embed tone = neutral, no emojis
+
+## Dependencies
+- Trade fairness API (2.1)
+
+
+⸻
+
+issue-2.3.md — Vibes monitor
+
+# Vibes Monitor: lightweight sentiment heatmap + alerts
+
+## Context
+Toxic or spicy chat threads create commissioner headaches. Need early warning without over-policing.
+
+## User Story
+As a commissioner  
+I want the bot to monitor sentiment in chat and alert me when things go off  
+So that I can mediate or let the bot step in.
+
+## Acceptance
+- Bot ingests Discord messages for leagues
+- Lightweight toxicity/sentiment classifier (OpenAI or custom model)
+- Stores sentiment events in `sentiment_logs`
+- If sentiment threshold crossed:
+  - DM commissioner: “🔥 Thread heating up. Want me to: [mediate] [cite rule] [blind poll]?”
+- Dashboard shows weekly heatmap of sentiment (green→red)
+
+## Dependencies
+- Migration baseline (0.1) → `sentiment_logs`
+
+
+⸻
+
+issue-2.4.md — Blind commissioner tools
+
+# Blind Commissioner Tools: freeze threads & cite rules
+
+## Context
+Commissioners want tools that de-escalate without inflaming drama.
+
+## User Story
+As a commissioner  
+I want the bot to intervene with neutral tools  
+So that I can calm disputes while keeping neutrality.
+
+## Acceptance
+- Commands:
+  - `/freeze <threadId>` → bot posts: “⏸️ This thread is paused. Let’s cool down.”
+  - `/clarify-rule <section>` → bot posts deadpan excerpt from rules doc
+- Both require commissioner role / admin key
+- Dashboard buttons available for same functions
+- Logged to `events`
+
+## Dependencies
+- Rules RAG ingestion (Phase 1.6)
+
+
+⸻
+
+⸻
+
+issue-3.1.md — Weekly highlights
+
+# Weekly Highlights: top 3 league moments
+
+## Context
+Members love storylines. Bot should auto-summarize weekly highlights for entertainment.
+
+## User Story
+As a league member  
+I want the bot to post the top 3 league moments each week  
+So that I can stay engaged and enjoy the story of the season.
+
+## Acceptance
+- Scheduler triggers after week ends
+- Bot calculates:
+  - Highest comeback probability
+  - Bench points tragedy
+  - Largest blowout
+- Posts an embed in Discord with playful commentary (tone per personality)
+- “Save highlights” option in dashboard
+
+## Dependencies
+- Reminder scheduler (1.5)
+
+
+⸻
+
+issue-3.2.md — Rivalry builder
+
+# Rivalry Builder: track head-to-heads + inject playful commentary
+
+## Context
+Rivalries drive engagement. Bot should track ongoing records.
+
+## User Story
+As a league member  
+I want the bot to remind me of my rivalries  
+So that I feel motivated and entertained.
+
+## Acceptance
+- Bot tracks H2H records in `rivalries` table (leagueId, teamA, teamB, W-L record)
+- Posts weekly “rivalry notes” if two teams face off
+- Commentary examples:
+  - “Rubber match: 1-1 this season. Winner takes bragging rights.”
+  - “Team X has beaten Team Y in 4 of last 5 matchups.”
+- Dashboard toggle to enable/disable rivalry builder
+
+## Dependencies
+- Migration baseline (0.1) → `rivalries` table
+
+
+⸻
+
+issue-3.3.md — Creative trash-talk
+
+# Creative Trash Talk: generate fun messages with personalities
+
+## Context
+Managers want playful banter but not everyone is good at writing it.
+
+## User Story
+As a league member  
+I want the bot to generate trash talk in my preferred style  
+So that league chat feels lively and fun.
+
+## Acceptance
+- Command: `/trash-talk @team`
+- Bot generates 1–2 lines in chosen personality (Batman, Yoda, sassy, etc.)
+- Dashboard: toggle personalities enabled for trash talk
+- Guardrails:
+  - No profanity or harassment
+  - Optional “SFW-only” mode
+- Logged to `events`
+
+## Dependencies
+- Personality setting (1.3)
+
+
+⸻
+
+issue-3.4.md — Meme mode
+
+# Meme Mode: automated meme/gif posts on thresholds
+
+## Context
+Big blowouts or funny events deserve extra flair.
+
+## User Story
+As a league member  
+I want the bot to post memes when crazy stuff happens  
+So that the league feels more fun and dynamic.
+
+## Acceptance
+- Configurable in league settings:
+  - Enabled/disabled
+  - SFW-only toggle
+  - Threshold points (e.g., 40pt blowout)
+- Scheduler checks conditions weekly
+- Posts meme/GIF in Discord when triggered
+- Tracks “last meme posted” timestamp in dashboard
+
+## Dependencies
+- League settings API (1.3)
+
+
+⸻
+
+✅ That covers Phase 2 and Phase 3 in GitHub-issue-ready format.
+
+Perfect — let’s finish it out with Phase 4: Commissioner Superpowers. These are the “power tools” that make THE COMMISH feel like a true co-commissioner: terminal-like commands, deep analytics, peace-of-mind metrics. All structured as GitHub issues, ready to paste into your repo.
+
+⸻
+
+📂 /issues
+
+⸻
+
+issue-4.1.md — Commissioner Terminal
+
+# Commissioner Terminal: command-line style controls
+
+## Context
+Commissioners want fast, powerful control — not endless clicking. A “terminal” with real verbs gives them co-commissioner powers.
+
+## User Story
+As a commissioner  
+I want a terminal-style interface inside the dashboard  
+So that I can issue quick commands to manage the league.
+
+## Acceptance
+- Dashboard: “Terminal” tab with command input + output log
+- Supported commands (MVP):
+  - `league status` → returns leagueId, connected services, settings
+  - `digest week <n>` → posts digest for given week
+  - `reindex rules` → triggers constitution RAG indexing
+  - `set waiver-threshold <day/time>` → updates reminder config
+  - `simulate trade <teamA> <teamB>` → mock fairness report
+- Backend: `/api/terminal/execute`
+  - Input: `{ leagueId, command: "string" }`
+  - Output: `{ result: "string" }`
+- Commands restricted to commissioner role / ADMIN_KEY
+
+## Dependencies
+- Rules RAG (1.6)
+- Scheduler (1.5)
+- Trade fairness API (2.1)
+
+
+⸻
+
+issue-4.2.md — Deep Stats Dashboard
+
+# Deep Stats Dashboard: league participation + hygiene
+
+## Context
+Commissioners want insight into league health: who’s active, who’s slacking, whether reminders matter.
+
+## User Story
+As a commissioner  
+I want to see participation and hygiene metrics  
+So that I can prove the league is engaged and spot issues early.
+
+## Acceptance
+- Dashboard card: “League Health”
+- Metrics:
+  - Participation % (messages per member per week)
+  - Lineups set % (teams that avoided leaving empty slots)
+  - Response latency (avg minutes to respond to mentions)
+  - “Nags avoided” = reminders sent vs. follow-through rate
+- Data stored in `league_metrics`
+- Graph: trend over time (weekly snapshots)
+- API: `GET /api/leagues/:id/metrics`
+
+## Dependencies
+- Reminder system (1.5)
+- Vibes monitor (2.3)
+- Events logging
+
+
+⸻
+
+issue-4.3.md — Peace-of-Mind Score
+
+# Peace-of-Mind Score: quantify commissioner burden reduction
+
+## Context
+The product ethos is “quality-of-life.” We need a metric to show commissioners how much stress the bot saved them.
+
+## User Story
+As a commissioner  
+I want to see a peace-of-mind score  
+So that I feel confident the bot is truly helping me.
+
+## Acceptance
+- Algorithm (MVP):
+  - +1 per lineup reminder resolved
+  - +1 per trade alert posted
+  - +2 per dispute cooled (freeze, rule cite, sentiment alert)
+  - -5 per missed reminder (commissioner intervention required)
+- Dashboard displays score out of 100 with “stress meter” gauge
+- Bot posts weekly DM: “Your Commish Copilot saved you ~12 nags this week”
+- Logged to `events`
+
+## Dependencies
+- Reminder system (1.5)
+- Blind commissioner tools (2.4)
+- League metrics (4.2)
+
+
+⸻
+
+issue-4.4.md — Expanded Commissioner Commands
+
+# Expanded Commissioner Commands: Discord slash power-tools
+
+## Context
+Not everything needs the dashboard — some controls should be inside Discord itself.
+
+## User Story
+As a commissioner  
+I want extra slash commands for quick power moves  
+So that I can manage in-chat without leaving Discord.
+
+## Acceptance
+- Slash commands:
+  - `/league-status`
+  - `/generate-digest [week]`
+  - `/reindex-rules`
+  - `/set-waiver-threshold <day/time>`
+  - `/simulate-trade <teamA> <teamB>`
+- Replies are ephemeral (visible only to commissioner)
+- Commands require commissioner role in Discord
+- Outputs formatted as embeds
+
+## Dependencies
+- Same backends as terminal (4.1)
+
+
+⸻
+
+issue-4.5.md — Commissioner Audit Log
+
+# Commissioner Audit Log: transparency + accountability
+
+## Context
+League members want fairness. Commissioners want a record of actions.
+
+## User Story
+As a commissioner  
+I want an audit log of key actions  
+So that I have transparency and cover in disputes.
+
+## Acceptance
+- Backend: `audit_logs` table with events:
+  - Trades checked
+  - Rules cited
+  - Freezes issued
+  - Reminders auto-sent
+- Dashboard tab: chronological feed with filters
+- Export option: CSV or JSON
+- Auto-post monthly digest in #commish channel
+
+## Dependencies
+- Events table baseline
+- Phase 2 blind tools (2.4)
+
+
+⸻
+
+✅ That completes Phase 4: Commissioner Superpowers.
+
+⸻
+
+📊 Now your repo has 20+ numbered issues covering Phases 1–4 (hygiene → dispute resolution → engagement → superpowers).
+Each issue is cross-referenced, dependency-aware, and copy/paste-ready.
+
+⸻

@@ -1,0 +1,512 @@
+Awesome—let’s level this up properly.
+
+Below is a single, copy-paste master execution brief for your Replit Agent. It merges everything we’ve planned (setup, research-backed features, peace-of-mind co-commish focus) into one coherent, end-to-end build guide with guardrails, architecture, migrations, API/UX specs, QA scripts, acceptance gates, and “don’t break prod” constraints.
+
+Use it as your “god-tier prompt” in Replit. It is intentionally explicit so the agent can work autonomously without drifting or inventing unrelated patterns.
+
+⸻
+
+🧠 MASTER EXECUTION BRIEF — THE COMMISH (v2, co-commish edition)
+
+Prime Directives (do not violate):
+	•	APP_BASE_URL: https://thecommish.replit.app (no trailing slash).
+	•	Database: Supabase Postgres only. Do not swap to Neon/Replit DB.
+	•	Schema changes: Only via Drizzle/Supabase migrations (checked in). No ad-hoc SQL in code.
+	•	Secrets: Read via server/services/env.ts getters only. No process.env.* in routes/services.
+	•	Discord Interactions: Maintain raw body verification (no global express.json() on that path).
+	•	Routing: Keep Vite guards in server/vite.ts (already added) so /api/* never returns HTML.
+	•	Compatibility: Keep /api/v1/* routes working; /api/v2/* may alias the same handlers while CDN cache dissipates.
+	•	Error handling: Every API returns structured JSON { ok?: boolean, error?: { code, message, details? } }.
+
+⸻
+
+0) Pre-Flight: Sanity Checks & Fixes (run first)
+
+Confirm the following are true:
+	1.	server/vite.ts contains the early guard:
+
+const isApiPath = (p: string) => p.startsWith("/api/");
+app.use((req, res, next) => (isApiPath(req.originalUrl) ? next() : vite.middlewares(req, res, next)));
+app.use("*", (req, res, next) => (isApiPath(req.originalUrl) ? next() : /* serve index.html */ next()));
+
+
+	2.	server/index.ts registers API routes before vite, and sets no-store cache on /api/*.
+	3.	/api/health returns JSON; /api/events returns JSON; no /api/* route returns HTML.
+	4.	Env: DATABASE_URL points to Supabase pooler + sslmode=require; PG* vars set; SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY present.
+
+Smoke tests
+
+curl -s -H 'Cache-Control: no-cache' $APP_BASE_URL/api/health | jq
+curl -s -H 'Cache-Control: no-cache' $APP_BASE_URL/api/events?limit=2 | jq
+
+
+⸻
+
+1) Architecture Alignment (do this before building features)
+
+1.1 Folder Boundaries (keep or align to this):
+
+server/
+  index.ts           # boot + middleware order + schedulers
+  routes.ts          # http surface only; thin handlers; no business logic
+  storage.ts         # DatabaseStorage + MemStorage; all SQL/Drizzle lives here
+  services/
+    env.ts           # all secrets/env accessors
+    discord.ts       # discord client/bot utils (REST + interactions helpers)
+    sleeper.ts       # sleeper API client + mappers
+    rag.ts           # embeddings + doc chunking + search
+    digest.ts        # weekly digest composition
+    moderation.ts    # sentiment/toxicity analyzers + “vibes monitor”
+    fairness.ts      # trade fairness calculator
+    scheduler.ts     # cron jobs + event bus
+shared/
+  schema.ts          # Drizzle schema; sources of truth
+client/
+  src/pages/         # Setup, Dashboard, Rules, Trades, Waivers, Terminal
+  src/components/
+migrations/
+  0004_comprehensive_baseline.sql   # existing baseline (keep)
+  0005_*.sql                        # new changes for this brief
+
+1.2 Data Contract (high-level)
+	•	leagues — guild linkage, home channel, feature flags, personality
+	•	members — discord_user_id ↔ sleeper_owner_id mapping
+	•	events — append-only bot actions/logs
+	•	documents / embeddings — rules content and vectors (pgvector)
+	•	reminders — scheduled automations (lineup lock, waivers, trade deadline)
+	•	polls / votes — dispute resolution and engagement polls
+	•	sentiment_logs — message sentiment snapshots (aggregate by thread/day)
+	•	trade_insights — fairness snapshots + rationale
+	•	settings — per-league toggles (or use JSONB column in leagues.feature_flags)
+
+Guardrail: if any new table/column/index is needed, add a migration under migrations/0005_* with idempotent IF NOT EXISTS and follow existing naming/indexing conventions.
+
+⸻
+
+2) Product Roadmap (researched & merged) — build in this order
+
+This order is designed to reduce commissioner headaches first (Phase 1), then de-escalate disputes (Phase 2), then delight (Phase 3), then superpowers (Phase 4). It aligns with real pain points seen repeatedly on r/ffcommish, r/fantasyfootball, Footballguys forums, and tool gaps in Sleeper/Yahoo/ESPN.
+
+Phase 1 — Hygiene & Peace-of-Mind (fast wins)
+
+2.1 Owner Mapping UI
+	•	UI: /dashboard → “Owner Mapping”
+	•	left: Sleeper teams (name + avatar)
+	•	right: Discord users (autocomplete from guild members API)
+	•	drag/drop → persist mapping
+	•	API
+	•	GET /api/members?leagueId=...
+	•	POST /api/members/map { leagueId, sleeperOwnerId, discordUserId }
+	•	DB: members( id, league_id, sleeper_owner_id, discord_user_id, created_at )
+(Add unique index (league_id, sleeper_owner_id))
+
+2.2 Reminder Packs (toggle per league)
+	•	Toggles: Lineup lock, Waivers, Trade deadline, Bye-week alerts
+	•	DB: add leagues.feature_flags JSONB (if not present) with structure:
+
+{
+  "reminders": { "lineupLock": true, "waivers": true, "tradeDeadline": true, "byeWeeks": true },
+  "memeMode": { "enabled": false, "sfw": true, "threshold": 40 },
+  "personality": "neutral",
+  "silenceWindows": [{"day":"SUN","from":"13:00","to":"16:30","tz":"America/New_York"}]
+}
+
+
+	•	API
+	•	GET /api/leagues/:id/settings
+	•	PATCH /api/leagues/:id/settings — partial update, validate shape
+	•	Scheduler
+	•	Use node-cron to schedule jobs by timezone; write events on send.
+
+2.3 Silence During Game Time
+	•	Respect silenceWindows[] in any proactive notifier.
+	•	If a reminder would fire inside a silence window → queue + post after.
+
+2.4 Rules Q&A polish (RAG)
+	•	Answer payload includes: answer, confidence, section, title, quote, sources[]
+	•	UI adds “Copy to thread” button (posts exact citation in Discord via bot).
+	•	Indexer de-dupes by content hash; store chunk_id ↔ source_section.
+
+2.5 Deadline Dashboard card
+	•	“Hygiene”: lineups_not_set, pending_trades, waivers_today
+	•	Compute from Sleeper + events + reminders table. Output single “Peace-of-mind score”.
+
+Phase 2 — Dispute Prevention & Resolution
+
+2.6 Trade Fairness Snapshot
+	•	Inputs: players moving, teams, week context
+	•	Blend: market ranks (e.g., Sleeper ADP/projections), positional scarcity, league norms (your league’s historical trade patterns), player availability (IR/byes)
+	•	Output: { fairness: 0..100, rationale: string, comps: [brief] }
+	•	API
+	•	POST /api/trades/fairness { leagueId, offer: {...} } → returns snapshot (also log to trade_insights)
+	•	UI
+	•	In /trades, show fairness pill + 1-liner. Link “view explanation”.
+	•	DB
+	•	trade_insights( id, league_id, payload JSONB, fairness numeric, rationale text, created_at )
+
+2.7 Vibes Monitor (sentiment heatmap)
+	•	services/moderation.ts → basic toxicity/sentiment classifier (OpenAI/DeepSeek moderate endpoints or a simple lexical + heuristics fallback)
+	•	sentiment_logs( id, league_id, channel_id, score numeric, window_start, window_end, sample_size )
+	•	DM Commish when threshold crosses (e.g., >0.7) with options:
+	•	“Freeze thread 15m” (/freeze): bot posts friendly pause
+	•	“Clarify rule” (/clarify): posts cited passage from rules
+	•	“Start anonymous poll” (/poll anonymous) re: trade acceptance
+
+2.8 Blind Polls
+	•	polls( id, league_id, question, options JSONB, anonymous boolean, created_by, status )
+	•	votes( id, poll_id, voter_id, choice, created_at )
+	•	Slash: /poll question:"…" options:"A|B|C" anonymous:true
+
+Phase 3 — Engagement Engine
+
+2.9 Weekly Highlights + Reel
+	•	Compose 3 headline moments (comeback prob swings; bench tragedies; blowouts)
+	•	Optional: generate an image card (simple Canvas/SVG; keep MVP text-only); store as attachment URL.
+	•	Post to Discord + archive card in /reports.
+
+2.10 Rivalry Builder
+	•	Track H2H records by season and lifetime.
+	•	/rivalry @user → “You lead 5–3 lifetime; 2–1 this season. Rubber match!”
+
+2.11 Trash-Talk Writer (Personality Packs)
+	•	Personalities: neutral | sassy | batman | yoda | commish
+	•	A single shared “tone adapter” function; all comms go through it.
+	•	Safe-mode toggle for memes/GIFs.
+	•	Trigger thresholds for auto-memes (e.g., >40pt blowout, >=4 win streak).
+
+2.12 Weekly Awards
+	•	Examples: Sleepyhead (forgot lineup), Diamond Hands, Top-Scorer, Bad Beat.
+	•	Simple heuristics farmed from matchup stats.
+
+Phase 4 — Commissioner Superpowers
+
+2.13 Terminal (real verbs)
+	•	Supported:
+	•	digest week <N>
+	•	simulate trade <teamA> <teamB>
+	•	set waiver threshold <time>
+	•	export constitution
+	•	reindex rules
+	•	Gate behind Admin Key or commissioner Discord role.
+
+2.14 Deep Stats Dashboard
+	•	Participation: % lineups set/week
+	•	Time-to-respond on trades
+	•	“Nags avoided” estimate
+	•	Graph over time; export CSV.
+
+2.15 Audit Log + Undo
+	•	Every bot action writes events. Add undo_token (random).
+	•	Commish can undo a bot post/poll (if safe).
+
+⸻
+
+3) Data Model & Migrations (add in migrations/0005_co_commish.sql)
+
+Note: Some tables may already exist. Use idempotent IF NOT EXISTS and ADD COLUMN IF NOT EXISTS.
+
+-- 0005_co_commish.sql
+
+BEGIN;
+
+-- 1) Ensure pgvector (if not already)
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- 2) leagues: feature flags & personality (JSONB)
+ALTER TABLE public.leagues
+  ADD COLUMN IF NOT EXISTS feature_flags JSONB DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS personality TEXT DEFAULT 'neutral';
+
+-- 3) members mapping (discord <-> sleeper)
+CREATE TABLE IF NOT EXISTS public.members (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL REFERENCES public.leagues(id) ON DELETE CASCADE,
+  sleeper_owner_id TEXT NOT NULL,
+  discord_user_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (league_id, sleeper_owner_id),
+  UNIQUE (league_id, discord_user_id)
+);
+
+-- 4) reminders (scheduled jobs)
+CREATE TABLE IF NOT EXISTS public.reminders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL REFERENCES public.leagues(id) ON DELETE CASCADE,
+  type TEXT NOT NULL, -- 'lineup_lock' | 'waivers' | 'trade_deadline' | 'bye_week'
+  cron TEXT NOT NULL, -- explicit cron for flexibility
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  last_fired TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 5) polls & votes
+CREATE TABLE IF NOT EXISTS public.polls (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL REFERENCES public.leagues(id) ON DELETE CASCADE,
+  question TEXT NOT NULL,
+  options JSONB NOT NULL,
+  anonymous BOOLEAN NOT NULL DEFAULT true,
+  status TEXT NOT NULL DEFAULT 'open', -- open|closed
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS public.votes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  poll_id UUID NOT NULL REFERENCES public.polls(id) ON DELETE CASCADE,
+  voter_id TEXT NOT NULL,
+  choice TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (poll_id, voter_id)
+);
+
+-- 6) sentiment logs
+CREATE TABLE IF NOT EXISTS public.sentiment_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL REFERENCES public.leagues(id) ON DELETE CASCADE,
+  channel_id TEXT NOT NULL,
+  score NUMERIC NOT NULL,
+  window_start TIMESTAMPTZ NOT NULL,
+  window_end TIMESTAMPTZ NOT NULL,
+  sample_size INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 7) trade insights
+CREATE TABLE IF NOT EXISTS public.trade_insights (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL REFERENCES public.leagues(id) ON DELETE CASCADE,
+  payload JSONB NOT NULL,
+  fairness NUMERIC,
+  rationale TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMIT;
+
+After adding: run npm run db:push (or your project’s migration runner) and verify in Supabase dashboard.
+
+⸻
+
+4) API Surface (add/extend in server/routes.ts)
+
+Keep handlers thin. Call into services/* and storage.*.
+
+4.1 League Settings
+	•	GET /api/leagues/:id/settings → { featureFlags, personality, silenceWindows }
+	•	PATCH /api/leagues/:id/settings → partial merge with validation
+
+4.2 Members Mapping
+	•	GET /api/members?leagueId=... → list mappings + unmapped Sleeper owners
+	•	POST /api/members/map → create/update one mapping
+
+4.3 Reminders
+	•	GET /api/reminders?leagueId=...
+	•	POST /api/reminders { leagueId, type, cron, timezone, enabled }
+	•	Scheduler subscribes and (re)loads on write.
+
+4.4 RAG Q&A polish
+	•	POST /api/rag/answer/:leagueId { query } → { answer, quote, section, title, confidence, sources }
+	•	POST /api/rag/index/:leagueId { content, contentType, title, version }
+
+4.5 Vibes Monitor
+	•	POST /api/mod/sentiment/log (internal) → write snapshot row
+	•	GET /api/mod/sentiment?leagueId=...&since=...
+
+4.6 Freeze & Clarify (admin-gated)
+	•	POST /api/mod/freeze { leagueId, channelId, minutes }
+	•	POST /api/mod/clarify { leagueId, channelId, ruleQuery } → uses RAG; posts deadpan citation
+
+4.7 Polls
+	•	POST /api/polls { leagueId, question, options[], anonymous }
+	•	POST /api/polls/:id/vote { choice }
+	•	POST /api/polls/:id/close
+	•	GET /api/polls?leagueId=...
+
+4.8 Trades
+	•	POST /api/trades/fairness { leagueId, offer } → { fairness, rationale, comps } + log
+
+4.9 Terminal
+	•	POST /api/terminal/run { leagueId, command } → executes whitelisted verbs
+
+Keep /api/v2/* aliases pointing to same handlers for now.
+
+⸻
+
+5) Services (implement or extend)
+
+5.1 moderation.ts
+	•	analyzeSentiment({ text }) → { score, toxic?: boolean }
+	•	shouldFreeze({ scores[], threshold })
+	•	postFreeze({ channelId, minutes }) via discord service
+
+5.2 fairness.ts
+	•	computeFairness({ leagueId, offer }) → { fairness, rationale, comps }
+	•	Use Sleeper projections; fallbacks allowed; keep deterministic where possible.
+
+5.3 digest.ts
+	•	composeDigest({ leagueId, week }) returns array of blocks:
+	•	headlines, top scorer, bench tragedy, blowout, rivalry note
+	•	postDigest({ leagueId, channelId, digest })
+
+5.4 rag.ts
+	•	indexDocument, search upgraded to include section + quote
+	•	dimension consistent with text-embedding-3-small (1536)
+
+5.5 scheduler.ts
+	•	Boot reads reminders + leagues.feature_flags.reminders
+	•	Schedules: lineup lock (Sat night/Sun AM), waivers (per league TZ), trade deadline
+	•	Respects silenceWindows
+
+⸻
+
+6) Frontend (client/src/pages)
+
+6.1 Dashboard
+	•	Cards: Discord, Sleeper, Rules status, Peace-of-mind, Developer Utilities
+	•	New: Owner Mapping (drag/drop)
+	•	New: Reminder Packs toggles
+	•	New: Silence windows editor (simple day/time pickers)
+	•	New: Meme mode toggle with SFW switch + threshold slider
+	•	Dev Utilities (admin key):
+	•	Re-register commands
+	•	Post test message
+	•	Force sync Sleeper
+	•	Run digest
+
+6.2 Trades
+	•	Show fairness pill + explanation popover
+	•	Button “Propose blind poll” → creates polls with anonymous=true
+
+6.3 Rules
+	•	Q&A with citation chips + “Copy to thread” post
+
+6.4 Reports
+	•	Weekly digest list with “Post to Discord” + “Download”
+
+6.5 Terminal
+	•	Form input → calls /api/terminal/run
+
+⸻
+
+7) Observability & Reliability
+
+7.1 Logging
+	•	Each API logs: method, path, status, ms, 200-char response preview
+	•	Services log action + leagueId + outcome (events table for user-facing actions)
+
+7.2 Metrics
+	•	At /api/health, include: database_latency, sleeper_latency, discord_ok, rag_ok, scheduler_loaded, silence_active_now
+
+7.3 Retries
+	•	Discord posts: retry w/ backoff on 429/5xx; clamp embed lengths to 4096
+
+⸻
+
+8) Security
+	•	All admin endpoints require X-Admin-Key or Discord commish role.
+	•	Rate limit /api/polls and /api/trades/fairness.
+	•	Sanitize poll text & command inputs.
+
+⸻
+
+9) QA: Automated Script (drop at repo root qa.sh)
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE="https://thecommish.replit.app"
+HDR=(-H "Cache-Control: no-cache" -s)
+
+echo "== Health =="
+curl "${HDR[@]}" "$BASE/api/health" | jq
+
+echo "== Fake league settings 404 =="
+curl "${HDR[@]}" "$BASE/api/v2/leagues/00000000-0000-0000-0000-000000000000" || true
+
+echo "== Create poll (expect validation error if league missing) =="
+curl "${HDR[@]}" -H "Content-Type: application/json" \
+  -X POST "$BASE/api/v2/polls" \
+  -d '{"leagueId":"00000000-0000-0000-0000-000000000000","question":"Test?","options":["A","B"],"anonymous":true}' | jq
+
+echo "== RAG answer (expect ok=false if no docs) =="
+curl "${HDR[@]}" -H "Content-Type: application/json" \
+  -X POST "$BASE/api/rag/answer/00000000-0000-0000-0000-000000000000" \
+  -d '{"query":"When is the draft?"}' | jq
+
+echo "== Done =="
+
+Passing criteria: all responses JSON; no HTML; each returns either ok:true or an explicit error object.
+
+⸻
+
+10) Acceptance Checklist (tick before shipping)
+	•	Migrations applied cleanly in Supabase; tables visible
+	•	Owner mapping works (drag/drop persists + reflects)
+	•	Reminder toggles persist + scheduler respects silence windows
+	•	RAG answers show section + quote and “Copy to thread” works
+	•	Trade fairness returns % + rationale and logs an insight row
+	•	/freeze and /clarify slash commands operate and write events
+	•	Weekly digest posts without hitting Discord limits (embeds clamped)
+	•	/api/* all JSON; never HTML
+	•	/api/health shows status:"ok" with latencies
+	•	Dashboard shows Peace-of-Mind score > 0 once reminders configured
+
+⸻
+
+11) Board of Advisors (mental model; keep us honest)
+
+Synthesize the following perspectives when making micro-decisions. (No hard dependencies—these are constraints and tastes.)
+
+	1.	The Veteran Commish (r/ffcommish) — wants fewer fires; loves freeze, blind polls, and peace-of-mind score.
+	2.	The Casual Player — wants fun; weekly highlights + awards; minimal nags.
+	3.	Data Nerd (Footballguys) — cares about transparent fairness rationale and reproducible logic.
+	4.	Dynasty Diehard — asks for rivalry memory and long-term trends.
+	5.	UX Pragmatist — low friction; every flow finishes in ≤3 clicks.
+	6.	Trust & Safety — PG-13 moderation; anti-toxicity defaults; SFW meme guardrail.
+	7.	Reliability Engineer — idempotent jobs, retries, bounded messages, structured logs.
+	8.	Discord Power-User — slash commands are stable, short, and discoverable with /help.
+	9.	Performance Analyst — keep DB latency < 300ms median; prefetch league settings.
+	10.	Privacy Friend — anonymous voting for sensitive disputes; clear data retention.
+	11.	Growth Hacker — shareable weekly reels; “Invite another league” CTA post-digest.
+	12.	You (Product Owner) — anything that doesn’t reduce headaches this season is a v2.
+
+⸻
+
+12) DON’Ts (hard constraints)
+	•	Don’t introduce new persistence layers.
+	•	Don’t bypass env.ts.
+	•	Don’t put long-running work in request threads; fire and log an event.
+	•	Don’t post to Discord without SFW checks when meme mode is on.
+	•	Don’t add global express.json() to the interactions path.
+
+⸻
+
+13) Deliverables for this sprint (what you’ll produce)
+	•	migrations/0005_co_commish.sql (as above; idempotent)
+	•	server/services/{moderation,fairness,rag,digest,scheduler}.ts (expanded)
+	•	server/routes.ts — endpoints in §4; /api/v2/* aliases intact
+	•	Frontend updates: Dashboard cards; Owner Mapping; Reminder toggles; Rules Q&A cite button; Trades fairness pill; Terminal verbs
+	•	qa.sh and updated README.md (quick start, QA, endpoints table)
+	•	CHANGELOG.md summarizing the work
+
+⸻
+
+14) After Sprint — How to prove it works (manual script)
+	1.	Run /setup wizard → connect Discord + Sleeper + paste a short rules doc.
+	2.	Map two owners; toggle Lineup lock + Waivers.
+	3.	Add Sun 1–4:30pm silence window; set meme mode SFW on, threshold 40.
+	4.	Create a sample trade → see fairness % + explanation.
+	5.	/freeze a fake heated thread; run /clarify for “trade veto” rule.
+	6.	Generate Week digest and post to Discord.
+	7.	Open Dashboard → see Peace-of-Mind score > 80.
+
+⸻
+
+Final Note to the Agent
+
+Follow this brief top-to-bottom. Implement migrations first, then services, then endpoints, then UI. Write tests / QA script and verify JSON responses at every step. If any existing code conflicts, adapt to the brief’s intent but do not break the guardrails in §Prime Directives.
+
+⸻
+
+If you want, I can also provide ready-to-paste GitHub issues (one per bullet) with acceptance criteria and labels (Phase 1–4).
