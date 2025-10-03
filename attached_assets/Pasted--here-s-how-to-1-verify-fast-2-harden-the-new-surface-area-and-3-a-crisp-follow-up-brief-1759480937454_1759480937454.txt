@@ -1,0 +1,472 @@
+
+🥵🔥here’s how to (1) verify fast, (2) harden the new surface area, and (3) a crisp follow-up brief to finish polish + wire it all together without breaking your guardrails.
+
+⸻
+
+0) 5-minute sanity sweep (paste these in your shell)
+
+replace LEAGUE_ID, CHANNEL_ID, TRADE_ID, ADMIN_KEY.
+
+B=https://thecommish.replit.app
+HJSON='-H Content-Type: application/json'
+NC='-H Cache-Control: no-cache'
+
+# Health & version
+curl -s $B/api/health | jq '{status,services,embeddings,performance}'
+
+# Disputes (open + resolve flow)
+curl -s -X POST $B/api/v2/disputes $HJSON $NC -d \
+'{"leagueId":"LEAGUE_ID","kind":"trade","subjectId":"TRADE_ID","details":{"note":"smoke-test"}}' | tee /tmp/dispute.json
+DID=$(jq -r '.id' /tmp/dispute.json)
+curl -s -X PATCH $B/api/v2/disputes/$DID $HJSON -d '{"status":"resolved","resolution":{"by":"smoke","note":"ok"}}' | jq '.status'
+
+# Vibes score
+curl -s -X POST $B/api/v2/vibes/score $HJSON -H "X-Admin-Key: $ADMIN_KEY" -d \
+'{"leagueId":"LEAGUE_ID","channelId":"CHANNEL_ID","messageId":"m1","authorId":"u1","text":"you stink"}' | jq '{toxicity,sentiment}'
+
+# Freeze thread (commissioner/admin)
+curl -s -X POST $B/api/v2/mod/freeze $HJSON -H "X-Admin-Key: $ADMIN_KEY" -d \
+'{"leagueId":"LEAGUE_ID","channelId":"CHANNEL_ID","minutes":5,"reason":"smoke"}' | jq
+
+# Trade fairness (dry run)
+curl -s -X POST $B/api/v2/trades/evaluate $HJSON -d \
+'{"leagueId":"LEAGUE_ID","tradeId":"TRADE_ID","proposal":{"teamA":["player1"],"teamB":["player2"]}}' | jq '{fairness,rationale:.rationale[0:160]}'
+
+# Highlights compute + list
+curl -s -X POST $B/api/v2/highlights/compute $HJSON -d '{"leagueId":"LEAGUE_ID","week":4}' | jq '.summary? // .'
+curl -s "$B/api/v2/highlights?leagueId=LEAGUE_ID&week=4" | jq '.[0]'
+
+# Content queue + poster (dry)
+curl -s -X POST $B/api/v2/content/enqueue $HJSON -d \
+'{"leagueId":"LEAGUE_ID","channelId":"CHANNEL_ID","scheduledAt":"2030-01-01T00:00:00Z","template":"highlight","payload":{"k":"v"}}' | jq '.status'
+curl -s -X POST $B/api/v2/content/run -H "X-Admin-Key: $ADMIN_KEY" | jq '.run?.posted // .'
+
+Expected: all JSON; 4xx/5xx include { error: { code, message } }; no HTML anywhere.
+
+⸻
+
+1) If something fails, here’s the quick triage
+	•	HTML came back: hit the /api/v2/* alias (bypasses any stale CDN) and include Cache-Control: no-cache. You already have Vite guards in place.
+	•	UUID errors: make sure you’re using a real LEAGUE_ID. If you don’t have it handy, hit your leagues listing endpoint (whatever your Phase 1 dashboard used) or add a temporary admin list endpoint: GET /api/dev/leagues (admin-key).
+	•	Discord post limits: your poster should clamp embeds and rate-limit; if not, cap to 5 msgs/min and log skips.
+
+⸻
+
+2) What to give Replit right now (copy-paste brief)
+
+Title: Phase 2/3 Verification, Polish, and Cohesion Pass
+
+Prime Directives (do not break)
+	•	Supabase only; schema via migrations.
+	•	/api/* JSON-only; keep Vite /api guards + /api/v1 routes.
+	•	Env via env service; keep Discord raw-body verify.
+	•	New features behind flags; defaults as noted below.
+	•	Emit events row for every new meaningful record.
+
+A. Complete Phase 2 gaps (Disputes & Vibes)
+	1.	Auth & roles
+	•	Add helper requireCommissioner(leagueId, reqUser) and use on: disputes PATCH, mod/freeze, clarify-rule, trades/evaluate.
+	•	If you don’t have reqUser, accept X-Admin-Key for dev, else map from session.
+	2.	Service quality
+	•	VibesService.scoreMessage: cap msg length, produce summary (<=180 chars), don’t store raw toxic text.
+	•	ModerationService.freezeThread: write a pinned note to the channel only if flag vibesMonitor.notifyChannel is ON; always log mod_actions.
+	•	TradeFairnessService: include simple, deterministic inputs in inputs JSON: rosterNeeds, deltaProjections, posScarcity. Store snapshot.
+	3.	Endpoints hardening
+	•	All input via zod; respond with {error:{code,message}}.
+	•	Add GET /api/v2/disputes?leagueId=&status= list endpoint (JSON pagination).
+	4.	Discord slash commands
+	•	/freeze /clarify /trade_fairness (guild-scoped). Guard ephemeral, show failure reason.
+	5.	Dashboard
+	•	Vibes Monitor: toggle + threshold slider (0.6–0.9), “DM me on spikes.”
+	•	Disputes: status tabs; modal to resolve with notes.
+	•	Trade Fairness: search by tradeId; show prior snapshots.
+	6.	Tests / smoke
+	•	Extend qa-smoke.sh with the 6 calls in §0. Ensure JSON response, no HTML.
+
+B. Complete Phase 3 gaps (Highlights + Creative)
+	1.	HighlightsService
+	•	Deterministic compute (idempotent). For week N: compute comeback, blowout (≥40pts), bench_tragedy (bench > starter by ≥15). Upsert into highlights.
+	2.	RivalriesService
+	•	Canonicalize (teamA, teamB) ordering per league; update head-to-head after each week.
+	3.	ContentService
+	•	Queue: enqueue({template, payload}) writes to content_queue.
+	•	Poster: run every 5m, fetch queued items ≤ now, post embed (persona tone if enabled), mark posted. 5 msgs/min max.
+	4.	Scheduler
+	•	Sun 8pm LT: enqueue digest + highlights.
+	•	Mon 9am LT: enqueue rivalry cards.
+	•	Guard against duplicate registration on hot reload.
+	5.	Endpoints
+	•	POST /api/v2/highlights/compute, GET /api/v2/highlights
+	•	POST /api/v2/rivalries/update, GET /api/v2/rivalries
+	•	POST /api/v2/content/enqueue, GET /api/v2/content/queue, POST /api/v2/content/run (admin)
+	6.	Dashboard
+	•	Highlights tab w/ week picker.
+	•	Rivalries table (records, rubber-match badge).
+	•	Content queue admin table (status filter, re-enqueue button).
+	•	Feature toggles: creativeTrashTalk, highlights, rivalries (default OFF).
+
+C. Cohesion & Consistency
+	•	Logging: Use the same request log wrapper everywhere; truncate response preview to 300 chars.
+	•	Events feed: Emit vibes_scored, thread_frozen, rule_clarified, dispute_opened, dispute_resolved, trade_evaluated, highlights_computed, content_posted.
+	•	Types: Export LeagueFeatureFlags union; extend existing leagues.feature_flags merge util.
+	•	Docs: Append to replit.md (what changed, how to run smoke), append outputs to QA_RESULTS.md.
+
+D. Guardrails checklist to re-run before “done”
+	•	/api/health, /api/events, /api/leagues/:id, /api/polls still JSON ✅
+	•	/api/v2/* all JSON ✅
+	•	No new process.env reads; env only ✅
+	•	Migrations present, idempotent, applied ✅
+	•	Scheduler registered once (logs) ✅
+
+⸻
+
+3) UX acceptance notes (what “good” looks like)
+	•	Disputes: create → shows in Dashboard list; resolve → moves to Resolved tab; event appears in Recent Activity.
+	•	Vibes: toggle ON + threshold 0.8 → scoring endpoint writes a log; if toxicity > 0.8, the commissioner gets a DM suggestion with “Freeze 10m” button.
+	•	Highlights: compute for Week 4 → cards render (comeback/blowout/bench tragedy); “Post to Discord” enqueues content.
+	•	Content Queue: shows queued item; after poster runs, status becomes “posted” with messageId.
+
+⸻
+
+4) 12 advisor-driven “don’t forgets” baked into the brief
+	•	Privacy (mod): store summaries, not raw toxic text.
+	•	Rate limits (Discord): clamp posts and retry with jitter.
+	•	Idempotency (SRE): recomputing highlights replaces same week rows.
+	•	Evidence first (commish norms): fairness shows inputs + 1-liner, not vibes.
+	•	SFW defaults (community): creativeTrashTalk OFF by default.
+	•	Permissions (security): mutate endpoints require commissioner or admin key.
+	•	Error envelope (DX): {error:{code,message}} everywhere.
+	•	Embeds length (Discord): 4096 hard cap; truncate w/ “…”.
+	•	Observability (ops): every action emits an event row.
+	•	Timezones (product): scheduling uses league timezone from Phase 1.
+	•	Flags (rollout): all new behavior behind feature flags.
+	•	No schema drift (DB): only via migrations, checked-in.
+
+⸻
+
+5) after Replit says “done”, paste these 6 smoke checks
+
+# 1 health
+curl -s $B/api/health | jq '.status'
+
+# 2 dispute
+curl -s -X POST $B/api/v2/disputes $HJSON -d '{"leagueId":"LEAGUE_ID","kind":"rule","details":{"q":"trade veto policy?"}}' | jq '.id,.status'
+
+# 3 vibes spike
+curl -s -X POST $B/api/v2/vibes/score $HJSON -H "X-Admin-Key: $ADMIN_KEY" \
+ -d '{"leagueId":"LEAGUE_ID","channelId":"CHANNEL_ID","messageId":"m2","authorId":"u2","text":"you suck so bad"}' | jq '{toxicity}'
+
+# 4 highlights
+curl -s -X POST $B/api/v2/highlights/compute $HJSON -d '{"leagueId":"LEAGUE_ID","week":4}' | jq '.[0]? // .summary?'
+
+# 5 queue + poster
+curl -s -X POST $B/api/v2/content/enqueue $HJSON -d '{"leagueId":"LEAGUE_ID","channelId":"CHANNEL_ID","scheduledAt":"2030-01-01T00:00:00Z","template":"highlight","payload":{"demo":true}}' | jq '.status'
+curl -s -X POST $B/api/v2/content/run -H "X-Admin-Key: $ADMIN_KEY" | jq '.run'
+
+# 6 regression spot
+curl -s $B/api/events?limit=5 | jq '.[0]'
+
+
+⸻
+
+✚ Addendum: Live Linking (Discord + Sleeper) & Typed Stubs
+
+Goal: A commissioner can finish /setup with their real Discord server and real Sleeper league, then see everything light up in Dashboard + Discord. No shell commands, no manual copy/paste IDs.
+
+A) Live Linking – System contract (no schema drift)
+
+Keep existing tables and env usage. Only use the already-present columns in leagues (e.g., guild_id, channel_id, sleeper_league_id, feature_flags, timezone) and whatever you already added in Phase 1. If a small helper view is needed, add a migration with only CREATE VIEW IF NOT EXISTS …—no table shape changes.
+
+A.1 Flows (endpoints you must confirm/complete)
+
+Discord flow
+	•	GET /api/discord/auth-url?redirectUri=<absolute> → returns Discord OAuth URL (scopes: identify, installation with bot applications.commands if needed).
+	•	GET /api/discord/callback?code=…&state=…
+	•	Exchange code → tokens, GET /users/@me, GET /users/@me/guilds.
+	•	Persist a pending setup row (session/account scoped) with: manageable guildChoices: {id,name,icon}[].
+	•	Return JSON { step: "discord_connected", guildChoices }.
+	•	GET /api/discord/channels?guildId=G → text channels the bot can post to (use bot token); JSON { channels:[{id,name}] }.
+	•	POST /api/setup/discord body: { accountId, guildId, channelId, timezone }
+	•	Upsert leagues row.
+	•	Register slash commands for that guild (programmatically).
+	•	Post welcome embed to the chosen channel (respect embed size limit).
+	•	Emit events row league_discord_linked.
+
+Sleeper flow
+	•	GET /api/sleeper/leagues?username=NAME&season=YYYY
+	•	GET /v1/user/<username> → user_id then /v1/user/<user_id>/leagues/nfl/<season>.
+	•	Return JSON compact list [{league_id,name,season,total_rosters}].
+	•	POST /api/setup/sleeper body: { accountId, guildId, sleeperLeagueId }
+	•	Persist on same leagues row.
+	•	Kick a sync task (rosters, owners, schedule).
+	•	Emit events row league_sleeper_linked.
+
+Activation + rules
+	•	POST /api/rag/index/:leagueId → index text rules (MVP: textarea); respond with {ok,chunksIndexed}.
+	•	POST /api/setup/activate body: { accountId, guildId } → verify guild_id + channel_id (+ sleeperLeagueId?) and flip feature flags or write a league_activated event.
+
+Status
+	•	GET /api/setup/status?guildId=G
+	•	Return JSON: { guildId, channelId, sleeperLeagueId, commands:[…], rag:{documents,chunks}, lastEvents:[…] }.
+
+Guardrails: JSON only, env usage only, keep raw-body verify for /api/discord/interactions, keep Vite /api guards, keep /api/v1 routes as-is.
+
+A.2 Frontend (/setup) – exact UI states
+	•	Step 1 – Connect Discord
+	•	Button → opens auth-url.
+	•	On callback JSON: render Guild select → Channel select (load via /channels).
+	•	Save → POST /api/setup/discord → success toast → advance.
+	•	Step 2 – Link Sleeper
+	•	Inputs: username (required), season (default current).
+	•	Show league cards; choose one; POST /api/setup/sleeper → success → advance.
+	•	Step 3 – Rules & Activate
+	•	Paste rules (textarea) → POST /api/rag/index/:leagueId.
+	•	Click “Finish” → POST /api/setup/activate.
+	•	Confetti; “Go to Dashboard”.
+
+Dashboard should now show all green checks and “Post test message” works out-of-the-box.
+
+A.3 Acceptance smoke (paste in shell; replace IDs)
+
+B=https://thecommish.replit.app
+HJSON='-H Content-Type: application/json'
+
+# status should show linked guild/channel + sleeper league
+curl -s "$B/api/setup/status?guildId=REAL_GUILD_ID" | jq
+
+# sleeper leagues list should include your target league
+curl -s "$B/api/sleeper/leagues?username=YOUR_SLEEPER&season=$(date +%Y)" | jq '.[0]'
+
+# activation returns ok
+curl -s -X POST "$B/api/setup/activate" $HJSON -d '{"accountId":"ACC","guildId":"REAL_GUILD_ID"}' | jq
+
+
+⸻
+
+B) Typed stubs (drop-in files & signatures)
+
+Put these under server/services/ (or your existing services dir) and wire them via your DI style. Keep no external side effects in constructors; all I/O in methods. Keep event emission via your existing event sink.
+
+server/services/vibes.ts
+
+import type { Storage } from "../storage";
+import type { Logger } from "../utils/logger";
+
+export type VibesScore = {
+  toxicity: number;   // 0..1
+  sentiment: number;  // -1..1
+  summary: string;    // <= 180 chars
+};
+
+export class VibesService {
+  constructor(private store: Storage, private log: Logger) {}
+
+  /**
+   * Score a message. DO NOT persist raw toxic text; persist summary + numeric scores.
+   */
+  async scoreMessage(params: {
+    leagueId: string;
+    channelId: string;
+    messageId: string;
+    authorId: string;
+    text: string;
+  }): Promise<VibesScore> {
+    // TODO: call provider or simple heuristic; clamp; summarize
+    // await this.store.logSentiment({ ... })
+    return { toxicity: 0.12, sentiment: 0.10, summary: "neutral/banter" };
+  }
+}
+
+server/services/moderation.ts
+
+import type { Storage } from "../storage";
+import type { Logger } from "../utils/logger";
+
+export class ModerationService {
+  constructor(private store: Storage, private log: Logger) {}
+
+  /** Freeze a thread (or channel) for N minutes; always log mod_actions. */
+  async freezeThread(params: {
+    leagueId: string;
+    channelId: string;
+    minutes: number;
+    reason?: string;
+    notifyChannel?: boolean;  // respect feature flag
+  }): Promise<{ until: string }> {
+    // TODO: post a pinned/system note if notifyChannel && flag on
+    // await this.store.insertModAction({ ... })
+    const until = new Date(Date.now() + (params.minutes || 10) * 60_000).toISOString();
+    return { until };
+  }
+
+  /** Post a deadpan rule clarification pulling from RAG. */
+  async clarifyRule(params: {
+    leagueId: string;
+    channelId: string;
+    query: string;
+  }): Promise<{ posted: boolean }> {
+    // TODO: use your RAG service; post to Discord via DiscordService; log mod_actions
+    return { posted: true };
+  }
+}
+
+server/services/tradeFairness.ts
+
+import type { Storage } from "../storage";
+import type { Logger } from "../utils/logger";
+
+export type TradeEvaluation = {
+  fairness: number;          // 0..1
+  rationale: string[];       // bullets, brief
+  inputs: Record<string, unknown>; // deterministic inputs used
+};
+
+export class TradeFairnessService {
+  constructor(private store: Storage, private log: Logger) {}
+
+  async evaluate(params: {
+    leagueId: string;
+    tradeId?: string;
+    proposal: { teamA: string[]; teamB: string[] };
+  }): Promise<TradeEvaluation> {
+    // TODO: compute delta projections + roster needs + scarcity; persist snapshot
+    return {
+      fairness: 0.64,
+      rationale: ["Balances WR scarcity vs RB surplus", "Starter delta ≈ +4.2 pts/wk for Team B"],
+      inputs: { deltaProj: 4.2, scarcity: { WR: "high", RB: "medium" } }
+    };
+  }
+}
+
+server/services/highlights.ts
+
+import type { Storage } from "../storage";
+import type { Logger } from "../utils/logger";
+
+export type HighlightKind = "comeback" | "blowout" | "bench_tragedy" | "top_scorer";
+
+export class HighlightsService {
+  constructor(private store: Storage, private log: Logger) {}
+
+  /** Idempotent compute: delete+insert for (leagueId,week). */
+  async computeWeek(params: { leagueId: string; week: number }): Promise<{ inserted: number }> {
+    // TODO: pull scores/rosters; derive moments; upsert to highlights
+    return { inserted: 3 };
+  }
+
+  async list(params: { leagueId: string; week: number }) {
+    // TODO: read from highlights; sort by weight
+    return [];
+  }
+}
+
+server/services/rivalries.ts
+
+import type { Storage } from "../storage";
+import type { Logger } from "../utils/logger";
+
+export class RivalriesService {
+  constructor(private store: Storage, private log: Logger) {}
+
+  /** Canonicalize team tuple; update head-to-head. */
+  async update(params: { leagueId: string; teamA: string; teamB: string; result: "A"|"B"|"T" }) {
+    // TODO: enforce canonical ordering; upsert record
+    return { ok: true };
+  }
+
+  async list(params: { leagueId: string }) {
+    // TODO: select rivalries by league
+    return [];
+  }
+}
+
+server/services/content.ts
+
+import type { Storage } from "../storage";
+import type { Logger } from "../utils/logger";
+
+export class ContentService {
+  constructor(private store: Storage, private log: Logger) {}
+
+  async enqueue(params: {
+    leagueId: string;
+    channelId: string;
+    scheduledAt: string; // ISO
+    template: "highlight" | "digest" | "rivalry";
+    payload: Record<string, unknown>;
+  }) {
+    // TODO: insert into content_queue; return id/status
+    return { status: "queued" };
+  }
+
+  /** Rate-limited (<=5/min). Posts due items and marks posted. */
+  async runPoster(): Promise<{ posted: number; skipped: number }> {
+    // TODO: claim due rows, post via DiscordService, mark posted, respect limits
+    return { posted: 0, skipped: 0 };
+  }
+}
+
+
+⸻
+
+C) Controller stubs (route handlers signatures only)
+
+Add in server/routes.ts near your other handlers. Use your existing zod & route() patterns.
+
+// Discord linking (already present – ensure these signatures are respected)
+app.get("/api/discord/auth-url", discordAuthUrl);          // returns { url }
+app.get("/api/discord/callback", discordCallback);         // returns { step, guildChoices }
+app.get("/api/discord/channels", listGuildChannels);       // returns { channels }
+app.post("/api/setup/discord", saveDiscordSelection);      // registers commands, posts welcome
+app.get("/api/sleeper/leagues", listSleeperLeagues);       // lists leagues for username+season
+app.post("/api/setup/sleeper", saveSleeperSelection);
+app.post("/api/rag/index/:leagueId", indexRules);
+app.post("/api/setup/activate", activateLeague);
+app.get("/api/setup/status", setupStatus);
+
+// Vibes / Moderation
+app.post("/api/v2/vibes/score", requireAdminKey, vibesScore);
+app.post("/api/v2/mod/freeze", requireCommissionerOrAdmin, modFreeze);
+app.post("/api/v2/mod/clarify-rule", requireCommissionerOrAdmin, modClarifyRule);
+
+// Disputes
+app.post ("/api/v2/disputes", createDispute);
+app.patch("/api/v2/disputes/:id", requireCommissionerOrAdmin, updateDispute);
+app.get  ("/api/v2/disputes", listDisputes);
+
+// Trades
+app.post("/api/v2/trades/evaluate", tradeEvaluate);
+
+// Highlights / Rivalries / Content
+app.post("/api/v2/highlights/compute", highlightsCompute);
+app.get ("/api/v2/highlights", listHighlights);
+app.post("/api/v2/rivalries/update", rivalriesUpdate);
+app.get ("/api/v2/rivalries", listRivalries);
+app.post("/api/v2/content/enqueue", contentEnqueue);
+app.get ("/api/v2/content/queue", contentQueue);
+app.post("/api/v2/content/run", requireAdminKey, contentRunPoster);
+
+
+⸻
+
+D) UI acceptance for Live Linking
+	•	/setup completes with your Discord guild & channel + your Sleeper league.
+	•	Dashboard “Status” shows: ✓ Discord, ✓ Channel, ✓ Sleeper, ✓ Rules indexed.
+	•	“Post test message” posts to your selected channel.
+	•	Slash commands visible in that guild.
+	•	events feed shows: league_discord_linked, league_sleeper_linked, league_activated.
+
+⸻
+
+E) Post-merge smoke (final)
+
+Use the Phase 2/3 smoke you already have plus these two:
+
+# 1) Real linking status must be green
+curl -s "$B/api/setup/status?guildId=YOUR_GUILD_ID" | jq '{guildId,channelId,sleeperLeagueId,commands}'
+
+# 2) Slash command ping (whoami or help) in Discord → must respond
+# (invoke from Discord; verify logs show interaction and HTTP 200 to Discord)
+
+
+⸻
