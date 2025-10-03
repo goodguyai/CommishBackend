@@ -1,0 +1,238 @@
+Perfect—let’s get you to a full send Beta link-up (Discord + Sleeper) with one copy-paste work order for Replit. This assumes your vite guard is now in place and the CDN issue is behind us. The goal: you click “Activate Beta” → authenticate → pick server + channel → pick Sleeper league → paste rules → bot posts welcome + slash commands work.
+
+Below is a single master prompt you can paste to the Replit Agent. It’s opinionated, guarded, and includes acceptance tests + rollback notes.
+
+⸻
+
+🚀 MASTER EXECUTION PROMPT — “Beta Activation (Discord + Sleeper) E2E”
+
+Do all steps below. Do not wander from the guardrails.
+
+0) Guardrails (do not change)
+	•	APP_BASE_URL must remain: https://thecommish.replit.app (no trailing slash).
+	•	Database: Supabase only. Do not introduce Neon/Replit DB. Do not touch schema except via migrations.
+	•	Environment access: use the centralized env service (no new process.env reads in routes).
+	•	Discord security: keep express.raw for /api/discord/interactions + Ed25519 verification.
+	•	Routing: keep the vite.ts API guards intact, and do not add any new catch-all that intercepts /api/*.
+
+1) Pre-flight verify (no code changes yet)
+	1.	Confirm server/vite.ts has both guards:
+	•	If req.originalUrl.startsWith("/api/") → return next().
+	•	Same guard for the production static fallthrough.
+	2.	Confirm server/index.ts mounts routes before Vite, and we send JSON for API 404s.
+	3.	Confirm we’re using DatabaseStorage (not Mem) when env.database.url is present.
+	4.	Confirm /api/health returns "status":"ok" (or "degraded" only if a known service is intentionally down).
+
+If any of the above is false, fix before proceeding.
+
+⸻
+
+2) Session + “Beta Activation” switch (small polish)
+
+Goal: Let me fully test Beta in one run. Auth will remain required in production, but allow a controlled developer override ONLY when env.app.devBetaAutosession === true (new getter in env service).
+	•	File: server/services/env.ts
+	•	Add optional getter: devBetaAutosession: boolean under app group (defaults to false).
+	•	File: server/routes.ts
+	•	In POST /api/app/beta/activate:
+	•	If !session.userId && !env.app.devBetaAutosession, return 401 (unchanged behavior).
+	•	If !session.userId && env.app.devBetaAutosession === true, create an internal dev session (UUID), persist via AuthService, and continue.
+	•	Log a warning that dev auto-session is in effect.
+
+This does not loosen production. It only helps your dev testing today.
+
+⸻
+
+3) API: Discord linking (OAuth → guilds → channels → save + welcome)
+
+Namespace these under /api/v2 to avoid any old CDN caching.
+
+3.1 Auth URL + Callback
+	•	Add: GET /api/v2/discord/auth-url
+Returns Discord OAuth URL with correct redirect_uri = ${APP_BASE_URL}/api/v2/discord/callback.
+	•	Add: GET /api/v2/discord/callback
+Exchange code → tokens; call GET /users/@me and GET /users/@me/guilds.
+Persist “pending setup” (accountId/session-bound) with the manageable guilds list.
+Return { step: "discord_connected", guildChoices: [{id,name,icon}] }.
+
+3.2 Channels for a selected guild
+	•	Add: GET /api/v2/discord/channels?guildId=<id>
+Use bot token to call GET /guilds/{guildId}/channels, filter to text channels bot can write to.
+Return { channels: [{id, name}] }.
+
+3.3 Save selection + register commands + welcome
+	•	Add: POST /api/v2/setup/discord
+Body: { accountId, guildId, channelId, timezone? }
+Actions:
+	•	Upsert a leagues row: { accountId, guildId, channelId, timezone }.
+	•	Programmatically register slash commands for the guild.
+	•	Post a welcome message to the channel:
+
+🎉 THE COMMISH is live here!  
+Try `/rules`, `/scoring`, or continue setup to connect your Sleeper league.
+
+
+	•	Write an install event.
+
+Return { ok: true, leagueId }.
+
+Note: Do not change schema. If your leagues table lacks one of these columns, create a migration instead of ad-hoc changes.
+
+⸻
+
+4) API: Sleeper linking (MVP = username → leagues → save)
+
+4.1 Find Sleeper leagues
+	•	Add: GET /api/v2/sleeper/leagues?username=<name>&season=<yyyy>
+Steps:
+	•	GET https://api.sleeper.app/v1/user/<username> → user_id.
+	•	GET .../v1/user/<user_id>/leagues/nfl/<season>
+	•	Return minimized fields: [ { league_id, name, season, total_rosters } ].
+
+4.2 Save league to our league row
+	•	Add: POST /api/v2/setup/sleeper
+Body: { accountId, guildId, sleeperLeagueId }
+Upsert onto the same leagues row.
+Optionally enqueue a background sync (/api/sleeper/sync/:leagueId) if it exists, then write an event.
+Return { ok: true }.
+
+⸻
+
+5) API: Finish setup + index rules
+
+5.1 Index rules into RAG
+	•	Verify/adjust: POST /api/rag/index/:leagueId is present and uses the env.openai model settings (not old ada), caches embeddings by SHA-256 hash, and writes documents + embeddings rows.
+
+5.2 Activate league
+	•	Add: POST /api/v2/setup/activate
+Body: { accountId, guildId }
+Verify league row has { guildId, channelId, sleeperLeagueId? }.
+Store that setup is complete; schedule digest if enabled.
+Return { ok: true }.
+
+⸻
+
+6) Frontend: single “Setup Wizard” page (3 steps)
+
+File: client/src/pages/setup.tsx (or your existing Setup page)
+	•	Step 1: Connect Discord
+	•	“Connect Discord” → hits /api/v2/discord/auth-url, opens OAuth, callback returns guildChoices.
+	•	Then show Guild Select → on select, call /api/v2/discord/channels?guildId=...
+	•	Then show Channel Select → POST /api/v2/setup/discord
+	•	Step 2: Connect Sleeper
+	•	Input: Sleeper username, default season = currentYear.
+	•	Show returned leagues → pick one → POST /api/v2/setup/sleeper
+	•	Step 3: Rules + Activate
+	•	Textarea (MVP) for rules content.
+	•	When clicked “Index & Finish”:
+	•	POST /api/rag/index/:leagueId
+	•	Then POST /api/v2/setup/activate
+
+UX polish
+	•	Persist step state in session (so refresh resumes).
+	•	Error modals with retry.
+	•	On success: confetti + “Go to Dashboard”.
+
+⸻
+
+7) Slash commands sanity (minimum)
+
+Make sure the handler supports at least:
+	•	/rules question:<text> → RAG search scoped to that league
+	•	/scoring question:<text>
+	•	/help
+	•	/reindex
+Return ephemeral replies, concise, with reference title/section when available.
+
+⸻
+
+8) Admin/Dev utilities (locked behind X-Admin-Key)
+	•	POST /api/discord/register-commands?guildId=...
+	•	POST /api/discord/post-test?guildId=... → posts an embed to the configured channel
+These help verify installs quickly.
+
+⸻
+
+9) Observability & error paths (quick wins)
+	•	All setup endpoints return { ok:false, code, message } on error (consistent shape).
+	•	/api/health shows "database":"connected", "embeddings":"available", "issues":[].
+	•	Add lightweight request logging for /api/v2/* (method + path + ms).
+
+⸻
+
+10) Acceptance tests (run after restart)
+
+Replace placeholders with real IDs/values once setup is done.
+
+Health
+
+curl -s "$APP_BASE_URL/api/health" | jq '.status,.services.database'
+# Expect: "ok" and "connected"
+
+Discord step
+
+# 1) Get OAuth URL
+curl -s "$APP_BASE_URL/api/v2/discord/auth-url" | jq
+
+# Complete the OAuth in browser, then:
+# 2) Channels for a guild
+curl -s "$APP_BASE_URL/api/v2/discord/channels?guildId=<GUILD_ID>" | jq '.channels[0]'
+
+# 3) Save selection & welcome
+curl -s -X POST "$APP_BASE_URL/api/v2/setup/discord" \
+  -H "Content-Type: application/json" \
+  -d '{"accountId":"<ACCOUNT_ID>","guildId":"<GUILD_ID>","channelId":"<CHANNEL_ID>","timezone":"America/Chicago"}' | jq
+
+Sleeper step
+
+# 4) Find leagues for a user
+curl -s "$APP_BASE_URL/api/v2/sleeper/leagues?username=<SLEEPER_HANDLE>&season=$(date +%Y)" | jq '.[0]'
+
+# 5) Save the chosen league
+curl -s -X POST "$APP_BASE_URL/api/v2/setup/sleeper" \
+  -H "Content-Type: application/json" \
+  -d '{"accountId":"<ACCOUNT_ID>","guildId":"<GUILD_ID>","sleeperLeagueId":"<LEAGUE_ID>"}' | jq
+
+Rules + activate
+
+# 6) Index tiny rules sample
+curl -s -X POST "$APP_BASE_URL/api/rag/index/<LEAGUE_ID>" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"SECTION 1: Draft in August. SECTION 2: 0.5 PPR.","contentType":"text/plain","title":"MVP Rules","version":"2025.1"}' | jq
+
+# 7) Activate
+curl -s -X POST "$APP_BASE_URL/api/v2/setup/activate" \
+  -H "Content-Type: application/json" \
+  -d '{"accountId":"<ACCOUNT_ID>","guildId":"<GUILD_ID>"}' | jq
+
+Sanity
+
+# 8) Post a test message (admin)
+curl -s -X POST "$APP_BASE_URL/api/discord/post-test?guildId=<GUILD_ID>" \
+  -H "X-Admin-Key: $ADMIN_KEY" | jq
+
+In Discord, confirm:
+	•	Slash commands appear.
+	•	Welcome message posted in selected channel.
+	•	/rules works against the sample doc.
+
+⸻
+
+11) Rollback & safety
+	•	If any new /api/v2/* endpoints fail, do not remove existing /api/*; they can coexist.
+	•	If anything breaks, revert only the affected files, don’t touch vite.ts guards or the env service.
+	•	Zero schema mutations unless via migration; if migration needed, add migrations/<next>__beta_linking.sql, idempotent (IF NOT EXISTS) and reviewed.
+
+⸻
+
+Deliverables checklist (for me):
+	•	✅ /api/v2/discord/auth-url, /callback, /channels, POST /api/v2/setup/discord
+	•	✅ /api/v2/sleeper/leagues, POST /api/v2/setup/sleeper
+	•	✅ POST /api/rag/index/:leagueId, POST /api/v2/setup/activate
+	•	✅ Setup wizard stepper wired to those endpoints
+	•	✅ Slash commands live in the guild; welcome message posted
+	•	✅ Admin utilities work with X-Admin-Key
+	•	✅ /api/health shows "ok"
+
+⸻
+
+If you want, I can stay here and sanity-check the curl outputs you get back as the agent completes each section.
