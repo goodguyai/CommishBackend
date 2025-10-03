@@ -53,6 +53,7 @@ function AppRouter() {
       <Route path="/" component={HomePage} />
       <Route path="/landing" component={LandingPage} />
       <Route path="/onboarding" component={OnboardingPage} />
+      <Route path="/setup" component={OnboardingPage} />
       <Route path="/style-guide" component={StyleGuide} />
       <Route path="/preview-dashboard" component={PreviewDashboard} />
       <Route>

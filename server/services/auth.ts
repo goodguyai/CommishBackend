@@ -13,6 +13,15 @@ declare module "express-session" {
     userId?: string;
     accountId?: string;
     email?: string;
+    discordOauth?: {
+      userId: string;
+      username: string;
+      guilds: Array<{
+        id: string;
+        name: string;
+        icon?: string;
+      }>;
+    };
   }
 }
 
@@ -36,7 +45,7 @@ export class AuthService {
   async createDemoSession(req: Request): Promise<SessionUser> {
     const userId = randomUUID();
     req.session.userId = userId;
-    req.session.email = null;
+    req.session.email = undefined;
     
     return {
       userId,
@@ -53,7 +62,6 @@ export class AuthService {
     
     const accountId = await this.store.createAccount?.({ 
       email: user.email || `user-${user.userId}@demo.local`,
-      name: null, 
       plan: 'beta' 
     });
     

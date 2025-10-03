@@ -36,6 +36,7 @@ export interface IStorage {
   getAllLeagues(): Promise<League[]>;
   getLeaguesByAccount(accountId: string): Promise<League[]>;
   getLeagueByGuildId(guildId: string): Promise<League | undefined>;
+  getLeaguesByGuildId(guildId: string): Promise<League[]>;
   getLeagueBySleeperLeagueId(sleeperLeagueId: string): Promise<League | undefined>;
   createLeague(league: InsertLeague): Promise<string>;
   updateLeague(id: string, updates: Partial<League>): Promise<void>;
@@ -260,6 +261,10 @@ export class DatabaseStorage implements IStorage {
   async getLeagueByGuildId(guildId: string): Promise<League | undefined> {
     const leagues = await this.db.select().from(schema.leagues).where(eq(schema.leagues.guildId, guildId));
     return leagues[0];
+  }
+
+  async getLeaguesByGuildId(guildId: string): Promise<League[]> {
+    return await this.db.select().from(schema.leagues).where(eq(schema.leagues.guildId, guildId));
   }
 
   async getLeagueBySleeperLeagueId(sleeperLeagueId: string): Promise<League | undefined> {
@@ -1100,6 +1105,9 @@ export class MemStorage implements IStorage {
   }
   async getLeagueByGuildId(guildId: string): Promise<League | undefined> {
     return Array.from(this.leagues.values()).find(l => l.guildId === guildId);
+  }
+  async getLeaguesByGuildId(guildId: string): Promise<League[]> {
+    return Array.from(this.leagues.values()).filter(l => l.guildId === guildId);
   }
   async getLeagueBySleeperLeagueId(sleeperLeagueId: string): Promise<League | undefined> {
     return Array.from(this.leagues.values()).find(l => l.sleeperLeagueId === sleeperLeagueId);

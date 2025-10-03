@@ -166,6 +166,7 @@ export const env = {
       adminKey: getEnv().ADMIN_KEY,
       nodeEnv: getEnv().NODE_ENV,
       sessionSecret: getEnv().SESSION_SECRET,
+      devBetaAutosession: process.env.DEV_BETA_AUTOSESSION === 'true' || false,
     };
   },
 };
