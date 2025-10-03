@@ -100,10 +100,9 @@ test('06 Owners mapping UI + API', async ({ page }) => {
 
 test('07 Reminders create/list (custom)', async ({ page }) => {
   test.skip(!KNOWN.leagueId, 'No TEST_LEAGUE_ID set for reminders');
-  const create = await page.request.post(`${APP}/api/v2/reminders`, {
+  const create = await page.request.post(`${APP}/api/leagues/${KNOWN.leagueId}/reminders`, {
     headers: { 'Content-Type': 'application/json' },
     data: {
-      leagueId: KNOWN.leagueId,
       channelId: KNOWN.channelId || null,
       text: 'Set your lineup!',
       cron: '0 15 * * SAT'
@@ -111,7 +110,7 @@ test('07 Reminders create/list (custom)', async ({ page }) => {
   });
   expect(create.status()).toBeLessThan(500);
 
-  const list = await expectJson(page, `${APP}/api/v2/reminders?leagueId=${KNOWN.leagueId}`);
+  const list = await expectJson(page, `${APP}/api/leagues/${KNOWN.leagueId}/reminders`);
   expect(Array.isArray(list.data)).toBeTruthy();
 });
 
