@@ -870,6 +870,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // === END SETUP WIZARD ENDPOINTS ===
 
+  // === /api/v2 ALIASES (CDN Cache Bypass) ===
+  // Temporary aliases to bypass potential CDN caching of old HTML responses
+  // These delegate to the original handlers
+  
+  app.get("/api/v2/leagues/:leagueId", (req, res, next) => {
+    req.url = `/api/leagues/${req.params.leagueId}`;
+    next();
+  });
+
+  app.patch("/api/v2/leagues/:leagueId", (req, res, next) => {
+    req.url = `/api/leagues/${req.params.leagueId}`;
+    next();
+  });
+
+  app.post("/api/v2/polls", (req, res, next) => {
+    req.url = `/api/polls`;
+    next();
+  });
+  
+  // === END /api/v2 ALIASES ===
+
   // Health check with real database connectivity test
   app.get("/api/health", async (req, res) => {
     const startTime = Date.now();

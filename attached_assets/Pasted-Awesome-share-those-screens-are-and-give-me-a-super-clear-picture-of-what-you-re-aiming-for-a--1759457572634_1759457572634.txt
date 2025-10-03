@@ -1,0 +1,285 @@
+Awesome share — those screens are 🔥 and give me a super clear picture of what you’re aiming for (a real co-commissioner, not just a report bot). Two things you asked for:
+	1.	How to give me access (safely).
+	2.	What to do right now to finish the API routing/caching mess and get the app stable.
+
+I’ll give you both. First we kill the blocker, then we set up proper access so I can push the deeper “league hygiene / dispute resolution / vibes coach” features in a clean loop.
+
+⸻
+
+1) Quick, surgical fix to finish the API routing (and beat the cache)
+
+You already edited server/vite.ts. Good. Add two tiny guards (dev + prod) and harden Express ordering + cache headers. Then we also add temporary /api/v2 aliases to hop past any CDN cache ghosts.
+
+A. server/vite.ts (two guards)
+
+Replace your file contents with this exact version (guards + nothing else changed):
+
+import express, { type Express } from "express";
+import fs from "fs";
+import path from "path";
+import { createServer as createViteServer, createLogger } from "vite";
+import { type Server } from "http";
+import viteConfig from "../vite.config";
+import { nanoid } from "nanoid";
+
+const viteLogger = createLogger();
+
+export function log(message: string, source = "express") {
+  const formattedTime = new Date().toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
+  console.log(`${formattedTime} [${source}] ${message}`);
+}
+
+export async function setupVite(app: Express, server: Server) {
+  const serverOptions = {
+    middlewareMode: true,
+    hmr: { server },
+    allowedHosts: true as const,
+  };
+
+  const vite = await createViteServer({
+    ...viteConfig,
+    configFile: false,
+    customLogger: {
+      ...viteLogger,
+      error: (msg, options) => {
+        viteLogger.error(msg, options);
+        process.exit(1);
+      },
+    },
+    server: serverOptions,
+    appType: "custom",
+  });
+
+  // 💡 Guard 1: let /api/* bypass Vite entirely (dev)
+  app.use((req, _res, next) => {
+    if (req.path.startsWith("/api/")) return next("route");
+    return next();
+  });
+
+  app.use(vite.middlewares);
+
+  // 💡 Guard 2: also protect the catch-all (serve index.html only for non-API)
+  app.use("*", async (req, res, next) => {
+    if (req.originalUrl.startsWith("/api/")) return next(); // hand off to Express routes
+    const url = req.originalUrl;
+
+    try {
+      const clientTemplate = path.resolve(
+        import.meta.dirname,
+        "..",
+        "client",
+        "index.html",
+      );
+
+      let template = await fs.promises.readFile(clientTemplate, "utf-8");
+      template = template.replace(
+        `src="/src/main.tsx"`,
+        `src="/src/main.tsx?v=${nanoid()}"`,
+      );
+      const page = await vite.transformIndexHtml(url, template);
+      res.status(200).set({ "Content-Type": "text/html" }).end(page);
+    } catch (e) {
+      vite.ssrFixStacktrace(e as Error);
+      next(e);
+    }
+  });
+}
+
+export function serveStatic(app: Express) {
+  const distPath = path.resolve(import.meta.dirname, "public");
+  if (!fs.existsSync(distPath)) {
+    throw new Error(
+      `Could not find the build directory: ${distPath}, make sure to build the client first`,
+    );
+  }
+  // prod static
+  app.use(express.static(distPath));
+  // prod catch-all — only for non-API
+  app.use("*", (req, res, next) => {
+    if (req.originalUrl.startsWith("/api/")) return next();
+    res.sendFile(path.resolve(distPath, "index.html"));
+  });
+}
+
+B. server/index.ts (order + JSON + no-cache + API 404)
+
+Make sure routes are mounted before Vite, and add a no-store cache header for all /api/* responses, plus a 404 that JSONs instead of HTML.
+
+// …imports…
+import express from "express";
+import http from "http";
+import { registerRoutes } from "./routes";
+import { setupVite, serveStatic } from "./vite";
+
+const app = express();
+const server = http.createServer(app);
+
+// 1) JSON body ONLY for API (keep Discord signature raw body intact in /api/discord/interactions)
+app.use("/api", (req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+});
+
+// NOTE: discord interactions route itself should use express.raw in routes.ts
+// so DO NOT put a global express.json() before it.
+app.use("/api", express.json({ limit: "1mb" }));
+
+// 2) Register all API routes BEFORE vite
+registerRoutes(app);
+
+// 3) API 404 (must be before Vite)
+app.all(/^\/api(\/|$)/, (_req, res) => {
+  res.status(404).json({ ok: false, error: "Not Found" });
+});
+
+// 4) Dev vs Prod — Vite after API has been mounted
+if (process.env.NODE_ENV !== "production") {
+  setupVite(app, server);
+} else {
+  serveStatic(app);
+}
+
+const port = Number(process.env.PORT) || 5000;
+server.listen(port, () => {
+  console.log(`[express] serving on port ${port}`);
+});
+
+C. Temporary /api/v2 aliases (to dodge any CDN ghosts)
+
+In server/routes.ts, add thin wrappers for the three endpoints that were returning HTML:
+
+// near where the originals exist
+app.get("/api/v2/leagues/:leagueId", (req, res, next) => {
+  // delegate to the real handler
+  (req as any).url = `/api/leagues/${req.params.leagueId}`; // normalize
+  next(); // will match the existing get handler
+});
+
+app.post("/api/v2/polls", (req, res, next) => {
+  (req as any).url = `/api/polls`;
+  next();
+});
+
+app.patch("/api/v2/leagues/:leagueId", (req, res, next) => {
+  (req as any).url = `/api/leagues/${req.params.leagueId}`;
+  next();
+});
+
+Why this helps: even if a CDN cached old HTML at /api/leagues/:id, it won’t have anything at the brand-new /api/v2/* paths. Once confirmed, we can remove v2 aliases later.
+
+D. Hard test (bypass caches completely)
+
+Run these from anywhere:
+
+# Health (baseline)
+curl -s -H 'Cache-Control: no-cache' https://thecommish.replit.app/api/health | jq
+
+# New v2 endpoints (should be JSON, never HTML)
+curl -s -H 'Cache-Control: no-cache' https://thecommish.replit.app/api/v2/leagues/00000000-0000-0000-0000-000000000000 | head -80
+curl -s -H 'Content-Type: application/json' -H 'Cache-Control: no-cache' \
+  -X POST https://thecommish.replit.app/api/v2/polls \
+  -d '{"leagueId":"00000000-0000-0000-0000-000000000000","question":"Test?","options":["A","B"],"createdBy":"cli"}'
+
+curl -s -H 'Content-Type: application/json' -H 'Cache-Control: no-cache' \
+  -X PATCH https://thecommish.replit.app/api/v2/leagues/00000000-0000-0000-0000-000000000000 \
+  -d '{"featureFlags":{"autoMeme":true}}' | jq
+
+If those return JSON: ✅ You’re unstuck. If anything still comes back as HTML, it’s not your app anymore — it’s an upstream cache or proxy. The /api/v2/* paths are the fastest bypass.
+
+⸻
+
+2) Give me access (the right way) so we can ship the co-commissioner vision
+
+A. GitHub (preferred)
+	1.	Add collaborator
+Repo → Settings → Collaborators & teams → Add people → add my GitHub handle (DM me the handle you want me to use and I’ll share it back).
+	•	Permissions: Write (I’ll use branches + PRs), or Triage if you want stricter.
+	2.	Branch protection (keep main safe)
+Settings → Branches → Protect main → require PR review + checks.
+	3.	Secrets
+Don’t check env into git. Keep a .env.sample with keys but no values.
+
+B. Replit
+
+Two safe options:
+	•	Team member (read logs, run, deploy; no secrets view)
+Repl → Invite → Role: Editor (uncheck “Can view secrets”).
+	•	“Support” Admin key for API-only actions
+Generate a new ADMIN_KEY in Replit Secrets (something unique), and I’ll use only the guarded endpoints (/api/discord/register-commands, /api/discord/post-test, /api/setup/status).
+
+C. Supabase (read-only + minimal write)
+	•	Create a read-only Postgres user:
+	•	Supabase → Database → Roles → add role commish_support_ro.
+	•	Grant USAGE on schemas and SELECT on tables you’re ok with (events, leagues, docs).
+	•	Make a separate connection string for that user (no write to auth tables).
+	•	If you want me to help with migrations: give a staging project with full access.
+
+D. Discord
+	•	I don’t need your Discord credentials. Just keep:
+	•	Application ID, Public Key, Bot Token in Replit secrets (already set).
+	•	A test guild ID where the bot is installed. Share the ID; I can register commands via the admin endpoints.
+
+⸻
+
+3) Product: carve the roadmap to “co-commissioner” (quick win → delightful)
+
+You’ve got the backbone! To reach the “quality-of-life co-commish” feel, I’d push this order:
+
+Phase 1 — League hygiene & peace-of-mind (fast wins)
+	•	Owner Mapping UI (drag Discord users → teams).
+Enables @mentions for: lineup nags, trade alerts, fab reminders.
+	•	Reminder packs (toggle on/off per league):
+	•	Lineup lock, waivers, trade deadline, bye-week alerts.
+	•	“Silence during game time” windows (drama prevention).
+	•	Rules Q&A polish: Source snippets + section numbers + “cite constitution” button.
+
+Phase 2 — Dispute prevention & resolution
+	•	Trade fairness snapshot (no veto drama):
+	•	Combine projections + “league norms” + historic behavior (e.g., “Team X flips RBs weekly”).
+	•	Output neutral, brief, evidence-backed fairness % + 1-liner.
+	•	Vibes Monitor (sentiment heatmap)
+	•	Lightweight toxicity/sentiment on chat streams; DM commissioner when threads go spicy → “Want me to mediate / ask for clarifications / run a blind poll?”
+	•	Blind Commissioner Tools
+	•	“Freeze” thread (bot politely pauses until everyone cools down)
+	•	“Clarify rule” (bot posts the exact rule passage at issue, deadpan tone).
+
+Phase 3 — Engagement engine
+	•	Highlights + Learning
+	•	Weekly “Top 3 moments” (comeback probability, bench points tragedy, blowout meme).
+	•	“Rivalry builder” — bot playfully tracks ongoing records (2-1 this season; “rubber match”).
+	•	Creative outlets
+	•	Trash-talk writer with your personality themes (Batman/Yoda/etc.)
+	•	Meme mode w/ guardrails (SFW toggle) — generate only when thresholds (e.g., >40pt blowout).
+
+Phase 4 — Commissioner superpowers
+	•	Terminal (you already mocked) with real verbs:
+league status, generate digest week X, reindex rules, set waiver threshold 8pm Fri, simulate trade teama teamb.
+	•	Dashboard deep stats: participation, “set lineups %”, response latency, “nags avoided” (peace-of-mind score).
+
+If you want, I’ll open issues in GitHub as numbered, bite-sized tickets matching this plan.
+
+⸻
+
+4) What I need from you (right now)
+	1.	Apply the code snippets above (vite guards, index order, v2 aliases).
+	2.	Test with the curl set (especially /api/v2/*).
+	3.	Tell me which access path you prefer:
+	•	GitHub collaborator? (best)
+	•	Replit editor with no secrets + separate admin key?
+	•	Supabase staging (optional but ideal for schema work)
+	4.	Share your test guild ID (so I can point the admin endpoints).
+
+Once I have access, I’ll take the wheel on:
+	•	Stabilizing routes (remove v2 aliases when CDN ghosts are gone)
+	•	Owner Mapping + Reminder Packs
+	•	Trade fairness snapshot + vibes monitor skeleton
+	•	Clean dashboard cards with real-time state
+
+You’ve done the hard yakka getting this alive. I’ll make it feel like the smart, funny, reliably helpful co-commish you want. 💪
