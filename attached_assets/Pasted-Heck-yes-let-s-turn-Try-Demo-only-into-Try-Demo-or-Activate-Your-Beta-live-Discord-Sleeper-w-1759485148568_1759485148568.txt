@@ -1,0 +1,304 @@
+Heck yes—let’s turn “Try Demo only” into “Try Demo or Activate Your Beta (live Discord + Sleeper)” without breaking any of the guardrails we’ve set. Below is a single, copy-paste master brief for Replit that:
+	•	keeps Supabase-only + env.ts + JSON-only APIs + Vite /api/* guards + v1/v2 routes
+	•	adds a clean Demo vs Beta mode UX at the top of the app
+	•	wires real linking (Discord + Sleeper) end-to-end (you can onboard your two live leagues today)
+	•	ships typed stubs so the agent fills bodies coherently (no drift)
+	•	includes migrations (idempotent), endpoints, UI, tests, and acceptance
+
+Paste this to your Replit Agent as-is.
+
+⸻
+
+THE COMMISH — Demo vs Beta Activation + Live Linking
+
+Implement in this exact order: migrations → services → endpoints → UI → tests → deploy.
+Never break §Prime Directives:
+	•	Supabase DB only (no Neon); schema changes only via migrations; idempotent SQL.
+	•	Read secrets only through server/services/env.ts.
+	•	Keep Discord interactions raw-body verification.
+	•	Keep Vite /api/* guards in server/vite.ts and JSON-only responses.
+	•	Keep /api/v1/* and /api/v2/* working (don’t delete or rename existing routes).
+	•	Respect existing feature flags + event logging.
+
+⸻
+
+0) Pre-flight (2 min)
+	1.	Redeploy to ensure prod == current build. If not, Phase 2/3 routes may 404 in prod while working locally.
+	2.	Verify health:
+
+curl -s https://thecommish.replit.app/api/health | jq
+
+
+	3.	Confirm Vite guards still active (no HTML for API 404s):
+
+curl -is https://thecommish.replit.app/api/definitely-not-here | head -n 20
+# Expect: 404 JSON body, NOT index.html
+
+
+
+⸻
+
+1) Migrations — 0008_modes_auth.sql (idempotent)
+
+We already use an accountId concept. Don’t change existing columns; add the minimum scaffolding for login + gating. If tables already exist, NOOP (use IF NOT EXISTS). No destructive changes.
+
+Create migrations/0008_modes_auth.sql:
+
+-- Auth/account scaffolding (safe to re-run)
+create table if not exists accounts (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  name text,
+  plan text default 'beta'
+);
+
+create table if not exists user_accounts (
+  user_id uuid not null,
+  account_id uuid not null references accounts(id) on delete cascade,
+  role text not null default 'owner',
+  primary key (user_id, account_id)
+);
+
+-- Optional: if you already have leagues.account_id, skip
+alter table if exists leagues
+  add column if not exists account_id uuid;
+
+-- Helpful view: demo vs beta mode (read-only)
+create or replace view v_league_modes as
+select
+  l.id as league_id,
+  l.guild_id,
+  l.channel_id,
+  l.sleeper_league_id,
+  coalesce((l.feature_flags->>'demo')::boolean, false) as is_demo,
+  coalesce((l.feature_flags->>'beta')::boolean, true)  as is_beta,
+  l.account_id
+from leagues l;
+
+-- Invite tokens for controlled beta (optional)
+create table if not exists beta_invites (
+  code text primary key,
+  created_at timestamptz not null default now(),
+  claimed_by uuid,
+  claimed_at timestamptz
+);
+
+Run migration through your normal path. Do not introduce SSL hacks or drift.
+
+⸻
+
+2) Services — typed stubs (drop-in, no side effects in constructors)
+
+Add these files (or merge if present) under server/services/. Only method signatures + minimal safe returns; Replit can fill logic later.
+
+auth.ts
+
+import type { Storage } from "../storage";
+
+export type SessionUser = { userId: string; email?: string | null; accountId?: string | null };
+
+export class AuthService {
+  constructor(private store: Storage) {}
+
+  // Resolve current user from cookie/header/session. Never read process.env directly here.
+  async getSessionUser(req: import("express").Request): Promise<SessionUser | null> {
+    // TODO: wire to Supabase auth token (client-side) or your session cookie
+    return null;
+  }
+
+  // Ensure an account exists for the user; create default if none.
+  async ensureAccount(user: SessionUser): Promise<string /*accountId*/> {
+    // TODO: lookup user_accounts; insert if missing
+    return user.accountId || "00000000-0000-0000-0000-000000000000";
+  }
+}
+
+demo.ts
+
+export class DemoService {
+  /** Provision or reuse a demo league for quick exploration. */
+  async ensureDemoLeague(accountId: string): Promise<{ leagueId: string }> {
+    // TODO: create lightweight demo league + featureFlags.demo=true
+    return { leagueId: "demo-league-id" };
+  }
+}
+
+Keep the previously supplied stubs for vibes.ts, moderation.ts, tradeFairness.ts, highlights.ts, rivalries.ts, content.ts. They stay as-is.
+
+⸻
+
+3) Endpoints — Activation & Live Linking Entry Points
+
+We already built the deep linking flows (Discord + Sleeper + Rules + Activate). This section adds a mode gate and account-aware session so a real user can onboard their live league.
+
+3.1 Public entry
+	•	GET /api/app/modes
+	•	Returns which entry CTAs to show.
+	•	Response:
+
+{
+  "cta": ["demo","beta"], 
+  "hasSession": true,
+  "hasLeague": false
+}
+
+
+	•	POST /api/app/demo/activate
+	•	Body: {} (optional { inviteCode })
+	•	Uses AuthService.getSessionUser(): if no session, create an anonymous demo session (cookie) or soft account.
+	•	Calls DemoService.ensureDemoLeague(accountId) → returns { leagueId }.
+	•	Response { ok:true, leagueId }.
+	•	POST /api/app/beta/activate
+	•	Body: { inviteCode?: string }
+	•	Requires session user. If inviteCode provided, mark as claimed.
+	•	Ensures an accounts record + user_accounts link.
+	•	Response { ok:true, next:"/setup" }.
+
+3.2 Identity & status
+	•	GET /api/app/me
+	•	Returns { userId, accountId, email, leagues:[{id,name,isDemo,isBeta}] }.
+	•	GET /api/setup/status?guildId=G
+	•	(Already in place in your system.) Ensure it also returns mode: "demo"|"beta" from v_league_modes.
+
+All responses JSON. Use zod validation. Never leak HTML.
+
+⸻
+
+4) UI — Homepage Mode Gate + Setup Entrances
+
+4.1 Home /app (or / if that’s your shell)
+
+Add a hero with two cards:
+	•	Try Demo
+	•	Button → POST /api/app/demo/activate → route to /dashboard?leagueId=<demoLeagueId>
+	•	Show small “sample data, safe playground” badge.
+	•	Activate Your Beta
+	•	Button → if not signed in: open Login modal (Supabase Auth—Magic Link + Discord OAuth).
+	•	After sign-in → POST /api/app/beta/activate → redirect to /setup.
+
+Place a subtle “Already onboarded? Open Dashboard” link (reads /api/app/me to select last league).
+
+4.2 Header bits (everywhere, small but crucial)
+	•	ModeBadge: Show “DEMO” or “BETA” next to league name (reads v_league_modes).
+	•	Finish Setup banner on Dashboard if guild/channel/sleeper not set → button “Resume Setup” → /setup.
+
+4.3 /setup (uses earlier addendum)
+
+Keep the 3-step wizard we defined:
+	1.	Connect Discord → guild + channel
+	2.	Link Sleeper → pick league
+	3.	Index Rules & Activate → confetti → “Go to Dashboard”
+
+4.4 Login modal (minimal)
+
+Use client Supabase JS for Magic Link + Discord OAuth. Don’t re-invent sessions.
+
+⸻
+
+5) Wiring to existing linking flows
+
+Make sure the following already-implemented endpoints are callable from /setup. If any are missing, implement now (all JSON):
+	•	GET /api/discord/auth-url
+	•	GET /api/discord/callback
+	•	GET /api/discord/channels?guildId=...
+	•	POST /api/setup/discord
+	•	GET /api/sleeper/leagues?username=&season=
+	•	POST /api/setup/sleeper
+	•	POST /api/rag/index/:leagueId
+	•	POST /api/setup/activate
+	•	GET /api/setup/status?guildId=...
+
+Keep the admin-guarded utility endpoints you added:
+	•	POST /api/discord/register-commands?guildId=...
+	•	POST /api/discord/post-test?guildId=...
+
+⸻
+
+6) Acceptance (live league & guild today)
+
+Replace YOUR_* with real IDs/usernames.
+
+B=https://thecommish.replit.app
+HJSON='-H Content-Type: application/json'
+
+# 1) Home shows both CTAs
+curl -s "$B/api/app/modes" | jq
+
+# 2) Activate demo (returns a league)
+curl -s -X POST "$B/api/app/demo/activate" $HJSON -d '{}' | jq
+
+# 3) Activate beta (needs a session; run via browser)
+# After sign-in, go to /setup and complete Step 1 & 2 using your real Discord & Sleeper.
+
+# 4) Sleeper lookup
+curl -s "$B/api/sleeper/leagues?username=YOUR_SLEEPER&season=$(date +%Y)" | jq '.[0]'
+
+# 5) Save Sleeper selection (from wizard)
+curl -s -X POST "$B/api/setup/sleeper" $HJSON \
+  -d '{"accountId":"YOUR_ACCOUNT","guildId":"YOUR_GUILD","sleeperLeagueId":"YOUR_LEAGUE"}' | jq
+
+# 6) Activate league (finalize)
+curl -s -X POST "$B/api/setup/activate" $HJSON -d '{"accountId":"YOUR_ACCOUNT","guildId":"YOUR_GUILD"}' | jq
+
+# 7) Status should be green & mode shown
+curl -s "$B/api/setup/status?guildId=YOUR_GUILD" | jq '{mode,guildId,channelId,sleeperLeagueId,commands}'
+
+Discord check
+Use /whoami or /help in your server → must respond. Also test your Post test message button on the Dashboard.
+
+⸻
+
+7) Tests & QA
+
+Add/extend qa-smoke.sh:
+	•	GET /api/app/modes (200 JSON; contains demo + beta)
+	•	POST /api/app/demo/activate (200 JSON; returns leagueId)
+	•	GET /api/app/me (with & without session; JSON shape)
+	•	existing Phase 1/2/3 smokes (keep)
+
+Add Playwright test:
+	•	Home shows both CTAs
+	•	“Try Demo” routes to dashboard with DEMO badge
+	•	“Activate Beta” opens Login; after sign-in, wizard Step 1 appears
+
+⸻
+
+8) UX copy (tiny but important)
+	•	Home hero:
+	•	“Try Demo” — Explore The Commish with sample data. Safe, instant, no signup required.
+	•	“Activate Your Beta” — Connect your Discord & Sleeper. Real automations in minutes.
+	•	Mode badge: DEMO / BETA next to league selector.
+	•	Finish Setup banner: “You’re almost there. Connect Discord and Sleeper to go live.”
+
+⸻
+
+9) Guardrails checklist (re-confirm before merge)
+	•	No new secrets outside env.ts
+	•	All new routes return JSON only
+	•	Vite /api/* guards intact; /api/v1 + /api/v2 untouched
+	•	Migrations safe/idempotent; no destructive changes
+	•	Events logged for: demo_activated, beta_activated, league_discord_linked, league_sleeper_linked, league_activated
+	•	Scheduler unchanged (content poster, digests), but respects mode (don’t spam DEMO servers unless demo flag enabled)
+
+⸻
+
+10) Rollout & fallback
+	•	If any CDN cache returns HTML again, keep the /api/v2 aliases you already added; prefer /api in code, but leave /api/v2 as bypass.
+	•	If prod still looks like “old build”, click Deploy in Replit. Confirm /api/app/modes exists.
+
+⸻
+
+11) Done-When
+	•	Home shows two CTAs; Demo works immediately; Beta funnels to /setup.
+	•	You (the commissioner) can sign in, select your real Discord guild & channel, select your real Sleeper league, paste rules, click Finish.
+	•	Dashboard shows all green. Slash commands respond in your server.
+	•	Mode badge reflects the current league.
+	•	All smoke tests pass; replit.md updated with changelog: “0008 Demo vs Beta mode + Live Linking UX”.
+
+⸻
+
+Notes for you
+
+This plan leaves all your Phase 1–3 work intact, adds a clear top-level entry for Demo vs Beta, and gives you a true live onboarding path you can use today with your two real leagues. It also keeps the codebase coherent (typed stubs, idempotent migrations, JSON-only, env service, Vite guards, Supabase-only), so future refactors stay smooth.
+
+When you’re ready, I can also draft the tiny React components (ModeBadge, FinishSetupBanner, HomeCTAs) and the tanstack-query hooks for /api/app/* so your agent just plugs them in.
