@@ -1119,7 +1119,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 4. POST /api/v2/disputes - Open dispute
+  // 4. GET /api/v2/disputes - List disputes with optional filtering
+  app.get("/api/v2/disputes", async (req, res) => {
+    try {
+      const { leagueId, status } = req.query;
+
+      if (!leagueId || typeof leagueId !== 'string') {
+        return res.status(400).json({ error: "leagueId query parameter is required" });
+      }
+
+      // Get disputes for league
+      const allDisputes = await storage.getDisputesByLeague(leagueId);
+      
+      // Filter by status if provided
+      let disputes = allDisputes;
+      if (status && typeof status === 'string') {
+        disputes = allDisputes.filter(d => d.status === status);
+      }
+
+      res.json({ disputes });
+    } catch (error) {
+      console.error("List disputes error:", error);
+      res.status(500).json({ error: "Failed to list disputes", code: "DISPUTES_LIST_FAILED" });
+    }
+  });
+
+  // 5. POST /api/v2/disputes - Open dispute
   app.post("/api/v2/disputes", async (req, res) => {
     try {
       // Validate request body
@@ -1156,7 +1181,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 5. PATCH /api/v2/disputes/:id - Update dispute
+  // 6. PATCH /api/v2/disputes/:id - Update dispute
   app.patch("/api/v2/disputes/:id", async (req, res) => {
     try {
       const disputeId = req.params.id;
@@ -1200,7 +1225,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 6. POST /api/v2/trades/evaluate - Evaluate trade fairness
+  // 7. GET /api/v2/trades/evaluate/:leagueId/:tradeId - Get trade evaluation
+  app.get("/api/v2/trades/evaluate/:leagueId/:tradeId", async (req, res) => {
+    try {
+      const { leagueId, tradeId } = req.params;
+
+      // Get trade evaluation from storage
+      const evaluation = await storage.getTradeEvaluation(leagueId, tradeId);
+      
+      if (!evaluation) {
+        return res.status(404).json({ 
+          error: "Trade evaluation not found",
+          message: "This trade has not been evaluated yet. Use POST /api/v2/trades/evaluate to create an evaluation."
+        });
+      }
+
+      res.json({
+        fairness: evaluation.fairnessScore ? parseFloat(evaluation.fairnessScore) : 0,
+        rationale: evaluation.rationale || "No rationale provided",
+        timestamp: evaluation.createdAt,
+      });
+    } catch (error) {
+      console.error("Get trade evaluation error:", error);
+      res.status(500).json({ error: "Failed to get trade evaluation", code: "TRADE_EVAL_GET_FAILED" });
+    }
+  });
+
+  // 8. POST /api/v2/trades/evaluate - Evaluate trade fairness
   app.post("/api/v2/trades/evaluate", async (req, res) => {
     try {
       // Validate request body

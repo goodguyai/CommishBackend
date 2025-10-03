@@ -9,6 +9,8 @@ import { Dialog } from '@/components/ui/Dialog';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/Table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { 
   MessageSquare, 
   Calendar, 
@@ -25,7 +27,13 @@ import {
   Trash2,
   Edit,
   Settings,
-  Save
+  Save,
+  Heart,
+  Scale,
+  Shield,
+  Search,
+  Lock,
+  MessageCircle
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiRequest, queryClient } from '@/lib/queryClient';
@@ -92,6 +100,25 @@ interface ActivityLog {
   timestamp: string;
 }
 
+interface Dispute {
+  id: string;
+  leagueId: string;
+  kind: 'trade' | 'rule' | 'behavior';
+  subjectId?: string;
+  openedBy: string;
+  status: 'open' | 'under_review' | 'resolved' | 'dismissed';
+  details?: any;
+  resolution?: any;
+  createdAt: string;
+  resolvedAt?: string;
+}
+
+interface TradeEvaluation {
+  fairness: number;
+  rationale: string;
+  timestamp: string;
+}
+
 const TIMEZONES = [
   'America/New_York',
   'America/Chicago',
@@ -143,6 +170,30 @@ export function DashboardPage() {
   const [pollsEnabled, setPollsEnabled] = useState(false);
   const [tradeInsights, setTradeInsights] = useState(false);
 
+  // Phase 2: Vibes Monitor State
+  const [vibesMonitorEnabled, setVibesMonitorEnabled] = useState(false);
+  const [vibesThreshold, setVibesThreshold] = useState(0.7);
+  const [vibesAlertDm, setVibesAlertDm] = useState(false);
+
+  // Phase 2: Disputes State
+  const [disputeStatusFilter, setDisputeStatusFilter] = useState<string>('open');
+  const [isDisputeDialogOpen, setIsDisputeDialogOpen] = useState(false);
+  const [selectedDispute, setSelectedDispute] = useState<Dispute | null>(null);
+  const [disputeResolutionNotes, setDisputeResolutionNotes] = useState('');
+  const [disputeNewStatus, setDisputeNewStatus] = useState<string>('');
+
+  // Phase 2: Trade Fairness State
+  const [tradeId, setTradeId] = useState('');
+  const [tradeEvaluation, setTradeEvaluation] = useState<TradeEvaluation | null>(null);
+  const [isEvaluatingTrade, setIsEvaluatingTrade] = useState(false);
+
+  // Phase 2: Moderation Tools State
+  const [freezeChannelId, setFreezeChannelId] = useState('');
+  const [freezeMinutes, setFreezeMinutes] = useState<number>(60);
+  const [freezeReason, setFreezeReason] = useState('');
+  const [clarifyChannelId, setClarifyChannelId] = useState('');
+  const [clarifyQuestion, setClarifyQuestion] = useState('');
+
   // Fetch leagues to get the first one if not set (using demo endpoint for testing)
   const { data: leagues } = useQuery<{ leagues: League[] }>({
     queryKey: ['/api/demo/leagues'],
@@ -174,6 +225,9 @@ export function DashboardPage() {
       setAutoDigest(flags?.autoDigest ?? true);
       setPollsEnabled(flags?.polls ?? true);
       setTradeInsights(flags?.tradeInsights ?? false);
+      setVibesMonitorEnabled(flags?.vibesMonitor ?? false);
+      setVibesThreshold(flags?.vibesThreshold ?? 0.7);
+      setVibesAlertDm(flags?.vibesAlertDm ?? false);
     }
   }, [leagueData?.league]);
 
@@ -315,6 +369,80 @@ export function DashboardPage() {
     },
   });
 
+  // Phase 2: Disputes Query
+  const { data: disputesData, isLoading: disputesLoading } = useQuery<{ disputes: Dispute[] }>({
+    queryKey: ['/api/v2/disputes', leagueId, disputeStatusFilter],
+    queryFn: async () => {
+      const res = await fetch(`/api/v2/disputes?leagueId=${leagueId}&status=${disputeStatusFilter}`);
+      if (!res.ok) throw new Error('Failed to fetch disputes');
+      return res.json();
+    },
+    enabled: !!leagueId,
+  });
+
+  // Phase 2: Update Dispute Mutation
+  const updateDisputeMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      const response = await apiRequest('PATCH', `/api/v2/disputes/${id}`, data);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/disputes', leagueId] });
+      toast.success('Dispute updated', {
+        description: 'Dispute status has been updated',
+      });
+      setIsDisputeDialogOpen(false);
+      setSelectedDispute(null);
+      setDisputeResolutionNotes('');
+    },
+    onError: (error: any) => {
+      toast.error('Failed to update dispute', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
+  // Phase 2: Freeze Thread Mutation
+  const freezeThreadMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const response = await apiRequest('POST', '/api/v2/mod/freeze', data);
+      return response.json();
+    },
+    onSuccess: () => {
+      toast.success('Thread frozen', {
+        description: `Thread will be frozen for ${freezeMinutes} minutes`,
+      });
+      setFreezeChannelId('');
+      setFreezeMinutes(60);
+      setFreezeReason('');
+    },
+    onError: (error: any) => {
+      toast.error('Failed to freeze thread', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
+  // Phase 2: Clarify Rule Mutation
+  const clarifyRuleMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const response = await apiRequest('POST', '/api/v2/mod/clarify-rule', data);
+      return response.json();
+    },
+    onSuccess: () => {
+      toast.success('Rule clarification sent', {
+        description: 'AI response has been posted to the channel',
+      });
+      setClarifyChannelId('');
+      setClarifyQuestion('');
+    },
+    onError: (error: any) => {
+      toast.error('Failed to clarify rule', {
+        description: error?.message || 'An error occurred',
+      });
+    },
+  });
+
   const handleManageDiscord = () => {
     toast.info('Opening Discord settings...', {
       description: 'Manage bot permissions, slash commands, and webhook configuration.',
@@ -441,6 +569,97 @@ export function DashboardPage() {
         polls: pollsEnabled,
         trade_helper: tradeInsights,
       },
+    });
+  };
+
+  const handleSaveVibesSettings = () => {
+    const existingFlags = leagueData?.league?.featureFlags || {};
+    updateSettingsMutation.mutate({
+      featureFlags: {
+        ...existingFlags,
+        vibesMonitor: vibesMonitorEnabled,
+        vibesThreshold: vibesThreshold,
+        vibesAlertDm: vibesAlertDm,
+      },
+    });
+  };
+
+  const handleOpenDisputeDialog = (dispute: Dispute) => {
+    setSelectedDispute(dispute);
+    setDisputeNewStatus(dispute.status);
+    setDisputeResolutionNotes('');
+    setIsDisputeDialogOpen(true);
+  };
+
+  const handleSaveDispute = () => {
+    if (!selectedDispute) return;
+
+    updateDisputeMutation.mutate({
+      id: selectedDispute.id,
+      data: {
+        status: disputeNewStatus,
+        resolution: { notes: disputeResolutionNotes },
+      },
+    });
+  };
+
+  const handleSearchTrade = async () => {
+    if (!tradeId.trim() || !leagueId) {
+      toast.error('Validation error', {
+        description: 'Trade ID is required',
+      });
+      return;
+    }
+
+    setIsEvaluatingTrade(true);
+    setTradeEvaluation(null);
+
+    try {
+      const response = await fetch(`/api/v2/trades/evaluate/${leagueId}/${tradeId}`);
+      
+      if (!response.ok) {
+        throw new Error('Trade evaluation not found');
+      }
+
+      const data = await response.json();
+      setTradeEvaluation(data);
+    } catch (error: any) {
+      toast.error('Trade not found', {
+        description: error?.message || 'This trade has not been evaluated yet',
+      });
+    } finally {
+      setIsEvaluatingTrade(false);
+    }
+  };
+
+  const handleFreezeThread = () => {
+    if (!freezeChannelId.trim() || !leagueId) {
+      toast.error('Validation error', {
+        description: 'Channel ID is required',
+      });
+      return;
+    }
+
+    freezeThreadMutation.mutate({
+      leagueId,
+      channelId: freezeChannelId,
+      minutes: freezeMinutes,
+      reason: freezeReason,
+    });
+  };
+
+  const handleClarifyRule = () => {
+    if (!clarifyChannelId.trim() || !clarifyQuestion.trim() || !leagueId) {
+      toast.error('Validation error', {
+        description: 'Channel ID and question are required',
+      });
+      return;
+    }
+
+    clarifyRuleMutation.mutate({
+      leagueId,
+      channelId: clarifyChannelId,
+      question: clarifyQuestion,
     });
   };
 
@@ -1090,6 +1309,337 @@ export function DashboardPage() {
         </CardContent>
       </Card>
 
+      {/* PHASE 2 SECTIONS */}
+
+      {/* Phase 2: Vibes Monitor */}
+      {leagueId && (
+        <Card className="bg-surface-card border-border-subtle shadow-depth2">
+          <CardHeader>
+            <CardTitle className="text-text-primary flex items-center gap-2">
+              <Heart className="w-5 h-5" />
+              Vibes Monitor
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-text-secondary">Enable Vibes Monitor</span>
+                <Switch
+                  checked={vibesMonitorEnabled}
+                  onCheckedChange={setVibesMonitorEnabled}
+                  data-testid="switch-vibes-monitor"
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-text-secondary">
+                  Toxicity Threshold: {vibesThreshold.toFixed(2)}
+                </label>
+                <Slider
+                  value={[vibesThreshold]}
+                  onValueChange={(values) => setVibesThreshold(values[0])}
+                  min={0.6}
+                  max={0.9}
+                  step={0.05}
+                  data-testid="slider-vibes-threshold"
+                  className="w-full"
+                />
+                <p className="text-xs text-text-muted">
+                  Messages scoring above this threshold will trigger alerts
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-text-primary">DM me on toxicity spikes</span>
+                <Switch
+                  checked={vibesAlertDm}
+                  onCheckedChange={setVibesAlertDm}
+                  data-testid="switch-vibes-alert-dm"
+                  className="data-[state=checked]:bg-brand-teal"
+                />
+              </div>
+
+              <Button
+                onClick={handleSaveVibesSettings}
+                data-testid="button-save-vibes"
+                disabled={updateSettingsMutation.isPending}
+                className="w-full bg-brand-teal hover:bg-brand-teal/90 text-white"
+              >
+                <Save className="w-4 h-4 mr-2" />
+                {updateSettingsMutation.isPending ? 'Saving...' : 'Save Vibes Settings'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Phase 2: Disputes List */}
+      {leagueId && (
+        <Card className="bg-surface-card border-border-subtle shadow-depth2">
+          <CardHeader>
+            <CardTitle className="text-text-primary flex items-center gap-2">
+              <Scale className="w-5 h-5" />
+              Disputes
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Tabs value={disputeStatusFilter} onValueChange={setDisputeStatusFilter}>
+              <TabsList className="grid w-full grid-cols-4 bg-surface-elevated">
+                <TabsTrigger value="open" data-testid="tab-disputes-open">Open</TabsTrigger>
+                <TabsTrigger value="under_review" data-testid="tab-disputes-under-review">Under Review</TabsTrigger>
+                <TabsTrigger value="resolved" data-testid="tab-disputes-resolved">Resolved</TabsTrigger>
+                <TabsTrigger value="dismissed" data-testid="tab-disputes-dismissed">Dismissed</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value={disputeStatusFilter} className="mt-4">
+                {disputesLoading ? (
+                  <div className="space-y-2">
+                    {[1, 2, 3].map((i) => (
+                      <Skeleton key={i} className="h-16 w-full bg-surface-hover" />
+                    ))}
+                  </div>
+                ) : disputesData?.disputes && disputesData.disputes.length > 0 ? (
+                  <div className="border border-border-subtle rounded-lg overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-surface-elevated border-border-subtle hover:bg-surface-elevated">
+                          <TableHead className="text-text-secondary">Kind</TableHead>
+                          <TableHead className="text-text-secondary">Subject ID</TableHead>
+                          <TableHead className="text-text-secondary">Opened By</TableHead>
+                          <TableHead className="text-text-secondary">Status</TableHead>
+                          <TableHead className="text-text-secondary">Created</TableHead>
+                          <TableHead className="text-text-secondary">Action</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {disputesData.disputes.map((dispute) => (
+                          <TableRow key={dispute.id} className="border-border-subtle hover:bg-surface-hover" data-testid={`dispute-row-${dispute.id}`}>
+                            <TableCell className="text-text-primary capitalize">{dispute.kind}</TableCell>
+                            <TableCell className="text-text-primary font-mono text-xs">
+                              {dispute.subjectId?.substring(0, 8) || 'N/A'}
+                            </TableCell>
+                            <TableCell className="text-text-primary">{dispute.openedBy}</TableCell>
+                            <TableCell>
+                              <Badge
+                                className={`${
+                                  dispute.status === 'resolved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
+                                  dispute.status === 'dismissed' ? 'bg-gray-500/20 text-gray-400 border-gray-500/30' :
+                                  dispute.status === 'under_review' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+                                  'bg-red-500/20 text-red-400 border-red-500/30'
+                                } border`}
+                                data-testid={`badge-dispute-status-${dispute.id}`}
+                              >
+                                {dispute.status.replace('_', ' ')}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-text-secondary text-xs">
+                              {new Date(dispute.createdAt).toLocaleDateString()}
+                            </TableCell>
+                            <TableCell>
+                              <Button
+                                onClick={() => handleOpenDisputeDialog(dispute)}
+                                data-testid={`button-resolve-dispute-${dispute.id}`}
+                                size="sm"
+                                variant="secondary"
+                                className="text-text-primary border border-border-default hover:bg-surface-hover"
+                              >
+                                Manage
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : (
+                  <div className="text-center py-12 text-text-secondary" data-testid="empty-disputes">
+                    <Scale className="w-12 h-12 mx-auto mb-3 text-text-muted" />
+                    <p>No disputes found</p>
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Phase 2: Trade Fairness Snapshot */}
+      {leagueId && (
+        <Card className="bg-surface-card border-border-subtle shadow-depth2">
+          <CardHeader>
+            <CardTitle className="text-text-primary flex items-center gap-2">
+              <Scale className="w-5 h-5" />
+              Trade Fairness
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex gap-2">
+                <Input
+                  value={tradeId}
+                  onChange={(e) => setTradeId(e.target.value)}
+                  placeholder="Enter Trade ID"
+                  data-testid="input-trade-id"
+                  className="flex-1 bg-surface-elevated border-border-default text-text-primary"
+                />
+                <Button
+                  onClick={handleSearchTrade}
+                  data-testid="button-search-trade"
+                  disabled={isEvaluatingTrade}
+                  className="bg-brand-teal hover:bg-brand-teal/90 text-white"
+                >
+                  <Search className="w-4 h-4 mr-2" />
+                  {isEvaluatingTrade ? 'Searching...' : 'Search'}
+                </Button>
+              </div>
+
+              {tradeEvaluation ? (
+                <div className="p-4 bg-surface-elevated border border-border-subtle rounded-lg space-y-3" data-testid="trade-evaluation-result">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-text-secondary">Fairness Score</span>
+                    <Badge
+                      className={`text-lg font-bold ${
+                        tradeEvaluation.fairness >= 70 ? 'bg-green-500/20 text-green-400 border-green-500/30' :
+                        tradeEvaluation.fairness >= 40 ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
+                        'bg-red-500/20 text-red-400 border-red-500/30'
+                      } border`}
+                      data-testid="badge-fairness-score"
+                    >
+                      {tradeEvaluation.fairness}/100
+                    </Badge>
+                  </div>
+
+                  <div>
+                    <span className="text-sm font-medium text-text-secondary block mb-1">Rationale</span>
+                    <p className="text-sm text-text-primary" data-testid="text-fairness-rationale">
+                      {tradeEvaluation.rationale}
+                    </p>
+                  </div>
+
+                  <div className="text-xs text-text-muted">
+                    Evaluated: {new Date(tradeEvaluation.timestamp).toLocaleString()}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-8 text-text-secondary" data-testid="empty-trade-evaluation">
+                  <Search className="w-10 h-10 mx-auto mb-2 text-text-muted" />
+                  <p>Enter trade ID to evaluate</p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Phase 2: Moderation Tools */}
+      {leagueId && (
+        <Card className="bg-surface-card border-border-subtle shadow-depth2">
+          <CardHeader>
+            <CardTitle className="text-text-primary flex items-center gap-2">
+              <Shield className="w-5 h-5" />
+              Moderation Tools
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Freeze Thread Form */}
+              <div className="space-y-4 p-4 bg-surface-elevated border border-border-subtle rounded-lg">
+                <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+                  <Lock className="w-4 h-4" />
+                  Freeze Thread
+                </h3>
+
+                <div>
+                  <label className="text-sm font-medium text-text-secondary block mb-2">Channel ID</label>
+                  <Input
+                    value={freezeChannelId}
+                    onChange={(e) => setFreezeChannelId(e.target.value)}
+                    placeholder="123456789012345678"
+                    data-testid="input-freeze-channel-id"
+                    className="bg-surface-card border-border-default text-text-primary"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-text-secondary block mb-2">Minutes (1-1440)</label>
+                  <Input
+                    type="number"
+                    value={freezeMinutes}
+                    onChange={(e) => setFreezeMinutes(parseInt(e.target.value) || 60)}
+                    min={1}
+                    max={1440}
+                    data-testid="input-freeze-minutes"
+                    className="bg-surface-card border-border-default text-text-primary"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-text-secondary block mb-2">Reason</label>
+                  <textarea
+                    value={freezeReason}
+                    onChange={(e) => setFreezeReason(e.target.value)}
+                    placeholder="Reason for freezing thread..."
+                    data-testid="textarea-freeze-reason"
+                    className="w-full rounded-md border border-border-default bg-surface-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent min-h-[80px]"
+                  />
+                </div>
+
+                <Button
+                  onClick={handleFreezeThread}
+                  data-testid="button-freeze-thread"
+                  disabled={freezeThreadMutation.isPending}
+                  className="w-full bg-brand-pink hover:bg-brand-pink/90 text-white"
+                >
+                  <Lock className="w-4 h-4 mr-2" />
+                  {freezeThreadMutation.isPending ? 'Freezing...' : 'Freeze Thread'}
+                </Button>
+              </div>
+
+              {/* Clarify Rule Form */}
+              <div className="space-y-4 p-4 bg-surface-elevated border border-border-subtle rounded-lg">
+                <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+                  <MessageCircle className="w-4 h-4" />
+                  Clarify Rule
+                </h3>
+
+                <div>
+                  <label className="text-sm font-medium text-text-secondary block mb-2">Channel ID</label>
+                  <Input
+                    value={clarifyChannelId}
+                    onChange={(e) => setClarifyChannelId(e.target.value)}
+                    placeholder="123456789012345678"
+                    data-testid="input-clarify-channel-id"
+                    className="bg-surface-card border-border-default text-text-primary"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-text-secondary block mb-2">Question</label>
+                  <textarea
+                    value={clarifyQuestion}
+                    onChange={(e) => setClarifyQuestion(e.target.value)}
+                    placeholder="What rule question should the AI clarify?"
+                    data-testid="textarea-clarify-question"
+                    className="w-full rounded-md border border-border-default bg-surface-card px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent min-h-[140px]"
+                  />
+                </div>
+
+                <Button
+                  onClick={handleClarifyRule}
+                  data-testid="button-clarify-rule"
+                  disabled={clarifyRuleMutation.isPending}
+                  className="w-full bg-brand-teal hover:bg-brand-teal/90 text-white"
+                >
+                  <MessageCircle className="w-4 h-4 mr-2" />
+                  {clarifyRuleMutation.isPending ? 'Clarifying...' : 'Clarify Rule'}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Owner Mapping Dialog */}
       <Dialog
         open={isOwnerDialogOpen}
@@ -1257,6 +1807,92 @@ export function DashboardPage() {
             </Button>
           </div>
         </div>
+      </Dialog>
+
+      {/* Dispute Dialog */}
+      <Dialog
+        open={isDisputeDialogOpen}
+        onClose={() => {
+          setIsDisputeDialogOpen(false);
+          setSelectedDispute(null);
+          setDisputeResolutionNotes('');
+        }}
+        title="Manage Dispute"
+        size="md"
+      >
+        {selectedDispute && (
+          <div className="space-y-4">
+            <div className="p-3 bg-surface-elevated border border-border-subtle rounded-lg">
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <span className="text-text-muted">Kind:</span>
+                  <span className="text-text-primary ml-2 capitalize">{selectedDispute.kind}</span>
+                </div>
+                <div>
+                  <span className="text-text-muted">Opened by:</span>
+                  <span className="text-text-primary ml-2">{selectedDispute.openedBy}</span>
+                </div>
+                {selectedDispute.subjectId && (
+                  <div className="col-span-2">
+                    <span className="text-text-muted">Subject ID:</span>
+                    <span className="text-text-primary ml-2 font-mono text-xs">{selectedDispute.subjectId}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-text-secondary block mb-2">
+                Status <span className="text-red-400">*</span>
+              </label>
+              <Select value={disputeNewStatus} onValueChange={setDisputeNewStatus}>
+                <SelectTrigger data-testid="select-dispute-status" className="bg-surface-elevated border-border-default text-text-primary">
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent className="bg-surface-card border-border-default">
+                  <SelectItem value="open" className="text-text-primary hover:bg-surface-hover">Open</SelectItem>
+                  <SelectItem value="under_review" className="text-text-primary hover:bg-surface-hover">Under Review</SelectItem>
+                  <SelectItem value="resolved" className="text-text-primary hover:bg-surface-hover">Resolved</SelectItem>
+                  <SelectItem value="dismissed" className="text-text-primary hover:bg-surface-hover">Dismissed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-text-secondary block mb-2">Resolution Notes</label>
+              <textarea
+                value={disputeResolutionNotes}
+                onChange={(e) => setDisputeResolutionNotes(e.target.value)}
+                placeholder="Enter resolution notes..."
+                data-testid="textarea-dispute-resolution"
+                className="w-full rounded-md border border-border-default bg-surface-elevated px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-brand-teal focus:border-transparent min-h-[120px]"
+              />
+            </div>
+
+            <div className="flex gap-3 pt-4">
+              <Button
+                onClick={() => {
+                  setIsDisputeDialogOpen(false);
+                  setSelectedDispute(null);
+                  setDisputeResolutionNotes('');
+                }}
+                data-testid="button-cancel-dispute"
+                variant="secondary"
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSaveDispute}
+                data-testid="button-save-dispute"
+                disabled={updateDisputeMutation.isPending}
+                className="flex-1 bg-brand-teal hover:bg-brand-teal/90 text-white"
+              >
+                {updateDisputeMutation.isPending ? 'Saving...' : 'Save'}
+              </Button>
+            </div>
+          </div>
+        )}
       </Dialog>
     </div>
   );
