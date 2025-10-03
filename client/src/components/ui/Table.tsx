@@ -1,4 +1,4 @@
-import { HTMLAttributes, forwardRef } from 'react';
+import { HTMLAttributes, TdHTMLAttributes, ThHTMLAttributes, forwardRef } from 'react';
 import { clsx } from 'clsx';
 
 interface TableProps extends HTMLAttributes<HTMLTableElement> {}
@@ -65,7 +65,7 @@ export const TableRow = forwardRef<HTMLTableRowElement, HTMLAttributes<HTMLTable
 
 TableRow.displayName = 'TableRow';
 
-export const TableHead = forwardRef<HTMLTableCellElement, HTMLAttributes<HTMLTableCellElement>>(
+export const TableHead = forwardRef<HTMLTableCellElement, ThHTMLAttributes<HTMLTableCellElement>>(
   ({ className, ...props }, ref) => {
     return (
       <th
@@ -83,7 +83,7 @@ export const TableHead = forwardRef<HTMLTableCellElement, HTMLAttributes<HTMLTab
 
 TableHead.displayName = 'TableHead';
 
-export const TableCell = forwardRef<HTMLTableCellElement, HTMLAttributes<HTMLTableCellElement>>(
+export const TableCell = forwardRef<HTMLTableCellElement, TdHTMLAttributes<HTMLTableCellElement>>(
   ({ className, ...props }, ref) => {
     return (
       <td

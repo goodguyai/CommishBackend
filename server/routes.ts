@@ -1187,6 +1187,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // League management routes
+  
+  // Demo endpoint - returns all leagues without auth (for testing/development only)
+  app.get("/api/demo/leagues", async (req, res) => {
+    try {
+      // Get all leagues (demo mode - no auth check)
+      const allLeagues = await storage.getAllLeagues();
+      res.json({ leagues: allLeagues });
+    } catch (error) {
+      console.error("Demo leagues error:", error);
+      res.status(500).json({ error: "Failed to fetch leagues" });
+    }
+  });
+
+  // Demo endpoint - returns single league by ID without auth (for testing/development only)
+  app.get("/api/demo/leagues/:leagueId", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      const league = await storage.getLeague(leagueId);
+      
+      if (!league) {
+        return res.status(404).json({ error: "League not found" });
+      }
+      
+      res.json({ league });
+    } catch (error) {
+      console.error("Demo league detail error:", error);
+      res.status(500).json({ error: "Failed to fetch league" });
+    }
+  });
+
   app.get("/api/leagues", async (req, res) => {
     try {
       const { accountId } = req.query;

@@ -29,6 +29,7 @@ export interface IStorage {
 
   // League methods
   getLeague(id: string): Promise<League | undefined>;
+  getAllLeagues(): Promise<League[]>;
   getLeaguesByAccount(accountId: string): Promise<League[]>;
   getLeagueByGuildId(guildId: string): Promise<League | undefined>;
   getLeagueBySleeperLeagueId(sleeperLeagueId: string): Promise<League | undefined>;
@@ -215,6 +216,10 @@ export class DatabaseStorage implements IStorage {
   async getLeague(id: string): Promise<League | undefined> {
     const leagues = await this.db.select().from(schema.leagues).where(eq(schema.leagues.id, id));
     return leagues[0];
+  }
+
+  async getAllLeagues(): Promise<League[]> {
+    return this.db.select().from(schema.leagues);
   }
 
   async getLeaguesByAccount(accountId: string): Promise<League[]> {
@@ -867,6 +872,9 @@ export class MemStorage implements IStorage {
 
   // Stub all other methods with minimal implementations
   async getLeague(id: string): Promise<League | undefined> { return this.leagues.get(id); }
+  async getAllLeagues(): Promise<League[]> {
+    return Array.from(this.leagues.values());
+  }
   async getLeaguesByAccount(accountId: string): Promise<League[]> { 
     return Array.from(this.leagues.values()).filter(l => l.accountId === accountId);
   }
