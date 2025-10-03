@@ -800,7 +800,7 @@ export class DatabaseStorage implements IStorage {
         .from(schema.sentimentLogs)
         .where(and(
           eq(schema.sentimentLogs.leagueId, leagueId),
-          sql`${schema.sentimentLogs.createdAt} >= ${since}`
+          sql`${schema.sentimentLogs.createdAt} >= ${since.toISOString()}`
         ))
         .orderBy(desc(schema.sentimentLogs.createdAt));
     }
@@ -948,7 +948,7 @@ export class DatabaseStorage implements IStorage {
     return this.db.select().from(schema.contentQueue)
       .where(and(
         eq(schema.contentQueue.status, "queued"),
-        sql`${schema.contentQueue.scheduledAt} <= ${now}`
+        sql`${schema.contentQueue.scheduledAt} <= ${now.toISOString()}`
       ))
       .orderBy(schema.contentQueue.scheduledAt);
   }
