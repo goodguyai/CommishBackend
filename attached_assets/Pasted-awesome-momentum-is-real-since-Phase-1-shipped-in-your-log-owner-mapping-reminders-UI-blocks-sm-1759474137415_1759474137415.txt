@@ -1,0 +1,301 @@
+awesome—momentum is real. since Phase 1 shipped in your log (owner mapping, reminders, UI blocks, smoke tests), here’s the next copy-paste work order to drop into Replit. it keeps your guardrails and pushes Phase 2 (dispute prevention & vibes) + Phase 3 (engagement engine). I’ve written it so the agent can run top-to-bottom with minimal back-and-forth.
+
+⸻
+
+🚦 PRIME REMINDER (do not edit)
+	•	Supabase only (migrations via SQL files).
+	•	Keep /api/* JSON-only; don’t touch Vite’s /api guards.
+	•	Keep Discord /api/discord/interactions raw-body signature verification.
+	•	Use env service only (no new process.env reads).
+	•	Preserve v1 routes; add v2 when needed.
+	•	Feature-flag all new behavior (default OFF unless stated).
+	•	Commit in vertical slices: migration → service → endpoints → UI → tests → smoke.
+
+⸻
+
+🧭 EXECUTION ORDER (this session)
+
+0) Re-read Phase 1 artifacts
+Do not remove: Reminder packs, Owner mapping, Events logging, QA script, /api/v2 aliases.
+
+1) Phase 2 – Dispute Prevention & Vibes Monitor
+A. migrations
+B. services
+C. endpoints
+D. Discord behaviors
+E. dashboard UI
+F. tests + smoke
+
+2) Phase 3 – Engagement Engine (Highlights + Creative modes)
+A. migrations
+B. services
+C. endpoints
+D. schedulers
+E. Discord posting rules
+F. dashboard UI
+G. tests + smoke
+
+3) Update docs (replit.md, QA_RESULTS.md append), post change summary.
+
+If any new regression appears in /api/leagues/*, /api/polls, /api/health, STOP and fix before proceeding.
+
+⸻
+
+1) PHASE 2 — Dispute Prevention & Vibes Monitor
+
+1A. Migrations (idempotent SQL; add migrations/0006_phase2_disputes_vibes.sql)
+
+BEGIN;
+
+-- sentiment logs per message (avoid storing raw body long-term)
+CREATE TABLE IF NOT EXISTS sentiment_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL,
+  channel_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  author_id TEXT NOT NULL,
+  summary TEXT,                 -- tiny abstract of message
+  toxicity_score NUMERIC(4,3),  -- 0..1
+  sentiment_score NUMERIC(4,3), -- -1..1
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_sentiment_league_time ON sentiment_logs(league_id, created_at DESC);
+
+-- moderation actions & freeze windows
+CREATE TABLE IF NOT EXISTS mod_actions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL,
+  actor TEXT NOT NULL,          -- bot|commissioner:<discordId>
+  action TEXT NOT NULL,         -- 'freeze_thread'|'unfreeze'|'clarify_rule'|...
+  target_channel_id TEXT,
+  target_message_id TEXT,
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- disputes / trade reviews
+CREATE TYPE IF NOT EXISTS dispute_status AS ENUM ('open','under_review','resolved','dismissed');
+CREATE TABLE IF NOT EXISTS disputes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL,
+  kind TEXT NOT NULL,           -- 'trade'|'rule'|'behavior'
+  subject_id TEXT,              -- tradeId or rule section
+  opened_by TEXT NOT NULL,      -- discord user id
+  status dispute_status NOT NULL DEFAULT 'open',
+  details JSONB,                -- payload
+  resolution JSONB,             -- final notes
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_disputes_league_status ON disputes(league_id, status);
+
+-- trade evaluations (snapshot to prevent drama)
+CREATE TABLE IF NOT EXISTS trade_evaluations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL,
+  trade_id TEXT NOT NULL,
+  fairness_score NUMERIC(5,2),  -- 0..100
+  rationale TEXT,
+  inputs JSONB,                 -- projections, roster needs, league norms
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_trade_eval ON trade_evaluations(league_id, trade_id);
+
+-- feature flags ensure OFF by default
+ALTER TABLE leagues
+  ADD COLUMN IF NOT EXISTS feature_flags JSONB DEFAULT '{}'::jsonb;
+
+COMMIT;
+
+1B. Services (new files)
+	•	server/services/vibes.ts
+	•	scoreMessage({leagueId, channelId, messageId, authorId, text}) -> {toxicity, sentiment, summary}
+	•	store in sentiment_logs (truncate text → summary only).
+	•	server/services/moderation.ts
+	•	freezeThread({leagueId, channelId, minutes, reason}) -> actionId
+	•	clarifyRule({leagueId, channelId, ruleQuery}) -> messageId (uses rules/RAG search).
+	•	server/services/tradeFairness.ts
+	•	evaluateTrade({leagueId, tradeId, proposal}) -> {score, rationale, inputs} and persist to trade_evaluations.
+
+Reuse existing Sleeper adapter for roster/projection inputs. Clamp outbound Discord embeds to 4096 chars. Add jittered retry on Discord calls.
+
+1C. Endpoints
+	•	POST /api/v2/vibes/score (admin or commissioner)
+	•	body: { leagueId, channelId, messageId, authorId, text }
+	•	returns { toxicity, sentiment }, writes sentiment_logs.
+	•	POST /api/v2/mod/freeze (commissioner)
+	•	body: { leagueId, channelId, minutes, reason } → returns { ok:true, actionId }
+	•	POST /api/v2/mod/clarify-rule (commissioner)
+	•	body: { leagueId, channelId, question } → posts citation; returns { ok:true, messageId }
+	•	POST /api/v2/disputes
+	•	body: { leagueId, kind, subjectId?, details } → returns dispute
+	•	PATCH /api/v2/disputes/:id
+	•	body: { status, resolution? } → returns updated dispute
+	•	POST /api/v2/trades/evaluate
+	•	body: { leagueId, tradeId, proposal } → { fairness: %, rationale } and persists.
+
+All must:
+	•	validate input (zod)
+	•	enforce commissioner role or X-Admin-Key for admin
+	•	emit events rows: vibes_scored, thread_frozen, rule_clarified, dispute_opened, dispute_resolved, trade_evaluated.
+
+1D. Discord behaviors
+	•	When toxicity_score >= threshold (feature flag vibesMonitor), DM commissioner:
+“This thread’s heating up (score: 0.79). Want me to freeze 10m or post rule?”
+	•	Slash commands for commissioners:
+	•	/freeze minutes:<int> reason:<text>
+	•	/clarify question:<text>
+	•	/trade_fairness id:<tradeId>
+	•	Respect guild scoping; ephemeral success messages.
+
+1E. Dashboard UI (cards in /dashboard)
+	•	Vibes Monitor (flag toggle, threshold slider 0.6–0.9, “DM me on spikes” checkbox).
+	•	Disputes list (open/under_review/resolved; open modal to resolve with resolution notes).
+	•	Trade Fairness Snapshot (search tradeId → score & rationale history).
+	•	Moderation Tools (Freeze thread form, Clarify rule input).
+
+1F. Tests + Smoke
+	•	Unit tests for scoreMessage, freezeThread, evaluateTrade with fixtures.
+	•	Add to qa-smoke.sh:
+
+echo "P2-1 score"; curl -s -X POST $B/api/v2/vibes/score -H 'Content-Type: application/json' -H "X-Admin-Key: $ADMIN_KEY" -d '{"leagueId":"not-a-uuid","channelId":"c","messageId":"m","authorId":"u","text":"test"}' | jq '.error|.code? // "ok"'
+echo "P2-2 dispute"; curl -s -X POST $B/api/v2/disputes -H 'Content-Type: application/json' -d '{"leagueId":"not-a-uuid","kind":"trade","details":{}}' | jq '.error|.code? // "ok"'
+
+
+
+⸻
+
+2) PHASE 3 — Engagement Engine (Highlights + Creative)
+
+2A. Migrations (migrations/0007_phase3_engagement.sql)
+
+BEGIN;
+
+-- weekly highlights / moments
+CREATE TABLE IF NOT EXISTS highlights (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL,
+  week INT NOT NULL,
+  kind TEXT NOT NULL,       -- 'comeback'|'blowout'|'bench_tragedy'|'top_scorer'
+  payload JSONB NOT NULL,   -- computed facts
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_highlights_league_week ON highlights(league_id, week);
+
+-- rivalries tracking
+CREATE TABLE IF NOT EXISTS rivalries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL,
+  team_a TEXT NOT NULL,
+  team_b TEXT NOT NULL,
+  a_wins INT NOT NULL DEFAULT 0,
+  b_wins INT NOT NULL DEFAULT 0,
+  last_meeting_week INT,
+  meta JSONB,
+  UNIQUE(league_id, team_a, team_b)
+);
+
+-- content queue for scheduled posts to Discord
+CREATE TYPE IF NOT EXISTS content_status AS ENUM ('queued','posted','skipped');
+CREATE TABLE IF NOT EXISTS content_queue (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id UUID NOT NULL,
+  channel_id TEXT NOT NULL,
+  scheduled_at TIMESTAMPTZ NOT NULL,
+  template TEXT NOT NULL,   -- 'digest'|'highlight'|'meme'|'rivalry'
+  payload JSONB NOT NULL,
+  status content_status NOT NULL DEFAULT 'queued',
+  posted_message_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_content_scheduled ON content_queue(league_id, scheduled_at, status);
+
+COMMIT;
+
+2B. Services
+	•	server/services/highlights.ts
+	•	computeWeekHighlights({leagueId, week}) -> Highlight[] (comeback prob swings, blowouts, bench points).
+	•	Save to highlights.
+	•	server/services/rivalries.ts
+	•	updateHeadToHead({leagueId, week}) -> bumps a_wins/b_wins.
+	•	getRivalryCard({leagueId, teamA, teamB}).
+	•	server/services/content.ts
+	•	enqueue({leagueId, channelId, scheduledAt, template, payload}).
+	•	postQueued(now) → posts Discord embeds respecting rate limits; updates status.
+
+2C. Endpoints
+	•	POST /api/v2/highlights/compute { leagueId, week? } → computes + stores then returns summary.
+	•	GET  /api/v2/highlights?leagueId=&week= → list.
+	•	POST /api/v2/rivalries/update { leagueId, week? }.
+	•	POST /api/v2/content/enqueue { leagueId, channelId, scheduledAt, template, payload }.
+	•	POST /api/v2/content/run (admin key) → run poster once (for CRON-like).
+
+2D. Scheduler
+	•	Extend existing scheduler to:
+	•	Sun night: enqueue digest + highlights.
+	•	Mon AM: enqueue rivalry card if applicable.
+	•	Optional: meme mode (if flag creativeTrashTalk ON and blowout > threshold), enqueue meme card (SFW filtered).
+
+2E. Discord posting rules
+	•	Clamp embed length; use concise title + fields.
+	•	If botPersonality != neutral, wrap summaries in persona tone (Batman/Yoda/Sassy); keep facts intact.
+
+2F. Dashboard UI
+	•	“Highlights” tab with Week picker, renders computed moments.
+	•	“Rivalries” mini-dashboard (top rivalries, last result, rubber-match badge).
+	•	“Content Queue” admin table (queued/posted, re-enqueue button).
+	•	Feature toggles: creativeTrashTalk, deepStats.
+
+2G. Tests + Smoke
+
+echo "P3-1 highlights"; curl -s -X POST $B/api/v2/highlights/compute -H 'Content-Type: application/json' -d '{"leagueId":"not-a-uuid","week":4}' | jq '.error|.code? // "ok"'
+echo "P3-2 queue"; curl -s -X POST $B/api/v2/content/enqueue -H 'Content-Type: application/json' -d '{"leagueId":"not-a-uuid","channelId":"c","scheduledAt":"2030-01-01T00:00:00Z","template":"highlight","payload":{}}' | jq '.error|.code? // "ok"'
+
+
+⸻
+
+3) Definition of Done (Phase 2 + 3)
+	•	✅ New migrations applied & idempotent.
+	•	✅ Services implemented with types & retries on Discord.
+	•	✅ Endpoints added (v2), validated, JSON only, error envelope on failures.
+	•	✅ Scheduler enqueues + poster works behind feature flags.
+	•	✅ Dashboard exposes toggles + screens (Vibes, Disputes, Highlights, Queue).
+	•	✅ Updated qa-smoke.sh & appended QA_RESULTS.md with outputs.
+	•	✅ replit.md change log & usage notes.
+	•	✅ No regression in /api/health, /api/events, /api/leagues/:id, /api/polls.
+
+⸻
+
+4) Guardrail checks before you run
+	•	Don’t touch the working /api/v1 routes; add only /api/v2.
+	•	Keep no-store header on all /api/*.
+	•	All new records must emit an events row (keeps Activity feed alive).
+	•	If Sleeper API rate-limits, backoff & log; do not crash scheduler.
+
+⸻
+
+5) one-liners to paste after Agent says “done” (quick verification)
+
+B=https://thecommish.replit.app
+
+# Phase 2 spot checks
+curl -s -X POST $B/api/v2/vibes/score -H 'Content-Type: application/json' -H "X-Admin-Key: $ADMIN_KEY" \
+  -d '{"leagueId":"not-a-uuid","channelId":"x","messageId":"y","authorId":"z","text":"you stink"}' | jq '.error|.code? // "ok"'
+
+curl -s -X POST $B/api/v2/disputes -H 'Content-Type: application/json' \
+  -d '{"leagueId":"not-a-uuid","kind":"trade","details":{"note":"test"}}' | jq '.error|.code? // "ok"'
+
+# Phase 3 spot checks
+curl -s -X POST $B/api/v2/highlights/compute -H 'Content-Type: application/json' \
+  -d '{"leagueId":"not-a-uuid","week":4}' | jq '.error|.code? // "ok"'
+
+curl -s -X POST $B/api/v2/content/enqueue -H 'Content-Type: application/json' \
+  -d '{"leagueId":"not-a-uuid","channelId":"general","scheduledAt":"2030-01-01T00:00:00Z","template":"highlight","payload":{"foo":"bar"}}' | jq '.error|.code? // "ok"'
+
+
+⸻
+
+Why this order?
+	•	you already nailed Phase 1 plumbing; Phase 2 shores up peace-of-mind (the main commissioner pain), and Phase 3 adds the delight (highlights, rivalry fuel). both are fully flag-able so you can roll out safely.
+
+if you paste the whole thing into Replit as “next sprint brief”, it’ll know exactly what to build, how to test it, and what not to break. If you want, I can generate ready-to-commit TypeScript stubs for the new services/endpoints next so the agent just fills in logic.
