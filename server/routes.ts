@@ -364,11 +364,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { reminderId, leagueId, channelId, message } = data;
       console.log(`[Scheduler] Reminder job due: ${reminderId} for league ${leagueId}`);
 
-      // Update last fired timestamp
-      await storage.updateReminder(reminderId, { 
-        lastFired: new Date() 
-      });
-
       // Post reminder message to Discord
       await discordService.postMessage(channelId, {
         content: message,
@@ -2208,7 +2203,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET /api/v2/discord/auth-url
   app.get("/api/v2/discord/auth-url", async (req, res) => {
     try {
-      const redirectUri = `${env.app.baseUrl}/api/v2/discord/callback`;
+      const redirectUri = `${env.app.baseUrl}/discord-callback`;
       const scopes = ['identify', 'guilds'].join(' ');
       
       const authUrl = `https://discord.com/api/oauth2/authorize?` +
@@ -2224,15 +2219,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/v2/discord/callback
-  app.get("/api/v2/discord/callback", async (req, res) => {
+  // GET /discord-callback (must match Discord app OAuth2 redirect URI)
+  app.get("/discord-callback", async (req, res) => {
     try {
       const { code } = req.query;
       if (!code || typeof code !== 'string') {
         return res.redirect('/setup?error=no_code');
       }
 
-      const redirectUri = `${env.app.baseUrl}/api/v2/discord/callback`;
+      const redirectUri = `${env.app.baseUrl}/discord-callback`;
       
       // Exchange code for token
       const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
