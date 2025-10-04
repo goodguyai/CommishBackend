@@ -16,6 +16,10 @@ declare module "express-session" {
     discordOauth?: {
       userId: string;
       username: string;
+      access_token: string;
+      refresh_token: string;
+      expires_at: number;
+      scopes: string[];
       guilds: Array<{
         id: string;
         name: string;

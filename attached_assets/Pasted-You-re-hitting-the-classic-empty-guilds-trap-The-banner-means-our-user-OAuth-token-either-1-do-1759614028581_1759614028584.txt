@@ -1,0 +1,194 @@
+You’re hitting the classic “empty guilds” trap. The banner means our user OAuth token either:
+	1.	doesn’t have the right scopes,
+	2.	isn’t being used to call /users/@me/guilds (we’re accidentally using the bot token), or
+	3.	we’re filtering wrong (bad bitmask / missing owner and ADMINISTRATOR checks), or
+	4.	we’re serving a stale session that was issued before you gave yourself Manage Server.
+
+Below is a tight, copy-paste work order for Replit to instrument + fix this and make the Discord step reliably populate. It’s safe (preserves your guardrails) and includes quick acceptance checks.
+
+⸻
+
+COPY THIS TO REPLIT
+
+Guardrails (do not change)
+	•	Keep APP_BASE_URL=https://thecommish.replit.app (no trailing slash)
+	•	DB = Supabase only; schema changes only via migrations
+	•	Read env via env service (no new process.env in routes)
+	•	Keep /api/discord/interactions using express.raw + Ed25519 verify
+	•	Keep Vite /api/* guards and current route order intact
+	•	Prefer new endpoints under /api/v2/*
+
+⸻
+
+A) Add deep debug so we can see what Discord sent
+
+A.1 – Debug endpoint (admin-key guarded)
+Add to server/routes.ts:
+
+app.get("/api/v2/discord/debug-oauth", requireAdminKey, async (req, res) => {
+  try {
+    const s = await auth.getSession(req); // your session accessor
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      hasSession: !!s,
+      scopes: s?.discord?.scopes ?? [],
+      tokenExists: !!s?.discord?.access_token,
+      tokenExp: s?.discord?.expires_at,
+      guildCacheLen: s?.discord?.guilds?.length ?? null
+    });
+  } catch (e) {
+    return res.status(500).json({ error: "DEBUG_OAUTH", detail: String(e) });
+  }
+});
+
+A.2 – Log the raw guilds fetch
+Where you fetch guilds (should be using the user access token), temporarily log counts:
+
+const resp = await fetch("https://discord.com/api/users/@me/guilds", {
+  headers: { Authorization: `Bearer ${userAccessToken}` }
+});
+const rawGuilds = await resp.json();
+log(`[Discord OAuth] fetched guilds: ${Array.isArray(rawGuilds) ? rawGuilds.length : 'non-array'}`);
+
+
+⸻
+
+B) Ensure our OAuth flow requests & stores the right things
+
+B.1 – Auth URL (user flow) must include only user scopes
+Update the user auth URL generator to use exactly:
+
+scope=identify guilds
+response_type=code
+prompt=consent
+
+(We will install the bot later with a separate bot applications.commands URL.)
+
+B.2 – Store and refresh
+In the OAuth callback handler:
+	•	Store: access_token, refresh_token, expires_at, and the granted scope string split into array (scopes).
+	•	If expires_at is past, use refresh token to rotate before calling Discord.
+
+⸻
+
+C) Fetch manageable guilds with the user token and filter correctly
+
+C.1 – Do NOT use the bot token for /users/@me/guilds
+Implement:
+
+type OAuthGuild = {
+  id: string;
+  name: string;
+  icon?: string | null;
+  owner: boolean;
+  permissions: string; // Discord returns a stringified bitfield
+};
+
+const MANAGE_GUILD = 0x20;        // 32
+const ADMINISTRATOR = 0x8;        // 8
+
+function canManage(permStr: string, owner: boolean) {
+  const perms = BigInt(permStr);  // handle large bitfields safely
+  return owner ||
+         (perms & BigInt(MANAGE_GUILD)) === BigInt(MANAGE_GUILD) ||
+         (perms & BigInt(ADMINISTRATOR)) === BigInt(ADMINISTRATOR);
+}
+
+// GET /api/v2/discord/guilds
+app.get("/api/v2/discord/guilds", async (req, res) => {
+  const s = await auth.getSession(req);
+  if (!s?.discord?.access_token) return res.status(401).json({ error: "NO_USER_TOKEN" });
+
+  // refresh if needed
+  await auth.ensureDiscordAccessTokenFresh(s);
+
+  const r = await fetch("https://discord.com/api/users/@me/guilds", {
+    headers: { Authorization: `Bearer ${s.discord.access_token}` }
+  });
+
+  if (!r.ok) {
+    const text = await r.text();
+    return res.status(502).json({ error: "DISCORD_GUILDS_FAILED", status: r.status, body: text });
+  }
+
+  const guilds: OAuthGuild[] = await r.json();
+  const manageable = guilds.filter(g => canManage(g.permissions, g.owner));
+  res.set("Cache-Control", "no-store");
+  return res.json({ guilds: manageable });
+});
+
+C.2 – If no guilds found, offer “Re-connect with consent”
+Frontend: when the list is empty, show a button “Re-connect Discord” that hits:
+
+GET /api/v2/discord/auth-url?force=1
+
+Backend: if force=1, include prompt=consent and explicitly scope=identify guilds in the URL to ensure we re-grant scopes and bust stale sessions.
+
+⸻
+
+D) Bot install happens after guild selection (separate URL)
+
+When the user picks a guild, show “Install THE COMMISH to ”.
+
+Generate the bot install URL like:
+
+https://discord.com/oauth2/authorize
+?client_id=YOUR_CLIENT_ID
+&scope=bot%20applications.commands
+&permissions=268823638  // example; ensure Send Messages, Read Channels, Embed Links, Use Slash Commands
+&guild_id=<SELECTED_GUILD_ID>
+&disable_guild_select=true
+&response_type=code
+&redirect_uri=<APP_BASE_URL>/api/v2/discord/callback
+
+(You likely already have this—just make sure it’s invoked after we selected a guild so we can pin guild_id.)
+
+⸻
+
+E) Frontend guard rails & UX
+	•	On “Connect Discord”, call the user auth URL (identify+guilds).
+	•	After callback, call /api/v2/discord/guilds and render the list.
+	•	If empty, show the warning you pasted plus a “Try again” button that calls the ?force=1 auth URL.
+	•	When a guild is chosen, present Install Bot action with the prefilled URL (and then “Continue” once the bot is in the server).
+	•	After install, call /api/v2/discord/channels?guildId=<id> using the bot token (server-side) to populate channels.
+
+⸻
+
+F) Quick acceptance checks
+
+F.1 – Verify session scopes
+
+curl -s -H "X-Admin-Key: $ADMIN_KEY" "$APP_BASE_URL/api/v2/discord/debug-oauth" | jq
+# Expect: hasSession=true, scopes includes "identify" and "guilds"
+
+F.2 – Verify guilds with user token
+
+curl -s "$APP_BASE_URL/api/v2/discord/guilds" | jq
+# Expect: { guilds: [...] } non-empty list (includes the server you just gave yourself Manage Server on)
+
+F.3 – Channels after install
+
+curl -s "$APP_BASE_URL/api/v2/discord/channels?guildId=<YOUR_GUILD_ID>" | jq '.[0:3]'
+# Expect: array of text channels
+
+F.4 – Fallback (force re-consent)
+	•	Hit the reconnect button (or auth-url ?force=1) and repeat F.1 → F.2.
+
+⸻
+
+Likely root cause(s) in your case
+	•	You granted yourself the role after the original OAuth; our session token lacks the correct scopes or we cached a guilds response where you didn’t have Manage Server yet. Re-auth with prompt=consent fixes this.
+	•	Or the code is accidentally calling /users/@me/guilds with the bot token. The fix above forces user-token usage and instruments the path so we can see it in logs.
+	•	Or we’re filtering using only MANAGE_GUILD and not also ADMINISTRATOR and owner. The updated filter handles all 3.
+
+⸻
+
+Small gotchas to avoid
+	•	Don’t include bot in the user OAuth scope—keep that for the separate install URL.
+	•	The permissions field from Discord is a string; cast it to BigInt before bit-masking.
+	•	If you still get an empty list, you may be logged into a different Discord account in the browser. Log out of discord.com in that tab and retry.
+	•	Allow a minute for Discord role changes to propagate; then re-auth with prompt=consent.
+
+⸻
+
+Ping me with the output of GET /api/v2/discord/debug-oauth (just the scopes and tokenExists bits) and GET /api/v2/discord/guilds after this lands, and I’ll steer the next fix within seconds.

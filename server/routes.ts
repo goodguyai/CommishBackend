@@ -27,10 +27,23 @@ import { DemoService } from "./services/demo";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, leagues } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
 
-// Extend express-session types to include csrfToken
+// Extend express-session types to include csrfToken and Discord OAuth
 declare module 'express-session' {
   interface SessionData {
     csrfToken?: string;
+    discordOauth?: {
+      userId: string;
+      username: string;
+      access_token: string;
+      refresh_token: string;
+      expires_at: number;
+      scopes: string[];
+      guilds: {
+        id: string;
+        name: string;
+        icon?: string;
+      }[];
+    };
   }
 }
 
@@ -2168,17 +2181,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // === BETA ACTIVATION FLOW - V2 API ENDPOINTS ===
 
-  // GET /api/v2/discord/auth-url
+  // GET /api/v2/discord/auth-url - Generate Discord OAuth URL
   app.get("/api/v2/discord/auth-url", async (req, res) => {
     try {
       const redirectUri = `${env.app.baseUrl}/discord-callback`;
       const scopes = ['identify', 'guilds'].join(' ');
+      const forceConsent = req.query.force === '1';
       
-      const authUrl = `https://discord.com/api/oauth2/authorize?` +
+      let authUrl = `https://discord.com/api/oauth2/authorize?` +
         `client_id=${env.discord.clientId}&` +
         `redirect_uri=${encodeURIComponent(redirectUri)}&` +
         `response_type=code&` +
         `scope=${encodeURIComponent(scopes)}`;
+      
+      // Force re-consent to bust stale sessions
+      if (forceConsent) {
+        authUrl += '&prompt=consent';
+      }
       
       res.json({ url: authUrl });
     } catch (e) {
@@ -2251,8 +2270,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const perms = BigInt(g.permissions);
           const hasManage = (perms & BigInt(0x20)) === BigInt(0x20);
           const hasAdmin = (perms & BigInt(0x8)) === BigInt(0x8);
-          console.log(`[Discord Callback] Guild "${g.name}" - perms: ${g.permissions}, hasManage: ${hasManage}, hasAdmin: ${hasAdmin}`);
-          return hasManage || hasAdmin;
+          console.log(`[Discord Callback] Guild "${g.name}" - perms: ${g.permissions}, hasManage: ${hasManage}, hasAdmin: ${hasAdmin}, owner: ${g.owner}`);
+          return g.owner || hasManage || hasAdmin;
         } catch (e) {
           console.error(`[Discord Callback] Failed to parse permissions for guild ${g.name}:`, e);
           return false;
@@ -2265,6 +2284,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       req.session.discordOauth = {
         userId: user.id,
         username: user.username,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: Date.now() + (tokens.expires_in * 1000),
+        scopes: tokens.scope ? tokens.scope.split(' ') : ['identify', 'guilds'],
         guilds: manageableGuilds.map((g: any) => ({
           id: g.id,
           name: g.name,
@@ -2291,6 +2314,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e) {
       console.error('[Discord Callback] Error:', e);
       res.redirect('/setup?error=discord_auth_failed');
+    }
+  });
+
+  // GET /api/v2/discord/debug-oauth - Debug OAuth session state (admin only)
+  app.get("/api/v2/discord/debug-oauth", requireAdminKey, async (req, res) => {
+    try {
+      const discordOauth = req.session?.discordOauth;
+      res.set("Cache-Control", "no-store");
+      return res.json({
+        hasSession: !!discordOauth,
+        scopes: discordOauth?.scopes ?? [],
+        tokenExists: !!discordOauth?.access_token,
+        tokenExp: discordOauth?.expires_at,
+        guildCacheLen: discordOauth?.guilds?.length ?? null,
+        username: discordOauth?.username,
+      });
+    } catch (e) {
+      return res.status(500).json({ error: "DEBUG_OAUTH", detail: String(e) });
+    }
+  });
+
+  // GET /api/v2/discord/guilds - Fetch guilds using stored user token
+  app.get("/api/v2/discord/guilds", async (req, res) => {
+    try {
+      const discordOauth = req.session?.discordOauth;
+      
+      if (!discordOauth?.access_token) {
+        return res.status(401).json({ error: "NO_USER_TOKEN", message: "No Discord access token in session" });
+      }
+
+      // Check if token is expired
+      if (discordOauth.expires_at && Date.now() > discordOauth.expires_at) {
+        return res.status(401).json({ error: "TOKEN_EXPIRED", message: "Discord token expired, please re-authenticate" });
+      }
+
+      console.log('[Discord Guilds] Fetching guilds with user token...');
+      
+      const guildsResponse = await fetch('https://discord.com/api/users/@me/guilds', {
+        headers: { Authorization: `Bearer ${discordOauth.access_token}` },
+      });
+      
+      if (!guildsResponse.ok) {
+        const text = await guildsResponse.text();
+        console.error('[Discord Guilds] Fetch failed:', guildsResponse.status, text);
+        return res.status(502).json({ 
+          error: "DISCORD_GUILDS_FAILED", 
+          status: guildsResponse.status, 
+          body: text 
+        });
+      }
+
+      const guilds = await guildsResponse.json();
+      console.log(`[Discord Guilds] Fetched ${guilds.length} total guilds`);
+      
+      // Filter to manageable guilds (owner OR MANAGE_GUILD OR ADMINISTRATOR)
+      const MANAGE_GUILD = BigInt(0x20);
+      const ADMINISTRATOR = BigInt(0x8);
+      
+      const manageable = guilds.filter((g: any) => {
+        try {
+          if (g.owner) return true; // Owner always has access
+          
+          const perms = BigInt(g.permissions);
+          const hasManage = (perms & MANAGE_GUILD) === MANAGE_GUILD;
+          const hasAdmin = (perms & ADMINISTRATOR) === ADMINISTRATOR;
+          
+          console.log(`[Discord Guilds] "${g.name}" - owner: ${g.owner}, manage: ${hasManage}, admin: ${hasAdmin}`);
+          return hasManage || hasAdmin;
+        } catch (e) {
+          console.error(`[Discord Guilds] Permission check failed for "${g.name}":`, e);
+          return false;
+        }
+      });
+      
+      console.log(`[Discord Guilds] ${manageable.length} manageable guilds`);
+      
+      res.set("Cache-Control", "no-store");
+      return res.json({ 
+        guilds: manageable.map((g: any) => ({
+          id: g.id,
+          name: g.name,
+          icon: g.icon,
+          owner: g.owner,
+        }))
+      });
+    } catch (e) {
+      console.error('[Discord Guilds]', e);
+      return res.status(500).json({ error: "GUILDS_FETCH_FAILED", message: String(e) });
     }
   });
 

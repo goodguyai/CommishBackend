@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/Textarea';
-import { CheckCircle, Loader2, ExternalLink } from 'lucide-react';
+import { CheckCircle, Loader2, ExternalLink, AlertCircle, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/apiApp';
 import { toast } from 'sonner';
 import confetti from 'canvas-confetti';
@@ -44,6 +44,7 @@ export function OnboardingPage() {
   const [isLoadingChannels, setIsLoadingChannels] = useState(false);
   const [isSavingDiscord, setIsSavingDiscord] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [hasAttemptedAuth, setHasAttemptedAuth] = useState(false);
   
   const [sleeperUsername, setSleeperUsername] = useState('');
   const [sleeperSeason, setSleeperSeason] = useState(new Date().getFullYear().toString());
@@ -118,6 +119,7 @@ export function OnboardingPage() {
     }
     
     if (success === 'true') {
+      setHasAttemptedAuth(true);
       toast.success('Discord connected successfully!');
       // Fetch guilds from session after successful OAuth
       fetchSessionGuilds();
@@ -139,13 +141,34 @@ export function OnboardingPage() {
         }
       } else {
         setGuilds([]);
-        if (data.guilds && data.guilds.length === 0) {
-          toast.error('No servers found where you have Manage Server permission. Please make sure you\'re an admin on at least one Discord server.');
-        }
       }
     } catch (e) {
       console.error('[Fetch Guilds]', e);
       toast.error('Failed to fetch Discord servers');
+      setGuilds([]);
+    }
+  };
+
+  const fetchFreshGuilds = async () => {
+    try {
+      setConnectionError(null);
+      const data = await api<{ guilds: DiscordGuild[] }>('/api/v2/discord/guilds');
+      
+      if (data.guilds && data.guilds.length > 0) {
+        setGuilds(data.guilds);
+        toast.success(`Found ${data.guilds.length} server(s) where you have permissions!`);
+      } else {
+        setGuilds([]);
+        toast.error('Still no servers found. You may need to re-authenticate.');
+      }
+    } catch (e: any) {
+      console.error('[Fetch Fresh Guilds]', e);
+      if (e.message?.includes('NO_USER_TOKEN') || e.message?.includes('TOKEN_EXPIRED')) {
+        setConnectionError('Session expired. Please re-authenticate with Discord.');
+        toast.error('Session expired. Please re-authenticate.');
+      } else {
+        toast.error('Failed to refresh Discord servers');
+      }
       setGuilds([]);
     }
   };
@@ -160,6 +183,17 @@ export function OnboardingPage() {
       setConnectionError(errorMsg);
       toast.error(errorMsg);
       console.error(e);
+    }
+  };
+
+  const handleForceReauth = async () => {
+    try {
+      setConnectionError(null);
+      const { url } = await api<{ url: string }>('/api/v2/discord/auth-url?force=1');
+      window.location.href = url;
+    } catch (e) {
+      console.error('[Force Reauth]', e);
+      toast.error('Failed to generate Discord auth URL');
     }
   };
 
@@ -416,7 +450,7 @@ export function OnboardingPage() {
                   </div>
                 )}
                 
-                {guilds.length === 0 ? (
+                {!hasAttemptedAuth && guilds.length === 0 ? (
                   <div className="space-y-4">
                     <Button
                       onClick={handleConnectDiscord}
@@ -429,6 +463,38 @@ export function OnboardingPage() {
                     <p className="text-sm text-[#6B7280] text-center">
                       Connect your Discord to select a server and channel
                     </p>
+                  </div>
+                ) : hasAttemptedAuth && guilds.length === 0 ? (
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-2 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+                      <AlertCircle className="h-5 w-5 text-yellow-500 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="text-sm text-yellow-200 font-medium">No servers found where you have Manage Server permission</p>
+                        <p className="text-xs text-yellow-200/70 mt-1">
+                          Make sure you're an admin on at least one Discord server, or you may have granted permissions after authentication.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button 
+                        onClick={fetchFreshGuilds}
+                        variant="outline"
+                        className="flex-1"
+                        data-testid="button-refresh-guilds"
+                      >
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Refresh Guilds
+                      </Button>
+                      <Button 
+                        onClick={handleForceReauth}
+                        variant="default"
+                        className="flex-1"
+                        data-testid="button-reauth-discord"
+                      >
+                        <ExternalLink className="h-4 w-4 mr-2" />
+                        Re-authenticate
+                      </Button>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-4">
