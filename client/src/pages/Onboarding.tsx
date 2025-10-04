@@ -119,6 +119,8 @@ export function OnboardingPage() {
     
     if (success === 'true') {
       toast.success('Discord connected successfully!');
+      // Fetch guilds from session after successful OAuth
+      fetchSessionGuilds();
     }
     
     checkResumeState();
