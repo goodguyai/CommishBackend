@@ -60,6 +60,8 @@ export function OnboardingPage() {
   
   const [accountId, setAccountId] = useState<string>('');
   const [leagueId, setLeagueId] = useState<string>('');
+  const [needsBotInstall, setNeedsBotInstall] = useState(false);
+  const [botInstallGuildId, setBotInstallGuildId] = useState<string>('');
 
   useEffect(() => {
     const checkResumeState = async () => {
@@ -123,6 +125,27 @@ export function OnboardingPage() {
       toast.success('Discord connected successfully!');
       // Fetch guilds from session after successful OAuth
       fetchSessionGuilds();
+    }
+    
+    // Check for bot installation completion and auto-retry
+    if (params.get('bot-installed') === 'true') {
+      const pendingGuildId = sessionStorage.getItem('pending-guild-id');
+      
+      if (pendingGuildId) {
+        toast.success('Bot installed! Checking for channels...');
+        
+        // Rehydrate state and retry
+        setSelectedGuildId(pendingGuildId);
+        setBotInstallGuildId(pendingGuildId);
+        
+        // Auto-retry fetching channels
+        setTimeout(() => {
+          handleGuildSelect(pendingGuildId);
+        }, 500);
+      }
+      
+      // Clean URL
+      window.history.replaceState({}, '', '/setup');
     }
     
     checkResumeState();
@@ -197,9 +220,25 @@ export function OnboardingPage() {
     }
   };
 
+  const handleInstallBot = async () => {
+    try {
+      const { url } = await api<{ url: string }>(`/api/v2/discord/bot-install-url?guildId=${botInstallGuildId}`);
+      window.location.href = url;
+    } catch (e) {
+      console.error('[Install Bot]', e);
+      toast.error('Failed to generate bot install URL');
+    }
+  };
+
   const handleGuildSelect = async (guildId: string) => {
     setSelectedGuildId(guildId);
     setIsLoadingChannels(true);
+    setNeedsBotInstall(false);
+    setBotInstallGuildId(guildId);
+    
+    // Persist guild ID for auto-retry after bot installation
+    sessionStorage.setItem('pending-guild-id', guildId);
+    
     try {
       const { channels: fetchedChannels } = await api<{ channels: DiscordChannel[] }>(
         `/api/v2/discord/channels?guildId=${guildId}`
@@ -212,9 +251,19 @@ export function OnboardingPage() {
       }
       
       setChannels(fetchedChannels);
-    } catch (e) {
-      toast.error('Failed to fetch channels');
-      console.error(e);
+      // Clear on success
+      sessionStorage.removeItem('pending-guild-id');
+    } catch (e: any) {
+      console.error('[Fetch Channels]', e);
+      
+      // Check if error is due to bot not being installed
+      if (e.message?.includes('BOT_NOT_IN_GUILD') || e.message?.includes('not installed')) {
+        setNeedsBotInstall(true);
+        toast.error('THE COMMISH bot needs to be installed in this server');
+      } else {
+        toast.error('Failed to fetch channels');
+      }
+      setChannels([]);
     } finally {
       setIsLoadingChannels(false);
     }
@@ -535,6 +584,31 @@ export function OnboardingPage() {
                         </Select>
                       </div>
                     ) : null}
+
+                    {needsBotInstall && (
+                      <div className="mt-4 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+                        <div className="flex items-start gap-3">
+                          <AlertCircle className="h-5 w-5 text-yellow-500 mt-0.5 flex-shrink-0" />
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-yellow-200 mb-2">
+                              THE COMMISH bot is not installed in this server
+                            </p>
+                            <p className="text-xs text-yellow-200/70 mb-3">
+                              Click below to install the bot with the necessary permissions (View Channels, Send Messages, etc.)
+                            </p>
+                            <Button
+                              onClick={handleInstallBot}
+                              variant="default"
+                              className="w-full"
+                              data-testid="button-install-bot"
+                            >
+                              <ExternalLink className="h-4 w-4 mr-2" />
+                              Install THE COMMISH in this server
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     <Button
                       onClick={handleSaveDiscord}

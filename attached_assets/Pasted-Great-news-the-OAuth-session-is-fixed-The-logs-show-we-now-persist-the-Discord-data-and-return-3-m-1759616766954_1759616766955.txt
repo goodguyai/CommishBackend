@@ -1,0 +1,134 @@
+Great news: the OAuth/session is fixed. The logs show we now persist the Discord data and return 3 manageable guilds:
+
+[Discord Callback] … Filtered to 3 manageable guilds
+[Discord Session] hasDiscord: true … Returning { username:'mr_football', guildsCount: 3 }
+
+Now the blocker is the channel list (“Failed to fetch channels”). That happens when the bot isn’t in the selected guild or it lacks “View Channels / Send Messages” there. Your channels endpoint calls Discord with the bot token, and Discord returns 403/404 “Missing Access/Unknown Guild” if the bot isn’t a member.
+
+Let’s make this bullet-proof and UX-friendly.
+
+⸻
+
+One-shot work order for Replit (paste this)
+
+Goal: make Step 1 show channels every time. If the bot isn’t installed, guide user to install it and then retry automatically.
+
+Guardrails
+	•	Keep APP_BASE_URL=https://thecommish.replit.app
+	•	Keep Supabase; no schema changes beyond what’s already applied
+	•	Keep /api/discord/interactions raw-body verify
+	•	Do not remove the vite API guards
+
+⸻
+
+1) Backend: return precise error + install URL
+
+A. Add install URL generator
+
+// server/routes.ts  (under /api/v2/* group)
+app.get('/api/v2/discord/bot-install-url', (req, res) => {
+  const guildId = String(req.query.guildId ?? '');
+  if (!guildId) return res.status(400).json({ error: 'MISSING_GUILD_ID' });
+
+  // Minimum perms for our bot: View Channels, Send Messages, Embed Links, Read History, Add Reactions
+  // View Channels (1024) + Send (2048) + Embed (16384) + Read History (65536) + Add Reactions (64)
+  const perms = 1024 + 2048 + 16384 + 65536 + 64; // = 850,? (exact sum not super critical)
+  const url = new URL('https://discord.com/oauth2/authorize');
+  url.searchParams.set('client_id', env.discord.clientId);
+  url.searchParams.set('scope', 'bot applications.commands');
+  url.searchParams.set('permissions', String(perms));
+  url.searchParams.set('guild_id', guildId);
+  url.searchParams.set('disable_guild_select', 'true');
+  // Reuse our existing callback — not strictly required for bot install, but safe:
+  url.searchParams.set('redirect_uri', `${env.app.baseUrl}/api/v2/discord/callback`);
+  url.searchParams.set('response_type', 'code');
+
+  res.json({ url: url.toString() });
+});
+
+B. Harden channels endpoint with readable errors
+
+app.get('/api/v2/discord/channels', async (req, res) => {
+  try {
+    const guildId = String(req.query.guildId ?? '');
+    if (!guildId) return res.status(400).json({ error: 'MISSING_GUILD_ID' });
+
+    // ensure bot token exists
+    const botToken = env.discord.botToken;
+    const r = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
+      headers: { Authorization: `Bot ${botToken}` }
+    });
+
+    if (r.status === 403 || r.status === 404) {
+      return res.status(409).json({ error: 'BOT_NOT_IN_GUILD' });
+    }
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      return res.status(502).json({ error: 'DISCORD_ERROR', status: r.status, body });
+    }
+
+    const all = await r.json();
+    // filter to text-like channels the bot can post to
+    const textish = (all as any[]).filter(c => [0,5,15,11].includes(c.type)); // text, forum, announcement, thread?
+    const channels = textish.map(c => ({ id: c.id, name: c.name }));
+    res.json({ channels });
+  } catch (e:any) {
+    res.status(500).json({ error: 'CHANNELS_FETCH_FAILED', message: e?.message });
+  }
+});
+
+Result: if the bot isn’t installed, frontend receives { error: 'BOT_NOT_IN_GUILD' } instead of a generic failure.
+
+⸻
+
+2) Frontend: graceful flow in Step 1
+
+In the Setup page (Step 1 “Connect Discord”):
+
+A. When guild is selected → fetch channels
+	•	If success: populate channels dropdown; enable Continue.
+	•	If {error:'BOT_NOT_IN_GUILD'}: show a button “Install THE COMMISH in this server”.
+
+B. “Install THE COMMISH” button
+
+// onClick
+const r = await apiRequest(`/api/v2/discord/bot-install-url?guildId=${encodeURIComponent(selectedGuildId)}`);
+window.location.href = r.url; // user installs; Discord redirects back to our /callback
+
+C. After returning from install
+	•	Automatically re-call /api/v2/discord/channels?guildId=...
+	•	If still empty, show: “The bot might be missing permissions. Ensure it can View Channels and Send Messages.”
+
+Optional tiny UX: add a “Retry” link beside the channels select.
+
+⸻
+
+3) Quick self-checks (no guessing)
+	•	Is the bot in the server?
+In Discord → Server Settings → Members, search for “THE COMMISH”. If it’s not there, install via the new button.
+	•	Does it have enough permissions?
+A role that includes:
+	•	View Channels
+	•	Send Messages
+	•	Embed Links
+	•	Read Message History
+	•	Add Reactions
+(We do not need admin for channels listing.)
+	•	Can we call the endpoint directly?
+
+curl -s "https://thecommish.replit.app/api/v2/discord/channels?guildId=YOUR_GUILD_ID" | jq
+# Expect: { "channels": [ { "id":"...", "name":"general" }, ... ] }
+# If you see { "error":"BOT_NOT_IN_GUILD" }, click Install then retry.
+
+
+⸻
+
+4) Nice-to-have safety nets (tiny)
+	•	In /api/v2/setup/discord (where you save guild+channel and register commands), if registering commands returns 403/404, respond { error:'BOT_NOT_IN_GUILD' } and surface the Install button again.
+	•	Log Discord error bodies to help future debugging.
+
+⸻
+
+Why this fixes your situation
+
+Your logs prove the session is good now and that we correctly filtered to 3 eligible guilds. The only remaining reason channels wouldn’t load is that the bot isn’t a member of that guild (or lacks “View Channels”). Surfacing the Install step when needed, and retrying fetch, resolves the “Failed to fetch channels” you’re seeing.

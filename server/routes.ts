@@ -2405,37 +2405,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/v2/discord/bot-install-url - Generate bot installation URL
+  app.get('/api/v2/discord/bot-install-url', (req, res) => {
+    try {
+      const guildId = String(req.query.guildId ?? '');
+      if (!guildId) {
+        return res.status(400).json({ error: 'MISSING_GUILD_ID', message: 'guildId query parameter required' });
+      }
+
+      // Bot permissions: View Channels (1024) + Send Messages (2048) + Embed Links (16384) 
+      // + Read Message History (65536) + Add Reactions (64) + Use Slash Commands (2147483648)
+      const permissions = 1024 + 2048 + 16384 + 65536 + 64 + 2147483648;
+      
+      const url = new URL('https://discord.com/oauth2/authorize');
+      url.searchParams.set('client_id', env.discord.clientId);
+      url.searchParams.set('scope', 'bot applications.commands');
+      url.searchParams.set('permissions', String(permissions));
+      url.searchParams.set('guild_id', guildId);
+      url.searchParams.set('disable_guild_select', 'true');
+      url.searchParams.set('redirect_uri', `${env.app.baseUrl}/setup?bot-installed=true`);
+      url.searchParams.set('response_type', 'code');
+
+      res.json({ url: url.toString() });
+    } catch (e) {
+      console.error('[Bot Install URL]', e);
+      res.status(500).json({ error: 'INSTALL_URL_FAILED', message: 'Failed to generate install URL' });
+    }
+  });
+
   // GET /api/v2/discord/channels?guildId=...
   app.get("/api/v2/discord/channels", async (req, res) => {
     try {
       const { guildId } = req.query;
       if (!guildId || typeof guildId !== 'string') {
-        return res.status(400).json({ ok: false, code: "NO_GUILD", message: "Missing guildId" });
+        return res.status(400).json({ error: "MISSING_GUILD_ID", message: "guildId query parameter required" });
       }
 
-      const response = await fetch(`https://discord.com/api/guilds/${guildId}/channels`, {
+      console.log(`[Discord Channels] Fetching channels for guild ${guildId}`);
+      
+      const response = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
         headers: { Authorization: `Bot ${env.discord.botToken}` },
       });
 
+      // Bot not in guild or missing permissions
+      if (response.status === 403 || response.status === 404) {
+        console.log(`[Discord Channels] Bot not in guild ${guildId} (status: ${response.status})`);
+        return res.status(409).json({ 
+          error: "BOT_NOT_IN_GUILD", 
+          message: "Bot is not installed in this server" 
+        });
+      }
+
       if (!response.ok) {
-        throw new Error(`Failed to fetch channels: ${response.status}`);
+        const body = await response.text().catch(() => '');
+        console.error(`[Discord Channels] Discord API error:`, response.status, body);
+        return res.status(502).json({ 
+          error: "DISCORD_ERROR", 
+          status: response.status, 
+          body 
+        });
       }
 
       const channels = await response.json();
       
+      // Filter to text-like channels: text (0), announcement (5), forum (15), thread (11)
       const textChannels = channels
-        .filter((c: any) => c.type === 0)
+        .filter((c: any) => [0, 5, 15, 11].includes(c.type))
         .map((c: any) => ({
           id: c.id,
           name: c.name,
-          position: c.position,
+          type: c.type,
         }))
-        .sort((a: any, b: any) => a.position - b.position);
+        .sort((a: any, b: any) => (a.position || 0) - (b.position || 0));
       
+      console.log(`[Discord Channels] Found ${textChannels.length} text channels`);
       res.json({ channels: textChannels });
     } catch (e) {
       console.error("[Discord Channels]", e);
-      res.status(500).json({ ok: false, code: "CHANNELS_FAILED", message: "Failed to fetch channels" });
+      res.status(500).json({ error: "CHANNELS_FETCH_FAILED", message: String(e) });
     }
   });
 
