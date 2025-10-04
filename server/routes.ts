@@ -2269,10 +2269,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const guilds = await guildsResponse.json();
       
-      // Filter to guilds where user has MANAGE_GUILD permission (bit 5 = 0x20)
-      const manageableGuilds = guilds.filter((g: any) => 
-        (parseInt(g.permissions) & 0x20) === 0x20
-      );
+      console.log(`[Discord Callback] User ${user.username} has ${guilds.length} total guilds`);
+      
+      // Filter to guilds where user has MANAGE_GUILD (0x20) or ADMINISTRATOR (0x8) permission
+      const manageableGuilds = guilds.filter((g: any) => {
+        const perms = parseInt(g.permissions);
+        const hasManage = (perms & 0x20) === 0x20;
+        const hasAdmin = (perms & 0x8) === 0x8;
+        console.log(`[Discord Callback] Guild "${g.name}" - perms: ${perms}, hasManage: ${hasManage}, hasAdmin: ${hasAdmin}`);
+        return hasManage || hasAdmin;
+      });
+      
+      console.log(`[Discord Callback] Filtered to ${manageableGuilds.length} manageable guilds`);
       
       // SECURE: Store in express-session (PostgreSQL-backed)
       req.session.discordOauth = {
