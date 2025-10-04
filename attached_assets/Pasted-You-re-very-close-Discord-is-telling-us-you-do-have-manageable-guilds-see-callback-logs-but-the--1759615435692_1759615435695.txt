@@ -1,0 +1,168 @@
+You’re very close. Discord is telling us you do have manageable guilds (see callback logs), but the setup page says “no servers found.” The log line that matters:
+	•	[Discord Callback] Session saved … 3 guilds ✅
+	•	Immediately after: GET /api/v2/setup/discord-session → hasDiscordOauth: false … returning empty guilds ❌
+	•	Also note two different sessionId values in back-to-back requests.
+
+That combo means the session cookie isn’t sticking after the OAuth redirect, so subsequent API calls are using a fresh, empty session. This is almost always one of:
+	1.	express-session cookie marked secure but Express doesn’t trust the proxy → cookie not set
+	2.	sameSite/path/domain mismatch on the cookie
+	3.	Saved to a different key than we read (naming mismatch), but the two different session IDs strongly point at (1).
+
+Below is a surgical “paste-into-Replit” work order that fixes it and gives us debuggers to verify.
+
+⸻
+
+🚑 One-Shot Fix: persist session across Discord OAuth
+
+Guardrails (do not change)
+	•	Keep APP_BASE_URL=https://thecommish.replit.app (lowercase host is fine).
+	•	Keep Supabase database + current schema.
+	•	Keep /api/discord/interactions on express.raw with signature verify.
+	•	Don’t touch vite guards you added.
+
+⸻
+
+1) Trust the proxy + harden session cookie (server/index.ts)
+
+Find where express-session is configured. Do the following exactly:
+
+// BEFORE creating the session middleware
+app.set('trust proxy', 1); // <-- CRUCIAL on Replit/any proxy
+
+import session from "express-session";
+import pgSession from "connect-pg-simple";
+
+// ... your pg client/pool
+const PgSession = pgSession(session);
+
+app.use(session({
+  store: new PgSession({
+    // use your existing pg client/pool options
+    tableName: 'user_sessions',
+    // pruneSessionInterval: 60 * 60 // optional
+  }),
+  name: 'commish.sid',
+  secret: env.app.sessionSecret,
+  resave: false,
+  saveUninitialized: false,
+  proxy: true, // <-- ensure secure cookies are allowed behind proxy
+  cookie: {
+    httpOnly: true,
+    secure: true,        // we are on HTTPS (replit.app)
+    sameSite: 'lax',     // cookies are sent on top-level navigations (OAuth redirect)
+    path: '/',           // default, but set explicitly
+    maxAge: 1000 * 60 * 60 * 24 * 30, // 30 days
+  },
+}));
+
+Why: without app.set('trust proxy', 1) Express believes the request isn’t secure and drops the cookie when secure: true is set. That creates a new session on every request, which is what your logs show (two different sessionIds).
+
+⸻
+
+2) Normalize what we save in the session (Discord callback)
+
+In your Discord OAuth callback handler (e.g., /api/v2/discord/callback), immediately after exchanging the code and before redirecting:
+
+// Example shape to be consistent everywhere
+req.session.discord = {
+  accessToken,
+  refreshToken,
+  user: { id: user.id, username: user.username },
+  guilds: manageableGuilds,          // array already filtered by Manage Server
+  fetchedAt: Date.now(),
+};
+
+// make sure we actually flush to the store before redirecting
+await new Promise<void>((resolve, reject) =>
+  req.session.save(err => err ? reject(err) : resolve())
+);
+
+// now redirect back to setup
+res.redirect('/setup');
+
+And in /api/v2/setup/discord-session (the endpoint your UI calls), read the same key:
+
+const has = !!(req.session.discord?.accessToken);
+const guilds = has ? (req.session.discord.guil ds ?? []) : [];
+res.json({ guilds });
+
+If your code currently uses discordOauth, discord_oauth, or any other spelling, unify both read and write to req.session.discord.
+
+⸻
+
+3) Frontend: ensure cookies are sent
+
+Your fetch helper should already be doing this because it’s same-origin, but double-check your apiRequest() uses:
+
+fetch(url, { credentials: 'include', ... })
+
+(If you use axios, set withCredentials: true.)
+
+⸻
+
+4) Add two tiny debug endpoints (temporary)
+
+Add these admin-guarded endpoints so we can confirm the cookie sticks and the data is present:
+
+app.get('/api/_debug/session', (req, res) => {
+  const summary = {
+    id: (req.session as any).id, // the session id Express tracks
+    hasDiscord: !!req.session.discord,
+    keys: Object.keys(req.session ?? {}),
+  };
+  res.json(summary);
+});
+
+app.get('/api/_debug/discord', (req, res) => {
+  res.json({
+    has: !!req.session.discord?.accessToken,
+    guildCount: req.session.discord?.guilds?.length ?? 0,
+    sample: req.session.discord?.guilds?.slice(0, 3) ?? [],
+  });
+});
+
+(If you want them behind an admin key, wrap them with your existing admin check.)
+
+⸻
+
+5) Verify (quick)
+	1.	Open DevTools → Application → Cookies on thecommish.replit.app.
+	•	You should see commish.sid with Secure + SameSite=Lax.
+	2.	Run the flow again: Connect Discord → Authorize → back to /setup.
+	3.	Hit the debuggers:
+	•	/api/_debug/session → should show one stable id and hasDiscord: true.
+	•	/api/_debug/discord → should show has: true and guildCount: 3 (per your log).
+	4.	The guild dropdown should now populate. If not, hard-refresh with cache bypass (⇧⌘R).
+
+⸻
+
+6) If it still shows empty guilds, flip this one lever
+
+Some browsers can be picky if the cookie is set during a cross-site POST redirect chain. Changing to sameSite: 'none' + secure: true is a pragmatic fallback:
+
+cookie: { secure: true, sameSite: 'none', /* rest same */ }
+
+Only do this if step 5 fails; lax is preferable.
+
+⸻
+
+7) Clean up one DB issue you hit earlier (already patched, but just in case)
+
+You previously saw: column "channels" of relation "leagues" does not exist. Ensure these exist (idempotent):
+
+ALTER TABLE leagues ADD COLUMN IF NOT EXISTS channels   jsonb;
+ALTER TABLE leagues ADD COLUMN IF NOT EXISTS personality jsonb;
+
+
+⸻
+
+Why your specific log screamed “session cookie”
+	•	You saved OAuth data (“Session saved … 3 guilds”) but the very next request reported hasDiscordOauth: false and showed a different sessionId. That’s the signature of a cookie that never stuck. Trust-proxy + cookie flags resolves it.
+
+⸻
+
+One-liner for the Replit Agent
+
+“Set app.set('trust proxy', 1) before sessions; configure express-session with {proxy:true, cookie:{secure:true, sameSite:'lax', httpOnly:true, maxAge:…}}; in the Discord callback save OAuth into req.session.discord and await req.session.save(...) before redirect; make /api/v2/setup/discord-session read req.session.discord.guil ds; ensure fetch sends credentials:'include'; add /api/_debug/session and /api/_debug/discord endpoints to verify.”
+
+Ping me with the output of /api/_debug/session and /api/_debug/discord after the next attempt and I’ll sanity-check in seconds.

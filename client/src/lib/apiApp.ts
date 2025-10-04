@@ -26,7 +26,7 @@ export async function api<T = any>(
   }
   
   const response = await fetch(url, {
-    credentials: 'same-origin',
+    credentials: 'include',
     ...options,
     headers: {
       'Content-Type': 'application/json',

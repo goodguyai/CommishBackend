@@ -31,7 +31,7 @@ import { validate, schemas } from "./utils/validation";
 declare module 'express-session' {
   interface SessionData {
     csrfToken?: string;
-    discordOauth?: {
+    discord?: {
       userId: string;
       username: string;
       access_token: string;
@@ -2281,7 +2281,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[Discord Callback] Filtered to ${manageableGuilds.length} manageable guilds`);
       
       // SECURE: Store in express-session (PostgreSQL-backed)
-      req.session.discordOauth = {
+      req.session.discord = {
         userId: user.id,
         username: user.username,
         access_token: tokens.access_token,
@@ -2320,15 +2320,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET /api/v2/discord/debug-oauth - Debug OAuth session state (admin only)
   app.get("/api/v2/discord/debug-oauth", requireAdminKey, async (req, res) => {
     try {
-      const discordOauth = req.session?.discordOauth;
+      const discord = req.session?.discord;
       res.set("Cache-Control", "no-store");
       return res.json({
-        hasSession: !!discordOauth,
-        scopes: discordOauth?.scopes ?? [],
-        tokenExists: !!discordOauth?.access_token,
-        tokenExp: discordOauth?.expires_at,
-        guildCacheLen: discordOauth?.guilds?.length ?? null,
-        username: discordOauth?.username,
+        hasSession: !!discord,
+        scopes: discord?.scopes ?? [],
+        tokenExists: !!discord?.access_token,
+        tokenExp: discord?.expires_at,
+        guildCacheLen: discord?.guilds?.length ?? null,
+        username: discord?.username,
       });
     } catch (e) {
       return res.status(500).json({ error: "DEBUG_OAUTH", detail: String(e) });
@@ -2338,21 +2338,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET /api/v2/discord/guilds - Fetch guilds using stored user token
   app.get("/api/v2/discord/guilds", async (req, res) => {
     try {
-      const discordOauth = req.session?.discordOauth;
+      const discord = req.session?.discord;
       
-      if (!discordOauth?.access_token) {
+      if (!discord?.access_token) {
         return res.status(401).json({ error: "NO_USER_TOKEN", message: "No Discord access token in session" });
       }
 
       // Check if token is expired
-      if (discordOauth.expires_at && Date.now() > discordOauth.expires_at) {
+      if (discord.expires_at && Date.now() > discord.expires_at) {
         return res.status(401).json({ error: "TOKEN_EXPIRED", message: "Discord token expired, please re-authenticate" });
       }
 
       console.log('[Discord Guilds] Fetching guilds with user token...');
       
       const guildsResponse = await fetch('https://discord.com/api/users/@me/guilds', {
-        headers: { Authorization: `Bearer ${discordOauth.access_token}` },
+        headers: { Authorization: `Bearer ${discord.access_token}` },
       });
       
       if (!guildsResponse.ok) {
@@ -2444,29 +2444,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       console.log('[Discord Session] Checking session...', {
         hasSession: !!req.session,
-        hasDiscordOauth: !!req.session?.discordOauth,
+        hasDiscord: !!req.session?.discord,
         sessionId: req.sessionID,
       });
       
-      const discordOauth = req.session.discordOauth;
-      if (!discordOauth || !discordOauth.guilds) {
+      const discord = req.session.discord;
+      if (!discord || !discord.guilds) {
         console.log('[Discord Session] No OAuth data in session, returning empty guilds');
         return res.json({ guilds: [] });
       }
       
       console.log('[Discord Session] Returning', {
-        username: discordOauth.username,
-        guildsCount: discordOauth.guilds.length,
+        username: discord.username,
+        guildsCount: discord.guilds.length,
       });
       
       res.json({ 
-        guilds: discordOauth.guilds,
-        username: discordOauth.username,
+        guilds: discord.guilds,
+        username: discord.username,
       });
     } catch (e) {
       console.error('[Discord Session]', e);
       res.status(500).json({ ok: false, code: "SESSION_FAILED", message: "Failed to fetch session" });
     }
+  });
+
+  // GET /api/_debug/session - Debug session state (admin only)
+  app.get("/api/_debug/session", requireAdminKey, (req, res) => {
+    const summary = {
+      id: req.sessionID,
+      hasDiscord: !!req.session.discord,
+      keys: Object.keys(req.session ?? {}),
+    };
+    res.json(summary);
+  });
+
+  // GET /api/_debug/discord - Debug Discord OAuth state (admin only)
+  app.get("/api/_debug/discord", requireAdminKey, (req, res) => {
+    res.json({
+      has: !!req.session.discord?.access_token,
+      guildCount: req.session.discord?.guilds?.length ?? 0,
+      sample: req.session.discord?.guilds?.slice(0, 3) ?? [],
+    });
   });
 
   // POST /api/v2/setup/discord

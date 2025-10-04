@@ -147,6 +147,9 @@ app.use((req, res, next) => {
     },
   });
 
+  // CRITICAL: Trust proxy for Replit - enables secure cookies behind proxy
+  app.set('trust proxy', 1);
+
   app.use(
     session({
       store: new PgSession({
@@ -154,14 +157,17 @@ app.use((req, res, next) => {
         tableName: "user_sessions",
         createTableIfMissing: false,
       }),
+      name: 'commish.sid',
       secret: getEnv().SESSION_SECRET,
       resave: false,
       saveUninitialized: false,
+      proxy: true,
       cookie: {
-        secure: getEnv().NODE_ENV === "production",
         httpOnly: true,
-        maxAge: 30 * 24 * 60 * 60 * 1000,
+        secure: true,
         sameSite: "lax",
+        path: '/',
+        maxAge: 30 * 24 * 60 * 60 * 1000,
       },
     })
   );
