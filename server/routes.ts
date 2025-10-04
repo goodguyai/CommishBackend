@@ -717,74 +717,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: String(error) });
     }
   });
-  
-  // === DEBUG ENDPOINT TO TEST REPLIT DISCORD INTEGRATION ===
-  app.get("/api/debug/replit-discord-guilds", async (req, res) => {
-    try {
-      // Get access token from Replit Discord integration
-      const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-      const xReplitToken = process.env.REPL_IDENTITY 
-        ? 'repl ' + process.env.REPL_IDENTITY 
-        : process.env.WEB_REPL_RENEWAL 
-        ? 'depl ' + process.env.WEB_REPL_RENEWAL 
-        : null;
-
-      if (!xReplitToken) {
-        return res.status(500).json({ error: 'X_REPLIT_TOKEN not found' });
-      }
-
-      const connectionSettings = await fetch(
-        'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=discord',
-        {
-          headers: {
-            'Accept': 'application/json',
-            'X_REPLIT_TOKEN': xReplitToken
-          }
-        }
-      ).then(res => res.json()).then(data => data.items?.[0]);
-
-      const accessToken = connectionSettings?.settings?.access_token || connectionSettings?.settings?.oauth?.credentials?.access_token;
-
-      if (!accessToken) {
-        return res.status(500).json({ error: 'Discord not connected via Replit' });
-      }
-      
-      // Fetch guilds
-      const guildsResponse = await fetch('https://discord.com/api/users/@me/guilds', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      
-      if (!guildsResponse.ok) {
-        return res.status(500).json({ error: `Failed to fetch guilds: ${guildsResponse.status}` });
-      }
-      
-      const guilds = await guildsResponse.json();
-      
-      console.log(`[Debug] Fetched ${guilds.length} guilds from Replit Discord integration`);
-      
-      // Test permissions filtering
-      const manageableGuilds = guilds.filter((g: any) => {
-        const perms = parseInt(g.permissions);
-        const hasManage = (perms & 0x20) === 0x20;
-        const hasAdmin = (perms & 0x8) === 0x8;
-        console.log(`[Debug] Guild "${g.name}" - perms: ${perms}, hasManage: ${hasManage}, hasAdmin: ${hasAdmin}`);
-        return hasManage || hasAdmin;
-      });
-      
-      res.json({
-        totalGuilds: guilds.length,
-        manageableGuilds: manageableGuilds.length,
-        guilds: manageableGuilds.map((g: any) => ({
-          id: g.id,
-          name: g.name,
-          permissions: g.permissions,
-        }))
-      });
-    } catch (error) {
-      console.error('[Debug Replit Discord]', error);
-      res.status(500).json({ error: String(error) });
-    }
-  });
 
   // === LEGACY ENDPOINTS - DEPRECATED ===
   // These endpoints used insecure in-memory sessions and have been replaced by /api/v2/* endpoints
@@ -1964,34 +1896,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/v2/discord/channels?guildId=... - Get writable channels
-  app.get("/api/v2/discord/channels", async (req, res) => {
-    try {
-      const { guildId } = req.query;
-      
-      if (!guildId || typeof guildId !== 'string') {
-        return res.status(400).json({
-          ok: false,
-          code: "GUILD_ID_REQUIRED",
-          message: "guildId query parameter required"
-        });
-      }
-      
-      const channels = await discordService.getGuildChannels(guildId);
-      
-      res.json({
-        ok: true,
-        data: channels
-      });
-    } catch (error) {
-      console.error("Get channels failed:", error);
-      res.status(500).json({
-        ok: false,
-        code: "GET_CHANNELS_FAILED",
-        message: "Failed to get channels"
-      });
-    }
-  });
 
   // GET /api/v2/personality/preview?style=...&text=... - Preview personality style
   app.get("/api/v2/personality/preview", async (req, res) => {
@@ -2340,12 +2244,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[Discord Callback] User ${user.username} has ${guilds.length} total guilds`);
       
       // Filter to guilds where user has MANAGE_GUILD (0x20) or ADMINISTRATOR (0x8) permission
+      // Discord API returns permissions as a string, so we need to parse it as BigInt for large numbers
       const manageableGuilds = guilds.filter((g: any) => {
-        const perms = parseInt(g.permissions);
-        const hasManage = (perms & 0x20) === 0x20;
-        const hasAdmin = (perms & 0x8) === 0x8;
-        console.log(`[Discord Callback] Guild "${g.name}" - perms: ${perms}, hasManage: ${hasManage}, hasAdmin: ${hasAdmin}`);
-        return hasManage || hasAdmin;
+        try {
+          // Parse as BigInt to handle large permission values
+          const perms = BigInt(g.permissions);
+          const hasManage = (perms & BigInt(0x20)) === BigInt(0x20);
+          const hasAdmin = (perms & BigInt(0x8)) === BigInt(0x8);
+          console.log(`[Discord Callback] Guild "${g.name}" - perms: ${g.permissions}, hasManage: ${hasManage}, hasAdmin: ${hasAdmin}`);
+          return hasManage || hasAdmin;
+        } catch (e) {
+          console.error(`[Discord Callback] Failed to parse permissions for guild ${g.name}:`, e);
+          return false;
+        }
       });
       
       console.log(`[Discord Callback] Filtered to ${manageableGuilds.length} manageable guilds`);
@@ -2530,6 +2441,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await userResponse.json();
+      
+      if (!user || !user.user_id) {
+        return res.status(404).json({ ok: false, code: "USER_NOT_FOUND", message: "Sleeper user not found" });
+      }
       
       const leaguesResponse = await fetch(
         `https://api.sleeper.app/v1/user/${user.user_id}/leagues/nfl/${targetSeason}`
