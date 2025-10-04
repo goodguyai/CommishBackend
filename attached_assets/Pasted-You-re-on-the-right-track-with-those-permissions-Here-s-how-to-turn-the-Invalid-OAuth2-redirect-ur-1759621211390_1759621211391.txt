@@ -1,0 +1,161 @@
+You’re on the right track with those permissions. Here’s how to turn the “Invalid OAuth2 redirect_uri” mess into a clean, repeatable install flow and set us up for your “selective reactions / @everyone” goals.
+
+⸻
+
+1) Permissions: what you picked & why it’s fine
+
+You enabled:
+	•	View Channels
+	•	Read Message History
+	•	Send Messages
+	•	Manage Messages
+	•	Embed Links
+	•	Use Slash Commands
+	•	Create Polls
+	•	Add Reactions
+	•	Mention Everyone
+
+✅ This is totally workable for THE COMMISH.
+Notes:
+	•	Add Reactions + Read Message History are exactly what we need for selective 👍/❤️ reactions.
+	•	Mention Everyone: keep it on in Discord, but we’ll gate its usage in the app (commissioner-only + rate-limited) so we never spam.
+	•	We are not using Administrator, which is good (principle of least privilege).
+
+Action (once per change): in the Discord dev portal “Bot” page, scroll to the bottom and copy the Permissions Integer shown there. We’ll feed that into our install URL.
+
+⸻
+
+2) Fix the install flow (this is the redirect error culprit)
+
+Discord settings (one time)
+	•	Bot → Authorization Flow
+	•	Public Bot: ON
+	•	Requires OAuth2 Code Grant: OFF
+	•	OAuth2 → Redirects (user login only):
+https://thecommish.replit.app/discord-callback (lowercase, no trailing slash)
+
+The “Invalid OAuth2 redirect_uri” happened because the bot install URL included a redirect_uri. The classic “Add to server” flow does not use redirect_uri. We remove it entirely.
+
+Backend: generate a redirect-free bot install URL
+
+Update /api/v2/discord/bot-install-url to omit redirect_uri and include permissions + target guild:
+
+// server/routes.ts (or wherever you build it)
+app.get('/api/v2/discord/bot-install-url', (req, res) => {
+  const { guildId } = req.query as { guildId: string };
+  const clientId = getEnv().DISCORD_CLIENT_ID;
+  const perms = getEnv().DISCORD_BOT_PERMISSIONS; // set this env from Discord portal integer
+
+  if (!guildId) return res.status(400).json({ error: 'MISSING_GUILD_ID' });
+
+  const url = new URL('https://discord.com/api/oauth2/authorize');
+  url.searchParams.set('client_id', clientId);
+  url.searchParams.set('scope', 'bot applications.commands');
+  url.searchParams.set('permissions', String(perms));
+  url.searchParams.set('guild_id', guildId);
+  url.searchParams.set('disable_guild_select', 'true');
+
+  // IMPORTANT: no redirect_uri, no response_type here.
+  res.json({ url: url.toString() });
+});
+
+Frontend: open install in a new tab + auto-retry channel fetch
+
+You already added most of this. Keep/ensure:
+	•	Before opening the install link:
+sessionStorage.setItem('pending-guild-id', selectedGuildId)
+	•	Open in new tab: window.open(installUrl, '_blank', 'noopener,noreferrer')
+	•	On focus / visibilitychange, silently retry fetchChannels(selectedGuildId); if the bot joined, the channels will appear.
+
+⸻
+
+3) Environment & base URL sanity (prevents random prod bugs)
+	•	APP_BASE_URL=https://thecommish.replit.app (lowercase, no trailing slash)
+	•	DISCORD_BOT_PERMISSIONS=<integer from “Bot” page>
+	•	Keep session settings you already fixed:
+	•	app.set('trust proxy', 1); cookie { secure: true, sameSite: 'lax', httpOnly: true }
+	•	Fetch uses credentials: 'include' (done)
+	•	HTML responses send Cache-Control: no-store (done)
+
+⸻
+
+4) Acceptance test (fast)
+	1.	Go to /setup → Connect Discord → “Connect Discord Account” → approve.
+	2.	Pick your server.
+	•	If bot absent → yellow box + “Install THE COMMISH” button appears.
+	3.	Click Install → Discord tab opens → authorize.
+	4.	Return to the app tab → it auto-retries → channels load.
+	5.	Pick a channel → Continue.
+
+If anything odd:
+	•	curl -H "X-Admin-Key: $ADMIN_KEY" https://thecommish.replit.app/api/_debug/discord
+→ should show a session with user token + ~3 guilds
+	•	curl "https://thecommish.replit.app/api/v2/discord/channels?guildId=<id>"
+→ returns channels array when bot is installed; returns { code: 'BOT_NOT_IN_GUILD' } otherwise
+
+⸻
+
+5) Make reactions & @everyone smart (so it feels “alive”, not spammy)
+
+We’ll add commissioner-tunable rules so the bot reacts sparingly and never abuses mentions.
+
+League settings (DB / JSON column):
+
+{
+  "engagement": {
+    "autoReact": {
+      "enabled": true,
+      "cooldownMinutes": 120,
+      "minChars": 30,
+      "sentiment": {
+        "positiveThreshold": 0.6,
+        "negativeThreshold": -0.4
+      },
+      "signals": {
+        "highEffort": true,   // long, formatted, attachments
+        "celebration": true,  // “gg”, “let’s go”, team wins
+        "support": true       // replies when someone gets bad luck/injury
+      }
+    },
+    "mentions": {
+      "allowEveryone": true,
+      "commissionerOnly": true,
+      "cooldownHours": 24,
+      "contexts": ["league_announcement","deadline_reminder"]
+    }
+  }
+}
+
+Guardrails in code (high level):
+	•	Keep a per-channel cooldown cache for reactions and @everyone.
+	•	Only react if:
+	•	message length ≥ minChars or matches a “signal” pattern
+	•	last bot reaction in channel > cooldownMinutes
+	•	sentiment ≥ threshold (positive) or ≤ negative for sympathy reactions
+	•	Only allow @everyone when:
+	•	request came from commissioner (check mapping/role we already store)
+	•	last @everyone in guild > cooldownHours
+	•	context is whitelisted (digest, deadlines, league-wide announcements)
+
+This gives you your “selective thumbs-up/heart” behavior and safe @everyone use.
+
+⸻
+
+6) Where duplicate / legacy bits usually hide (quick cleanup pass)
+	•	Only one session shape: req.session.discord (you already normalized)
+	•	Delete/ignore any old endpoints under /api/mock/* in production
+	•	Confirm one OAuth callback: /discord-callback (user OAuth only)
+	•	Confirm one bot-install builder (the one above) and that no other path adds a redirect_uri to the bot install URL.
+	•	Ensure lowercase base URL is used anywhere we build Discord URLs.
+
+⸻
+
+7) Your next 3 clicks
+	1.	In Discord dev portal → Bot page → copy Permissions Integer and put it into DISCORD_BOT_PERMISSIONS env in Replit.
+	2.	In OAuth2 → Redirects, verify only:
+https://thecommish.replit.app/discord-callback
+	3.	Try the flow again in /setup. If you ever see the yellow banner, click Install → return → channels should auto-populate.
+
+⸻
+
+If you want me to, I can produce the exact diff for server/routes.ts and the small React changes you can paste as-is. But if you follow the steps above (especially removing redirect_uri from the bot-add URL and setting the permissions integer), the error you’re seeing will disappear, channels will load, and we can move on to polishing the “feel alive” bits (reactions, digests, polls) with the guardrails above.

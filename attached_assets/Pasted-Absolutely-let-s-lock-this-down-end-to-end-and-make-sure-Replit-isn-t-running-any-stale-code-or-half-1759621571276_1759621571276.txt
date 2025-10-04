@@ -1,0 +1,256 @@
+Absolutely—let’s lock this down end-to-end and make sure Replit isn’t running any stale code or half-wired paths.
+
+Below is a do-now action plan with concrete diffs, env settings, and a one-button sanity sweep so we can prove the whole Discord install + bot flow is clean (no “old stuff”, no duplicate routes, no string mismatches).
+
+⸻
+
+A) Fix the “Invalid OAuth2 redirect_uri” and make install foolproof
+
+Why you saw that screen:
+We were using a bot install URL that included a redirect_uri. The classic “Add to Server” flow for bots does not use redirect_uri. Discord rejects it.
+
+1) Discord Developer Portal (one time)
+	•	OAuth2 → Redirects (user login only):
+
+https://thecommish.replit.app/discord-callback
+
+(all lowercase, exact match, no trailing slash)
+
+	•	Bot → Authorization Flow
+	•	Public Bot: ON
+	•	Requires OAuth2 Code Grant: OFF
+	•	Bot → Permissions
+Toggle the ones you already listed. Copy the Permissions Integer shown at the bottom.
+
+2) Replit env (one time)
+
+Set/update in Replit Secrets:
+
+APP_BASE_URL = https://thecommish.replit.app
+DISCORD_BOT_PERMISSIONS = <paste integer from Bot page>
+
+(Keep everything lowercase; no trailing /.)
+
+3) Backend: build the bot install URL (no redirect_uri)
+
+Replace your install route with this canonical one:
+
+// server/routes.ts
+app.get('/api/v2/discord/bot-install-url', requireAuth, (req, res) => {
+  const { guildId } = req.query as { guildId?: string };
+  if (!guildId) return res.status(400).json({ error: 'MISSING_GUILD_ID' });
+
+  const url = new URL('https://discord.com/api/oauth2/authorize');
+  url.searchParams.set('client_id', getEnv().DISCORD_CLIENT_ID);
+  url.searchParams.set('scope', 'bot applications.commands');
+  url.searchParams.set('permissions', String(getEnv().DISCORD_BOT_PERMISSIONS));
+  url.searchParams.set('guild_id', guildId);
+  url.searchParams.set('disable_guild_select', 'true');
+
+  // IMPORTANT: no redirect_uri / response_type for bot install
+  res.json({ url: url.toString() });
+});
+
+We keep /discord-callback exclusively for user login (identify + guilds), which does use redirect_uri.
+
+⸻
+
+B) Ensure we are not using “old stuff” (route/strings/dupes)
+
+Add a tiny “route manifest” + “health” pair, admin-only, to prove what’s running:
+
+// server/routes.ts
+const requireAdminKey = (req, res, next) => {
+  if (req.get('X-Admin-Key') !== getEnv().ADMIN_KEY) return res.status(401).end();
+  next();
+};
+
+// 1) Show every mounted route (helps spot duplicates/legacy)
+app.get('/api/_debug/routes', requireAdminKey, (req, res) => {
+  const routes: any[] = [];
+  (app as any)._router.stack.forEach((m: any) => {
+    if (m.route && m.route.path) {
+      routes.push({ methods: Object.keys(m.route.methods), path: m.route.path });
+    } else if (m.name === 'router' && m.handle?.stack) {
+      m.handle.stack.forEach((h: any) => {
+        if (h.route?.path) routes.push({ methods: Object.keys(h.route.methods), path: h.route.path });
+      });
+    }
+  });
+  res.set('Cache-Control', 'no-store');
+  res.json(routes);
+});
+
+// 2) Deep health: DB, bot REST, session, URL casing
+app.get('/api/_debug/health', requireAdminKey, async (req, res) => {
+  const out: any = { ok: true, checks: {} };
+
+  // Base URL hygiene
+  const base = getEnv().APP_BASE_URL;
+  out.checks.baseUrl = {
+    value: base,
+    lowercase: base === base.toLowerCase(),
+    noTrailingSlash: !base.endsWith('/'),
+  };
+
+  // DB ping
+  try { await storage.sql`select 1`; out.checks.db = { ok: true }; }
+  catch (e) { out.ok = false; out.checks.db = { ok: false, err: String(e) }; }
+
+  // Bot REST: whoami
+  try {
+    const me = await discordRest.get('/users/@me'); // with bot token
+    out.checks.botUser = { ok: true, id: me.id, username: me.username };
+  } catch (e) { out.ok = false; out.checks.botUser = { ok: false, err: String(e) }; }
+
+  // Commands registered?
+  try {
+    const cmds = await discordRest.get(`/applications/${getEnv().DISCORD_CLIENT_ID}/commands`);
+    out.checks.commands = { ok: Array.isArray(cmds), count: cmds?.length ?? 0 };
+  } catch (e) { out.ok = false; out.checks.commands = { ok: false, err: String(e) }; }
+
+  // Session shape (after user OAuth)
+  out.checks.session = {
+    hasSession: !!req.session,
+    hasDiscord: !!req.session?.discord,
+    guildsCount: req.session?.discord?.guilds?.length ?? 0,
+  };
+
+  res.set('Cache-Control', 'no-store');
+  res.status(out.ok ? 200 : 503).json(out);
+});
+
+Use it to prove no dupes & everything live:
+
+curl -H "X-Admin-Key: $ADMIN_KEY" https://thecommish.replit.app/api/_debug/routes
+curl -H "X-Admin-Key: $ADMIN_KEY" https://thecommish.replit.app/api/_debug/health
+
+If you see any unexpected/legacy paths (e.g., /api/mock/* or old /api/discord/* duplicates), we’ll remove/410 them.
+
+Add a hard guard so mocks can’t run in prod:
+
+// server/index.ts – BEFORE routes
+if (getEnv().NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api/mock/')) return res.status(410).json({ error: 'GONE' });
+    next();
+  });
+}
+
+
+⸻
+
+C) Channel fetch clarity (install vs. permission errors)
+
+Tighten the channels endpoint so the UI gets a structured error:
+
+// server/routes.ts
+app.get('/api/v2/discord/channels', requireAuth, async (req, res) => {
+  const { guildId } = req.query as { guildId?: string };
+  if (!guildId) return res.status(400).json({ error: 'MISSING_GUILD_ID' });
+
+  try {
+    // Verify bot is in guild
+    try {
+      await discordRest.get(`/users/@me/guilds/${guildId}`); // or get guild channels directly
+    } catch {
+      return res.status(409).json({ error: 'BOT_NOT_IN_GUILD' });
+    }
+
+    const chans = await discordRest.get(`/guilds/${guildId}/channels`);
+    // Keep only text/postable channels
+    const postable = (chans || []).filter((c: any) => ['0','5','15'].includes(String(c.type))); // GUILD_TEXT etc.
+    return res.json({ channels: postable });
+  } catch (e) {
+    return res.status(500).json({ error: 'CHANNELS_FAILED', message: String(e) });
+  }
+});
+
+Your onboarding already shows the yellow “Install THE COMMISH” box when it sees BOT_NOT_IN_GUILD and then auto-retries after install—keep that.
+
+⸻
+
+D) Schema & migrations (idempotent, so no “missing column” again)
+
+Run this once (safe if already applied):
+
+-- scripts/migrations/20251004_commish.sql
+ALTER TABLE leagues ADD COLUMN IF NOT EXISTS channels jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE leagues ADD COLUMN IF NOT EXISTS personality jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE leagues ADD COLUMN IF NOT EXISTS features jsonb DEFAULT '{}'::jsonb;
+
+If you use Drizzle/kit: wire a minimal migration runner or run raw SQL through your existing Supabase console.
+
+⸻
+
+E) Session & cookies sanity (already partly fixed—lock it)
+
+We keep:
+	•	app.set('trust proxy', 1);
+	•	session cookie { name: 'commish.sid', secure: true, sameSite: 'lax', httpOnly: true, path: '/' }
+	•	proxy: true on the session config
+	•	Frontend fetch uses credentials: 'include'
+
+You already implemented these; the _debug/health endpoint above confirms the session after OAuth.
+
+⸻
+
+F) One-command Sanity Sweep (copy into repo)
+
+Create scripts/sweep.sh:
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE="https://thecommish.replit.app"
+ADMIN="${ADMIN_KEY:?missing ADMIN_KEY}"
+
+echo "1) Route manifest (dupe/legacy scan)…"
+curl -s -H "X-Admin-Key: $ADMIN" "$BASE/api/_debug/routes" | jq 'length, .[] | select(.path|test("^/api/(?!v2|discord/interactions)"))'
+
+echo "2) Health checks…"
+curl -s -H "X-Admin-Key: $ADMIN" "$BASE/api/_debug/health" | jq .
+
+echo "3) Redirect casing check…"
+curl -s "$BASE/api/v2/discord/auth-url" | jq -r .url
+
+echo "4) Bot install URL (no redirect_uri)…"
+curl -s -H "Cookie: commish.sid=fake" \
+  "$BASE/api/v2/discord/bot-install-url?guildId=DUMMY" | jq .
+
+echo "5) Channels (expect BOT_NOT_IN_GUILD for a guild without bot)…"
+curl -s "$BASE/api/v2/discord/channels?guildId=DUMMY" | jq .
+
+Run:
+
+chmod +x scripts/sweep.sh
+./scripts/sweep.sh
+
+Pass criteria:
+	•	health ok, bot user present, commands count returns
+	•	install URL has scope=bot%20applications.commands and no redirect_uri
+	•	channels return { error: "BOT_NOT_IN_GUILD" } when bot absent (not 500)
+
+⸻
+
+G) Guardrails for “feel alive” features (reactions / @everyone)
+
+You already enabled permissions. To keep it classy:
+	•	Add per-channel cooldown cache in memory (and back it with leagues.features.engagement).
+	•	Only allow @everyone from commissioner and with a 24h cooldown (configurable).
+	•	Reaction policy uses sentiment + length + pattern signals (config as JSON).
+These are pure server-side flags; the Dashboard toggles simply write JSON to leagues.features.
+
+⸻
+
+H) What to have Replit do right now
+	1.	Update Discord portal entries (section A.1).
+	2.	Set DISCORD_BOT_PERMISSIONS env.
+	3.	Apply the /discord/bot-install-url endpoint shown above.
+	4.	Add the _debug/routes + _debug/health endpoints.
+	5.	Run the SQL migration block (section D).
+	6.	Run scripts/sweep.sh and paste the output here.
+
+If anything fails those checks, the output will tell us exactly which piece is off (old route, bad casing, missing permission integer, etc.). From there we’ll tighten the one spot instead of whack-a-mole.
+
+You’ve done the hard part—permissions are correct and the UI is nearly there. Once the install URL stops including redirect_uri and we confirm health via the sweep, the Discord step will behave exactly as intended: pick server → install if needed → channels appear → continue.
