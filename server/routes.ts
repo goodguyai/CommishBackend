@@ -725,10 +725,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/discord/auth-url instead" });
   });
 
-  app.get("/discord-callback", async (req, res) => {
-    res.redirect('/setup?error=deprecated_endpoint');
-  });
-
   app.get("/api/discord/me", (req, res) => {
     res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/setup/discord-session instead" });
   });
