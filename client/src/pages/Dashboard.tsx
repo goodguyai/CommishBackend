@@ -307,9 +307,10 @@ export function DashboardPage() {
     }
   }, [leagueData?.league]);
 
-  // Dashboard data queries - using real transformation endpoints
-  const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
-    queryKey: ['/api/dashboard/stats'],
+  // Dashboard data queries - using real league-specific endpoints
+  const { data: statsResp, isLoading: statsLoading } = useQuery<{ ok: boolean; stats: { rulesDocs: number; activityLast24h: number; ownersCount: number } }>({
+    queryKey: ['/api/v2/dashboard', leagueId, 'stats'],
+    enabled: !!leagueId,
   });
 
   const { data: discord, isLoading: discordLoading } = useQuery<DiscordIntegration>({
@@ -324,16 +325,18 @@ export function DashboardPage() {
     queryKey: ['/api/slash-commands'],
   });
 
-  const { data: rag, isLoading: ragLoading } = useQuery<RagSystemStatus>({
-    queryKey: ['/api/rag/status'],
+  const { data: ragResp, isLoading: ragLoading } = useQuery<{ ok: boolean; rag: { indexed: boolean; embeddedCount: number; recentDocs: any[] } }>({
+    queryKey: ['/api/v2/dashboard', leagueId, 'rag'],
+    enabled: !!leagueId,
   });
 
   const { data: ai, isLoading: aiLoading } = useQuery<AiAssistantStatus>({
     queryKey: ['/api/ai/status'],
   });
 
-  const { data: activity, isLoading: activityLoading } = useQuery<ActivityLog[]>({
-    queryKey: ['/api/activity'],
+  const { data: activityResp, isLoading: activityLoading } = useQuery<{ ok: boolean; activity: any[] }>({
+    queryKey: ['/api/v2/dashboard', leagueId, 'activity'],
+    enabled: !!leagueId,
   });
 
   // Owner Mappings (Members) Query
@@ -1018,10 +1021,10 @@ export function DashboardPage() {
   };
 
   const statsCards = [
-    { label: 'Active Leagues', value: stats?.activeLeagues ?? 0, icon: MessageSquare, color: 'text-brand-teal' },
-    { label: 'Rules Queries', value: stats?.rulesQueries ?? 0, icon: MessageSquare, color: 'text-brand-teal' },
-    { label: 'Upcoming Deadlines', value: stats?.upcomingDeadlines ?? 0, icon: Calendar, color: 'text-brand-gold' },
-    { label: 'AI Tokens Used', value: stats?.aiTokensUsed ?? '0', icon: Zap, color: 'text-brand-pink' },
+    { label: 'Rules Documents', value: statsResp?.stats?.rulesDocs ?? 0, icon: FileText, color: 'text-brand-teal' },
+    { label: 'Owner Mappings', value: statsResp?.stats?.ownersCount ?? 0, icon: UserPlus, color: 'text-brand-teal' },
+    { label: 'Activity (24h)', value: statsResp?.stats?.activityLast24h ?? 0, icon: Activity, color: 'text-brand-gold' },
+    { label: 'RAG Embeddings', value: ragResp?.rag?.embeddedCount ?? 0, icon: Database, color: 'text-brand-pink' },
   ];
 
   const formatCronToHuman = (cron: string): string => {
@@ -1941,37 +1944,47 @@ export function DashboardPage() {
               <div className="space-y-4">
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-medium text-text-primary">Constitution {rag?.constitutionVersion}</span>
-                    <Badge className="bg-brand-teal/20 text-brand-teal border-brand-teal/30">Indexed</Badge>
+                    <span className="font-medium text-text-primary">RAG Status</span>
+                    <Badge className={ragResp?.rag?.indexed ? "bg-brand-teal/20 text-brand-teal border-brand-teal/30" : "bg-gray-500/20 text-gray-500 border-gray-500/30"}>
+                      {ragResp?.rag?.indexed ? 'Indexed' : 'Not Indexed'}
+                    </Badge>
                   </div>
-                  <div className="text-sm text-text-secondary">Uploaded {rag?.uploadedAgo}</div>
+                  <div className="text-sm text-text-secondary">
+                    {ragResp?.rag?.indexed ? `${ragResp.rag.embeddedCount} embeddings ready` : 'Upload documents to index'}
+                  </div>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <div className="text-xs text-text-muted">Sections</div>
-                    <div className="text-lg font-semibold text-text-primary">{rag?.sections}</div>
+                    <div className="text-xs text-text-muted">Documents</div>
+                    <div className="text-lg font-semibold text-text-primary">{ragResp?.rag?.recentDocs?.length ?? 0}</div>
                   </div>
                   <div>
                     <div className="text-xs text-text-muted">Embeddings</div>
-                    <div className="text-lg font-semibold text-text-primary">{rag?.embeddings}</div>
+                    <div className="text-lg font-semibold text-text-primary">{ragResp?.rag?.embeddedCount ?? 0}</div>
                   </div>
                   <div>
                     <div className="text-xs text-text-muted">Vector dim</div>
-                    <div className="text-lg font-semibold text-text-primary">{rag?.vectorDim}</div>
+                    <div className="text-lg font-semibold text-text-primary">1536</div>
                   </div>
                   <div>
-                    <div className="text-xs text-text-muted">Avg similarity</div>
-                    <div className="text-lg font-semibold text-text-primary">{rag?.avgSimilarity}</div>
+                    <div className="text-xs text-text-muted">Status</div>
+                    <div className="text-lg font-semibold text-text-primary">{ragResp?.rag?.indexed ? 'Ready' : 'Pending'}</div>
                   </div>
                 </div>
 
                 <div>
-                  <div className="text-xs text-text-muted mb-2">Recent Queries</div>
+                  <div className="text-xs text-text-muted mb-2">Recent Documents</div>
                   <div className="space-y-1">
-                    {rag?.recentQueries?.map((q, i) => (
-                      <div key={i} className="text-xs text-text-secondary">"{q}"</div>
-                    )) || <div className="text-xs text-text-muted">No recent queries</div>}
+                    {ragResp?.rag?.recentDocs && ragResp.rag.recentDocs.length > 0 ? (
+                      ragResp.rag.recentDocs.slice(0, 5).map((doc: any, i: number) => (
+                        <div key={i} className="text-xs text-text-secondary">
+                          {doc.title} ({doc.chars} chars)
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-xs text-text-muted">No documents yet</div>
+                    )}
                   </div>
                 </div>
 
@@ -2079,20 +2092,34 @@ export function DashboardPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {activity?.map((log) => (
-                <div 
-                  key={log.id} 
-                  className="flex items-start gap-3 p-3 bg-surface-elevated border border-border-subtle rounded-lg"
-                  data-testid={`activity-${log.id}`}
-                >
-                  <div className="text-2xl">{log.icon}</div>
-                  <div className="flex-1">
-                    <div className="font-medium text-text-primary">{log.text}</div>
-                    <div className="text-sm text-text-secondary">{log.details}</div>
-                  </div>
-                  <div className="text-xs text-text-muted whitespace-nowrap">{log.timestamp}</div>
-                </div>
-              ))}
+              {activityResp?.activity && activityResp.activity.length > 0 ? (
+                activityResp.activity.slice(0, 10).map((log: any, idx: number) => {
+                  const icon = log.kind === 'slash' ? '🎮' 
+                    : log.kind === 'COMMAND_EXECUTED' ? '✅'
+                    : log.kind === 'ERROR_OCCURRED' ? '❌'
+                    : '📊';
+                  const text = log.key ? `/${log.key}` : log.kind.replace(/_/g, ' ').toLowerCase();
+                  const details = log.status === 'success' ? 'Completed successfully' : log.status;
+                  const timestamp = log.at ? new Date(log.at).toLocaleString() : 'N/A';
+                  
+                  return (
+                    <div 
+                      key={idx} 
+                      className="flex items-start gap-3 p-3 bg-surface-elevated border border-border-subtle rounded-lg"
+                      data-testid={`activity-${idx}`}
+                    >
+                      <div className="text-2xl">{icon}</div>
+                      <div className="flex-1">
+                        <div className="font-medium text-text-primary">{text}</div>
+                        <div className="text-sm text-text-secondary">{details}</div>
+                      </div>
+                      <div className="text-xs text-text-muted whitespace-nowrap">{timestamp}</div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-sm text-text-muted text-center py-4">No recent activity</div>
+              )}
             </div>
           )}
         </CardContent>
