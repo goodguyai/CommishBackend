@@ -624,7 +624,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!req.session.csrfToken) {
       req.session.csrfToken = nanoid(32);
     }
-    res.json({ token: req.session.csrfToken });
+    
+    // Explicitly save session to ensure Set-Cookie header is sent
+    req.session.save((err) => {
+      if (err) {
+        console.error('[CSRF] Session save error:', err);
+        return res.status(500).json({ error: 'Failed to create session' });
+      }
+      res.json({ token: req.session.csrfToken });
+    });
   });
 
   // CSRF protection middleware for /api/v2/* routes
@@ -642,16 +650,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Check CSRF token
     const csrfToken = req.headers['x-csrf-token'] || req.body?._csrf;
     const sessionToken = req.session?.csrfToken;
-    
-    // Debug logging
-    console.log('[CSRF Debug]', {
-      path: req.path,
-      hasSession: !!req.session,
-      sessionId: req.sessionID,
-      receivedToken: csrfToken ? `${csrfToken.substring(0, 10)}...` : 'MISSING',
-      sessionToken: sessionToken ? `${sessionToken.substring(0, 10)}...` : 'MISSING',
-      match: csrfToken === sessionToken,
-    });
     
     if (!csrfToken || !sessionToken || csrfToken !== sessionToken) {
       return res.status(403).json({

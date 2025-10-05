@@ -160,13 +160,20 @@ app.use((req, res, next) => {
   // CRITICAL: Trust proxy for Replit - enables secure cookies behind proxy
   app.set('trust proxy', 1);
 
+  const pgStore = new PgSession({
+    pool: sessionPool,
+    tableName: "user_sessions",
+    createTableIfMissing: false,
+  });
+
+  // Debug session store errors
+  pgStore.on('error', (err) => {
+    console.error('[Session Store] Error:', err);
+  });
+
   app.use(
     session({
-      store: new PgSession({
-        pool: sessionPool,
-        tableName: "user_sessions",
-        createTableIfMissing: false,
-      }),
+      store: pgStore,
       name: 'commish.sid',
       secret: getEnv().SESSION_SECRET,
       resave: false,

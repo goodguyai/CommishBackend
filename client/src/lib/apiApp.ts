@@ -3,7 +3,9 @@ let csrfToken: string | null = null;
 async function getCsrfToken(): Promise<string> {
   if (csrfToken) return csrfToken;
   
-  const response = await fetch('/api/csrf-token');
+  const response = await fetch('/api/csrf-token', {
+    credentials: 'include', // CRITICAL: Include cookies to receive session cookie
+  });
   const data = await response.json();
   const token = data.token;
   csrfToken = token;
