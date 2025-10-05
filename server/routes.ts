@@ -2511,6 +2511,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/v2/doctor/discord - Discord setup health check
+  app.get("/api/v2/doctor/discord", async (req, res) => {
+    const out: any = { ok: true, checks: {} };
+
+    try {
+      // Check 1: Redirect URL formatting
+      const redirect = `${env.app.baseUrl}/discord-callback`;
+      out.checks.redirect = {
+        value: redirect,
+        lowercase: redirect === redirect.toLowerCase(),
+        suffixOk: redirect.endsWith('/discord-callback'),
+      };
+      if (!out.checks.redirect.lowercase || !out.checks.redirect.suffixOk) {
+        out.ok = false;
+      }
+
+      // Check 2: Bot user authentication
+      try {
+        const botUser = await discordService.getBotUser();
+        out.checks.botUser = { 
+          ok: true, 
+          id: botUser.id,
+          username: botUser.username 
+        };
+      } catch (e) {
+        out.ok = false;
+        out.checks.botUser = { 
+          ok: false, 
+          error: e instanceof Error ? e.message : String(e) 
+        };
+      }
+
+      // Check 3: Slash commands registration
+      try {
+        const commands = await discordService.getGlobalCommands();
+        out.checks.commands = {
+          ok: true,
+          count: commands.length,
+        };
+      } catch (e) {
+        out.ok = false;
+        out.checks.commands = {
+          ok: false,
+          error: e instanceof Error ? e.message : String(e)
+        };
+      }
+
+      // Check 4: Environment variables
+      out.checks.env = {
+        hasClientId: !!env.discord.clientId,
+        hasClientSecret: !!env.discord.clientSecret,
+        hasBotToken: !!env.discord.botToken,
+        hasBotPermissions: !!env.discord.botPermissions,
+      };
+      if (!out.checks.env.hasClientId || !out.checks.env.hasClientSecret || 
+          !out.checks.env.hasBotToken || !out.checks.env.hasBotPermissions) {
+        out.ok = false;
+      }
+
+      res.set('Cache-Control', 'no-store')
+         .status(out.ok ? 200 : 409)
+         .json(out);
+    } catch (e) {
+      console.error("[Discord Doctor]", e);
+      res.status(500).json({ 
+        ok: false, 
+        error: e instanceof Error ? e.message : String(e) 
+      });
+    }
+  });
+
   // GET /api/_debug/session - Debug session state (admin only)
   app.get("/api/_debug/session", requireAdminKey, (req, res) => {
     const summary = {

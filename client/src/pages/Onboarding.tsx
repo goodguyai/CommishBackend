@@ -298,16 +298,22 @@ export function OnboardingPage() {
 
     setIsSavingDiscord(true);
     try {
+      const payload: any = {
+        guildId: selectedGuildId,
+        channelId: selectedChannelId,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      };
+
+      // Only include accountId if it's a valid UUID
+      if (accountId && accountId.length > 0) {
+        payload.accountId = accountId;
+      }
+
       const result = await api<{ ok: boolean; leagueId: string }>(
         '/api/v2/setup/discord',
         {
           method: 'POST',
-          body: JSON.stringify({
-            accountId,
-            guildId: selectedGuildId,
-            channelId: selectedChannelId,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          }),
+          body: JSON.stringify(payload),
         }
       );
 
