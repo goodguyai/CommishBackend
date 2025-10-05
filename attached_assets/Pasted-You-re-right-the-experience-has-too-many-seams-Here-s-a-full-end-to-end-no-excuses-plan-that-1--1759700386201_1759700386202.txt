@@ -1,0 +1,380 @@
+You’re right—the experience has too many seams. Here’s a full, end-to-end, no-excuses plan that (1) fixes the crash and demo/beta routing, (2) locks the Discord bot install + permissions, (3) makes DeepSeek + Sleeper actually fire end-to-end, and (4) gives you repeatable e2e clickthrough tests so this doesn’t regress. It’s written so you (or Replit Agent) can execute it step-by-step without guesswork.
+
+I’m splitting it into four parts:
+	1.	Critical fixes now (the ones blocking you today)
+	2.	Hardened two-stage setup (Discord → Sleeper) with “Doctor” gates
+	3.	Dashboard routing + account model (Beta vs Demo, Supabase accounts)
+	4.	E2E / “agentic” test suite + sweep script (clickthrough + API doctors + DB checks)
+
+⸻
+
+1) Critical fixes now
+
+1.1 Stop the 500 on /api/v2/setup/discord (your 22P02 UUID crash)
+
+Root cause: the route tries to write ''::uuid when leagueId is blank.
+
+Server—treat leagueId as optional; create it server-side when missing:
+
+// server/routes.setup-discord.ts
+import type { Express } from 'express';
+import { z } from 'zod';
+import { storage } from '../storage';
+
+const Body = z.object({
+  guildId: z.string().min(1),
+  channelId: z.string().min(1),
+  leagueId: z.string().uuid().optional(), // <-- optional now
+});
+
+export function registerDiscordSetup(app: Express) {
+  app.post('/api/v2/setup/discord', async (req, res) => {
+    const parsed = Body.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ ok:false, code:'BAD_INPUT', message: parsed.error.message });
+    }
+    const { guildId, channelId, leagueId } = parsed.data;
+
+    try {
+      let finalLeagueId = leagueId;
+      if (!finalLeagueId) {
+        const row = await storage.sql/*sql*/`
+          INSERT INTO leagues (id, name, channels, features)
+          VALUES (gen_random_uuid(), 'My League', '{}'::jsonb, '{}'::jsonb)
+          RETURNING id
+        `;
+        finalLeagueId = row[0].id as string;
+      }
+
+      await storage.sql/*sql*/`
+        UPDATE leagues
+        SET channels = COALESCE(channels, '{}'::jsonb) ||
+          jsonb_build_object('discord', jsonb_build_object(
+            'guildId', ${guildId},
+            'channelId', ${channelId}
+          )),
+            features = COALESCE(features, '{}'::jsonb) || jsonb_build_object('activated', true)
+        WHERE id = ${finalLeagueId}::uuid
+      `;
+
+      return res.json({ ok:true, leagueId: finalLeagueId });
+    } catch (e:any) {
+      console.error('[Discord Setup]', e);
+      return res.status(500).json({ ok:false, code:'DISCORD_SETUP_FAILED', message:'Failed to configure Discord' });
+    }
+  });
+}
+
+DB migration (idempotent) so inserts never rely on client UUIDs:
+
+-- scripts/2025_10_05_uuid_defaults.sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+ALTER TABLE leagues ALTER COLUMN id SET DEFAULT gen_random_uuid();
+
+-- If you have other uuid PKs:
+-- ALTER TABLE accounts ALTER COLUMN id SET DEFAULT gen_random_uuid();
+
+Frontend—stop sending empty UUIDs:
+
+// Onboarding submit (Discord step)
+const payload: any = { guildId, channelId };
+if (leagueId && /^[0-9a-f-]{36}$/i.test(leagueId)) payload.leagueId = leagueId;
+const res = await api.post('/api/v2/setup/discord', payload);
+localStorage.setItem('selectedLeagueId', res.leagueId); // always store server’s value
+
+
+⸻
+
+1.2 Fix the “Install Bot” flow (the invalid redirect + auto-retry)
+
+You’re already close. Lock it in:
+
+Bot-install URL (no redirect_uri, no response_type)
+
+// server/routes.discord-install.ts
+import type { Express } from 'express';
+import { getEnv } from '../env';
+
+export function registerDiscordInstall(app: Express) {
+  app.get('/api/v2/discord/bot-install-url', (req, res) => {
+    const guildId = String(req.query.guildId || '');
+    if (!guildId) return res.status(400).json({ error:'MISSING_GUILD_ID' });
+
+    const url = new URL('https://discord.com/api/oauth2/authorize');
+    url.searchParams.set('client_id', getEnv().DISCORD_CLIENT_ID);
+    url.searchParams.set('scope', 'bot applications.commands');
+    url.searchParams.set('permissions', String(getEnv().DISCORD_BOT_PERMISSIONS));
+    url.searchParams.set('guild_id', guildId);
+    url.searchParams.set('disable_guild_select', 'true');
+
+    res.json({ url: url.toString() });
+  });
+}
+
+Env (set in Replit): DISCORD_BOT_PERMISSIONS
+→ Get the integer from the Bot tab (it reflects View Channels, Send Messages, Manage Messages, Read History, Embed Links, Add Reactions, Mention Everyone, Use Slash Commands, Create Polls).
+
+Channels endpoint returns strict BOT_NOT_IN_GUILD:
+
+// server/routes.discord-channels.ts
+import type { Express } from 'express';
+import { discordRest } from '../services/discord';
+
+export function registerDiscordChannels(app: Express) {
+  app.get('/api/v2/discord/channels', async (req,res) => {
+    const guildId = String(req.query.guildId || '');
+    if (!guildId) return res.status(400).json({ error:'MISSING_GUILD_ID' });
+
+    try {
+      // Probe membership; 403/404 => bot not in guild
+      try { await discordRest.get(`/guilds/${guildId}`); }
+      catch { return res.status(409).json({ error:'BOT_NOT_IN_GUILD' }); }
+
+      const cs = await discordRest.get(`/guilds/${guildId}/channels`);
+      const postable = (cs||[]).filter((c:any)=> ['0','5','15'].includes(String(c.type)));
+      return res.json({ channels: postable });
+    } catch (e:any) {
+      return res.status(500).json({ error:'CHANNELS_FAILED', message:String(e) });
+    }
+  });
+}
+
+Frontend auto-retry (you already added sessionStorage):
+	•	On BOT_NOT_IN_GUILD: show “Install THE COMMISH”, open in new tab, store pending-guild-id, retry channels on focus/visibility or on ?bot-installed=true (either works).
+	•	After retry success: clear pending-guild-id.
+
+⸻
+
+1.3 Session persistence (confirmed fixed but reiterating the essentials)
+	•	app.set('trust proxy', 1) before session middleware
+	•	proxy:true, cookie { secure:true, httpOnly:true, sameSite:'lax', path:'/' }
+	•	Use one session key: req.session.discord (not discordOauth)
+	•	Fetch always with credentials: 'include' (you already changed api client)
+
+⸻
+
+2) Hardened two-stage setup with “Doctor” gates
+
+2.1 Discord Doctor
+
+A single endpoint that proves bot auth + base URL correctness:
+
+// server/routes.doctor-discord.ts
+import type { Express } from 'express';
+import { getEnv } from '../env';
+import { discordRest } from '../services/discord';
+
+export function registerDiscordDoctor(app: Express) {
+  app.get('/api/v2/doctor/discord', async (_req, res) => {
+    const out:any = { ok:true, checks:{} };
+    const redirect = `${getEnv().APP_BASE_URL}/discord-callback`;
+    out.checks.redirect = {
+      value: redirect,
+      lowercase: redirect === redirect.toLowerCase(),
+      suffixOk: redirect.endsWith('/discord-callback'),
+    };
+    if (!out.checks.redirect.lowercase || !out.checks.redirect.suffixOk) out.ok = false;
+
+    try {
+      const me = await discordRest.get('/users/@me');
+      out.checks.botUser = { ok:true, id: me.id };
+    } catch (e:any) {
+      out.ok = false; out.checks.botUser = { ok:false, err:String(e) };
+    }
+    res.set('Cache-Control','no-store').status(out.ok?200:409).json(out);
+  });
+}
+
+2.2 Sleeper Doctor
+
+Quick liveness + key integration probes (you have the Sleeper link; keep it simple):
+
+// server/routes.doctor-sleeper.ts
+export function registerSleeperDoctor(app: Express) {
+  app.get('/api/v2/doctor/sleeper', async (_req, res) => {
+    // Add your existing sleeper ping/lookup here
+    res.json({ ok:true });
+  });
+}
+
+
+⸻
+
+3) Dashboard routing + accounts (Supabase)
+
+3.1 Demo/Beta routing rules
+	•	Demo leagues carry featureFlags.demo === true.
+	•	Real (Beta) leagues: featureFlags.demo !== true.
+	•	AppShell badge should say Beta for real leagues.
+	•	After onboarding completes, you must persist selectedLeagueId and redirect to /app.
+
+AppShell.tsx (you added this—keep it):
+
+import { useQuery } from '@tanstack/react-query';
+// ...
+const { data: leagueData } = useQuery<{ league: any }>({
+  queryKey: ['/api/leagues', selectedLeagueId],
+  enabled: !!selectedLeagueId,
+});
+const isDemoMode = !!leagueData?.league?.featureFlags?.demo;
+const mode = isDemoMode ? 'Demo' : 'Beta';
+
+Onboarding complete button (you added; keep):
+	•	If leagueId, localStorage.setItem('selectedLeagueId', leagueId) then setLocation('/app').
+
+Temporary compromise: it’s OK to render dashboard UI from mock endpoints while the real “stats” payloads are standardized, but the mode badge must be Beta and real actions (polls, digests, rules Q&A, owner mapping, channel posting) should already hit real /api/v2/* endpoints in Beta.
+
+3.2 Accounts in Supabase (email/name)
+	•	Add an Account step at the start of onboarding (you started).
+	•	Backend endpoint:
+
+// server/routes.setup-account.ts
+import { z } from 'zod';
+export function registerAccountSetup(app: Express) {
+  app.post('/api/v2/setup/account', async (req,res) => {
+    const Body = z.object({ email: z.string().email(), name: z.string().min(1) });
+    const parsed = Body.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ ok:false, code:'BAD_REQUEST' });
+    const { email, name } = parsed.data;
+
+    try {
+      const row = await storage.sql/*sql*/`
+        INSERT INTO accounts (email, name, plan)
+        VALUES (${email}, ${name}, 'beta')
+        ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+      `;
+      req.session.accountId = row[0].id;
+      return res.json({ ok:true, accountId: row[0].id });
+    } catch (e:any) {
+      console.error('[Setup Account]', e);
+      return res.status(500).json({ ok:false, code:'ACCOUNT_FAILED' });
+    }
+  });
+}
+
+Onboarding resume:
+	•	If /api/app/me returns accountId, skip Account step.
+	•	If it returns a leagueId + features.activated===true, jump straight to /app.
+
+⸻
+
+4) E2E “agentic” test suite + one-button sweep
+
+4.1 Playwright tests (cover clickthrough + doctors + regressions)
+
+Add these (names suggest scope; you already have 5—add/modify):
+	1.	00_doctor.spec.ts – system vitality
+	•	GET /api/_debug/health (admin) → 200 with db/discord/session green
+	•	GET /api/v2/doctor/discord → 200|409 with structured checks
+	•	GET /api/v2/doctor/sleeper → 200
+	2.	01_home_cta.spec.ts – landing CTAs visible (already passing)
+	3.	02_demo_activation.spec.ts – demo works (already passing)
+	4.	03_setup_account.spec.ts – creates/uses account
+	•	Fill email/name → POST /api/v2/setup/account → returns accountId
+	•	Refresh → step resumes at Discord
+	5.	04_setup_discord_install_gap.spec.ts – bot missing path
+	•	Select guild where bot isn’t installed → see Install button
+	•	Click Install (new tab), back to setup → channels auto-load
+	6.	05_setup_discord_submit.spec.ts – no UUID regressions
+	•	Submit with no leagueId → server returns leagueId (regex 36 chars)
+	•	Verify /api/leagues/:id returns features.activated===true
+	7.	06_setup_sleeper.spec.ts – link sleeper & choose league (you said you synced)
+	•	Ensure it stores into features.sleeper for the league
+	8.	07_rules_index.spec.ts – index rules end-to-end (already OK)
+	•	/api/rag/index returns success; /api/rag/stats/:leagueId shows doc count
+	9.	08_dashboard_beta.spec.ts – Beta not Demo
+	•	After completion, go /app → badge shows Beta
+	•	localStorage.selectedLeagueId exists
+	•	Core actions clickable (poll, digest preview “dry run”, rules Q&A ask box does non-empty echo or calls DeepSeek)
+	10.	09_discord_post_pipeline.spec.ts – posting works
+	•	Call /api/v2/discord/post-test (admin) with guild+channel → message idempotency & 429 retry logged.
+
+Each test should: capture console, save screenshots on failure, and emit request/response logs (you already set up).
+
+4.2 One-button sweep (preflight before onboarding a real user)
+
+# scripts/sweep.sh
+set -euo pipefail
+BASE="${APP_BASE_URL:?}"; ADMIN="${ADMIN_KEY:?}"
+
+echo '---- Routes'
+curl -s -H "X-Admin-Key: $ADMIN" "$BASE/api/_debug/routes" | jq 'length'
+
+echo '---- Health'
+curl -s -H "X-Admin-Key: $ADMIN" "$BASE/api/_debug/health" | jq .
+
+echo '---- Discord Doctor'
+curl -s "$BASE/api/v2/doctor/discord" | jq .
+
+echo '---- Sleeper Doctor'
+curl -s "$BASE/api/v2/doctor/sleeper" | jq .
+
+echo '---- Bot Install (sample)'
+curl -s "$BASE/api/v2/discord/bot-install-url?guildId=123" | jq -r .url
+
+If anything’s red, you’ve got a tight, specific error to fix (not vibes).
+
+⸻
+
+DeepSeek integration (verifiable)
+
+Add a tiny “AI doctor” so we know DeepSeek’s key + path is correct and that the bot can call it:
+
+// server/routes.doctor-ai.ts
+import type { Express } from 'express';
+import { deepseekClient } from '../services/deepseek'; // your existing
+
+export function registerAiDoctor(app: Express) {
+  app.get('/api/v2/doctor/ai', async (_req,res) => {
+    try {
+      const r = await deepseekClient.simpleHealthProbe(); // e.g., a 1-token completion
+      return res.json({ ok:true, model:r.model || 'deepseek-chat' });
+    } catch (e:any) {
+      return res.status(409).json({ ok:false, err:String(e) });
+    }
+  });
+}
+
+Add to /api/_debug/health summary (admin) so you can see DeepSeek green/red from one place.
+
+⸻
+
+Replit hygiene (no stale, no duplicates)
+	•	No-cache HTML (you already did)
+	•	Guard /api/mock/* in production → 410 GONE
+	•	Route manifest /api/_debug/routes (admin) to detect duplicates/legacy
+	•	Session cookie set (commish.sid, secure:true, sameSite:lax, path:'/')
+	•	Frontend always credentials:'include'
+
+⸻
+
+Final acceptance checklist (what “100%” looks like)
+	•	Doctor panel: /api/_debug/health shows DB, Discord bot user, session, DeepSeek all green.
+	•	Discord stage: Select guild → channels appear OR Install → back → channels appear automatically.
+	•	Setup submit: POST /api/v2/setup/discord returns a valid leagueId when none was provided (no 22P02).
+	•	Sleeper: Link and select a league; features.sleeper updated for your leagueId.
+	•	Rules: Index completes; /api/rag/stats/:leagueId reports doc count > 0.
+	•	Redirect: After completion, /app shows Beta badge, not Demo.
+	•	Dashboard: Buttons don’t 404; at minimum Poll, Digest (preview/dry run), Rules Q&A accept input and reach backend.
+	•	Discord post: /api/v2/discord/post-test works with idempotency + 429 retry logged.
+	•	Account: /api/v2/setup/account creates/updates in Supabase; /api/app/me returns accountId.
+	•	Playwright: suite passes; screenshots on failure; logs attached.
+
+⸻
+
+What you should do in Replit right now (order)
+	1.	Apply the server route changes above (Discord setup optional leagueId, bot-install URL, discord channels, doctors, account setup).
+	2.	Run the DB migration for UUID defaults.
+	3.	Set DISCORD_BOT_PERMISSIONS (paste the integer from your Bot tab).
+	4.	Confirm session config (trust proxy + secure cookie) and frontend credentials:'include'.
+	5.	Run scripts/sweep.sh – validate Doctors and health; fix anything red.
+	6.	Run the Playwright suite – the 3 new tests (doctor, install gap, setup submit) must pass.
+	7.	Complete a full onboarding (Account → Discord → Sleeper → Rules). End on Beta dashboard.
+	8.	Fire a test post to Discord and a rules Q&A in the dashboard (this proves DeepSeek + posting path).
+
+If any step fails, you’ll have a precise failing endpoint or test with a log and a screenshot—no more blind whack-a-mole.
+
+⸻
+
+You asked for “iron tight, foolproof.” This is it: server generates UUIDs, structured errors (BOT_NOT_IN_GUILD), doctors to prove every dependency, Beta vs Demo routing that cannot lie, account step persisted to Supabase, and e2e agentic tests that click what users click. Run the sweep + tests before each deploy and you won’t pay to chase the same bug twice.

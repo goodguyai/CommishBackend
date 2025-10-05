@@ -361,6 +361,19 @@ export const contentQueue = pgTable("content_queue", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const botActivity = pgTable("bot_activity", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").references(() => leagues.id),
+  guildId: text("guild_id"),
+  channelId: text("channel_id"),
+  kind: text("kind").notNull(),
+  key: text("key"),
+  status: text("status").notNull(),
+  detail: jsonb("detail").default({}),
+  requestId: text("request_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Insert schemas
 export const insertAccountSchema = createInsertSchema(accounts).pick({
   email: true,
@@ -576,6 +589,17 @@ export const insertContentQueueSchema = createInsertSchema(contentQueue).pick({
   postedMessageId: true,
 });
 
+export const insertBotActivitySchema = createInsertSchema(botActivity).pick({
+  leagueId: true,
+  guildId: true,
+  channelId: true,
+  kind: true,
+  key: true,
+  status: true,
+  detail: true,
+  requestId: true,
+});
+
 // Types
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
@@ -626,6 +650,8 @@ export type Rivalry = typeof rivalries.$inferSelect;
 export type InsertRivalry = z.infer<typeof insertRivalrySchema>;
 export type ContentQueue = typeof contentQueue.$inferSelect;
 export type InsertContentQueue = z.infer<typeof insertContentQueueSchema>;
+export type BotActivity = typeof botActivity.$inferSelect;
+export type InsertBotActivity = z.infer<typeof insertBotActivitySchema>;
 
 // Keep legacy user schema for compatibility
 export const users = pgTable("users", {

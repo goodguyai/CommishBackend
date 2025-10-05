@@ -1,0 +1,74 @@
+Absolutely. I packaged everything you asked for into three drop-in deliverables you can use right now:
+	•	Replit_Work_Order.md → one single, authoritative work order/checklist for Discord + API + DB + tests.
+	•	migrations.sql → idempotent SQL for Supabase/Postgres that ensures the right tables & JSONB columns exist.
+	•	discord_command_handler.ts → minimal but production-leaning Discord interactions (slash command) handler skeleton with signature verification and stub commands.
+
+Download them:
+	•	Replit_Work_Order.md
+	•	migrations.sql
+	•	discord_command_handler.ts
+
+⸻
+
+How to wire this in (quick map)
+	1.	Run the migrations against your Supabase DB (or your DATABASE_URL). They’re idempotent.
+	2.	Mount the interaction route in your Express app using the handler (remember to use express.raw for signature verification).
+
+// server/index.ts (example)
+import express from 'express';
+import { discordInteractions } from './discord_command_handler';
+
+app.use(
+  '/api/discord/interactions',
+  express.raw({ type: 'application/json' }),
+  (req, _res, next) => { (req as any).rawBody = (req as any).body; next(); },
+  discordInteractions
+);
+
+
+	3.	Confirm secrets in Replit (list is in the Work Order; includes DISCORD_BOT_PERMISSIONS from your Discord Developer “Bot” page).
+	4.	Verify the bot install URL endpoint doesn’t add redirect_uri (that was the source of the invalid redirect error).
+	5.	Doctors green → use the health/route manifest endpoints and your doctor endpoints to check DB, Discord, AI & session.
+
+⸻
+
+What’s inside each file
+
+Replit_Work_Order.md
+
+A single source of truth that:
+	•	Lays out the success criteria so we know when it’s truly “working end-to-end.”
+	•	Lists required secrets (including the Discord permissions integer).
+	•	Gives an exact API contract for setup, commissioner tools, RAG, doctors, and the interactions endpoint.
+	•	Details security hardening (trust proxy, cookie flags, CSRF, signed interactions).
+	•	Spells out observability (request IDs, bot_activity audit), and a step-by-step playbook from cold start → live Discord test.
+	•	Provides a test plan (Playwright and curl checks).
+	•	Has an owner’s checklist to mark green before inviting users.
+
+migrations.sql
+
+Creates/ensures (idempotent):
+	•	accounts, leagues (with features, channels, personality JSONB), owners, rules_docs, reminders, bot_activity.
+	•	Safe to re-run; uses CREATE EXTENSION IF NOT EXISTS pgcrypto; and primary keys with gen_random_uuid().
+
+discord_command_handler.ts
+	•	Ed25519 signature verification (Discord requirement).
+	•	Ping handling plus stub slash commands: /help, /whoami, /rules, /poll, /digest.
+	•	Clean dispatcher; replace stubs by calling your existing endpoints (RAG ask, digest, etc.).
+	•	Mounting example (must use express.raw and preserve req.rawBody).
+
+⸻
+
+Why this fixes your current pain points
+	•	“Bot installs but doesn’t function”
+The handler gives you a verified, minimal interactions pipeline that responds in the server as soon as slash commands arrive. You then wire the stubs to your live endpoints (rules ask/digest/schedules/owner map).
+	•	“Every time I add a step I hit another error”
+The work order consolidates every moving piece (Discord OAuth + bot install + channels + Sleeper + RAG + DeepSeek + schedules + security) with a single acceptance checklist and a concrete test plan.
+	•	“Demo vs Beta routing”
+The work order calls out storing selectedLeagueId and using leagues.features.demo to display Demo/Beta, plus the commissioner PATCH for features/channels/personality so the bot’s behavior matches dashboard toggles.
+	•	“We need internal alignment & e2e”
+The test section specifies e2e coverage (setup submit assertion to ensure we don’t write empty UUIDs, live command smoke, route/health doctor checks) so regressions are caught early.
+
+⸻
+
+If you want me to also generate a tiny posting reliability wrapper (idempotent, rate-limit aware) and a slash-command registration script, say the word and I’ll drop those as separate files too. ￼
