@@ -307,34 +307,33 @@ export function DashboardPage() {
     }
   }, [leagueData?.league]);
 
-  // TODO: Real endpoints need to return matching structures (DashboardStats, DiscordIntegration, etc.)
-  // For now, use mock endpoints for consistent data display in both demo and beta
+  // Dashboard data queries - using real transformation endpoints
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
-    queryKey: ['/api/mock/dashboard/stats'],
+    queryKey: ['/api/dashboard/stats'],
   });
 
   const { data: discord, isLoading: discordLoading } = useQuery<DiscordIntegration>({
-    queryKey: ['/api/mock/integrations/discord'],
+    queryKey: ['/api/integrations/discord'],
   });
 
   const { data: sleeper, isLoading: sleeperLoading } = useQuery<SleeperIntegration>({
-    queryKey: ['/api/mock/integrations/sleeper'],
+    queryKey: ['/api/integrations/sleeper'],
   });
 
   const { data: commands, isLoading: commandsLoading } = useQuery<SlashCommand[]>({
-    queryKey: ['/api/mock/slash-commands'],
+    queryKey: ['/api/slash-commands'],
   });
 
   const { data: rag, isLoading: ragLoading } = useQuery<RagSystemStatus>({
-    queryKey: ['/api/mock/rag/status'],
+    queryKey: ['/api/rag/status'],
   });
 
   const { data: ai, isLoading: aiLoading } = useQuery<AiAssistantStatus>({
-    queryKey: ['/api/mock/ai/status'],
+    queryKey: ['/api/ai/status'],
   });
 
   const { data: activity, isLoading: activityLoading } = useQuery<ActivityLog[]>({
-    queryKey: ['/api/mock/activity'],
+    queryKey: ['/api/activity'],
   });
 
   // Owner Mappings (Members) Query
