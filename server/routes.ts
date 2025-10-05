@@ -2655,16 +2655,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       accountId: z.string().uuid().optional(),
       guildId: z.string().min(1),
       channelId: z.string().min(1),
+      leagueId: z.string().uuid().optional(),
       timezone: z.string().optional(),
     });
     
     const body = Body.safeParse(req.body);
     if (!body.success) {
-      return res.status(400).json({ ok: false, code: "BAD_REQUEST", message: "Invalid request body" });
+      return res.status(400).json({ ok: false, code: "BAD_REQUEST", message: "Invalid request body", errors: body.error.errors });
     }
 
     try {
-      const { accountId: providedAccountId, guildId, channelId, timezone } = body.data;
+      const { accountId: providedAccountId, guildId, channelId, leagueId: providedLeagueId, timezone } = body.data;
       
       // Ensure we have a valid accountId - create one if needed
       let accountId = providedAccountId;
@@ -2695,26 +2696,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      const existingLeagues = await storage.getLeaguesByGuildId(guildId);
+      // Use provided leagueId or create/find league
       let leagueId: string;
       
-      if (existingLeagues.length > 0) {
-        leagueId = existingLeagues[0].id;
+      if (providedLeagueId) {
+        // Use provided leagueId and update it
+        leagueId = providedLeagueId;
         await storage.updateLeague(leagueId, {
           accountId,
+          guildId,
           channelId,
           timezone: timezone || 'America/New_York',
         });
       } else {
-        leagueId = await storage.createLeague({
-          name: 'New League',
-          guildId,
-          channelId,
-          accountId,
-          sleeperLeagueId: null,
-          timezone: timezone || 'America/New_York',
-          featureFlags: {},
-        });
+        // Check if a league exists for this guild
+        const existingLeagues = await storage.getLeaguesByGuildId(guildId);
+        
+        if (existingLeagues.length > 0) {
+          // Update existing league
+          leagueId = existingLeagues[0].id;
+          await storage.updateLeague(leagueId, {
+            accountId,
+            channelId,
+            timezone: timezone || 'America/New_York',
+          });
+        } else {
+          // Create new league - server-side UUID generation
+          leagueId = await storage.createLeague({
+            name: 'New League',
+            guildId,
+            channelId,
+            accountId,
+            sleeperLeagueId: null,
+            timezone: timezone || 'America/New_York',
+            featureFlags: {},
+          });
+        }
       }
       
       // Register slash commands (non-blocking - log errors but don't fail setup)
