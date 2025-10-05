@@ -170,11 +170,11 @@ app.use((req, res, next) => {
       name: 'commish.sid',
       secret: getEnv().SESSION_SECRET,
       resave: false,
-      saveUninitialized: false,
+      saveUninitialized: true, // Changed to true to create sessions for CSRF tokens
       proxy: true,
       cookie: {
         httpOnly: true,
-        secure: true,
+        secure: process.env.NODE_ENV === 'production',
         sameSite: "lax",
         path: '/',
         maxAge: 30 * 24 * 60 * 60 * 1000,
