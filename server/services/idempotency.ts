@@ -130,9 +130,10 @@ export class IdempotencyService {
     try {
       const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
       
+      // Delete records OLDER than 48h (use lt, not gte)
       const result = await db
         .delete(botActivity)
-        .where(gte(botActivity.createdAt, fortyEightHoursAgo));
+        .where(sql`${botActivity.createdAt} < ${fortyEightHoursAgo}`);
       
       const deletedCount = result.rowCount || 0;
       console.log(`[Idempotency] Cleaned up ${deletedCount} old records`);
