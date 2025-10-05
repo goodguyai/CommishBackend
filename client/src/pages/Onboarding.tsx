@@ -806,7 +806,13 @@ export function OnboardingPage() {
                   THE COMMISH is ready to assist your league. Try using slash commands in Discord!
                 </p>
                 <Button
-                  onClick={() => setLocation('/app')}
+                  onClick={() => {
+                    // Store league ID for beta dashboard
+                    if (leagueId) {
+                      localStorage.setItem('selectedLeagueId', leagueId);
+                    }
+                    setLocation('/app');
+                  }}
                   className="w-full"
                   data-testid="button-go-dashboard"
                 >

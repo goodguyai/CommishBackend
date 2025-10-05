@@ -14,6 +14,7 @@ import {
   Bell,
 } from 'lucide-react';
 import { clsx } from 'clsx';
+import { useQuery } from '@tanstack/react-query';
 import { useAppStore } from '@/store/useAppStore';
 import { Button } from '@/components/ui/Button';
 import { Drawer } from '@/components/ui/Drawer';
@@ -36,6 +37,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { selectedLeagueId, notifications } = useAppStore();
   
   const unreadCount = notifications.filter(n => !n.read).length;
+
+  // Fetch league to determine if demo or beta mode
+  const { data: leagueData } = useQuery<{ league: any }>({
+    queryKey: ['/api/leagues', selectedLeagueId],
+    enabled: !!selectedLeagueId,
+  });
+
+  const isDemoMode = leagueData?.league?.featureFlags && (leagueData.league.featureFlags as any)?.demo === true;
+  const mode = isDemoMode ? 'Demo' : 'Beta';
 
   const SidebarContent = ({ onNavigate }: { onNavigate?: () => void }) => (
     <div className="flex h-full flex-col bg-surface-elevated">
@@ -77,7 +87,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="border-t border-border-subtle p-4">
         <div className="text-xs text-text-muted">
-          Mode: <span className="font-medium text-brand-teal">Demo</span>
+          Mode: <span className="font-medium text-brand-teal">{mode}</span>
         </div>
       </div>
     </div>
