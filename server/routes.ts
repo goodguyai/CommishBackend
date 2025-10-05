@@ -24,6 +24,7 @@ import { RivalriesService } from "./services/rivalries";
 import { ContentService } from "./services/content";
 import { AuthService } from "./services/auth";
 import { DemoService } from "./services/demo";
+import { IdempotencyService } from "./services/idempotency";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, leagues } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
 
@@ -3179,9 +3180,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const interaction = JSON.parse(body);
       
-      // Handle PING
+      // Handle PING (skip idempotency for PING)
       if (interaction.type === 1) {
         return res.json({ type: InteractionResponseType.PONG });
+      }
+
+      // Idempotency check using interaction.id from Discord
+      const interactionId = interaction.id;
+      if (interactionId) {
+        const isDuplicate = await IdempotencyService.checkDuplicate({
+          interactionId,
+          requestId,
+        });
+
+        if (isDuplicate) {
+          console.log(`[${requestId}] Duplicate interaction detected: ${interactionId}`);
+          return res.json({
+            type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+            data: {
+              content: "⏳ This interaction is already being processed.",
+              flags: 64, // Ephemeral
+            },
+          });
+        }
       }
 
       // Handle slash commands
@@ -3281,6 +3302,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           );
         }
 
+        // Record success to bot_activity
+        if (interactionId) {
+          await IdempotencyService.recordSuccess({
+            interactionId,
+            requestId,
+            guildId: guildId || null,
+            userId,
+            commandName: commandName || 'unknown',
+            response,
+            latency,
+          });
+        }
+
         return res.json(response);
       }
 
@@ -3308,6 +3342,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error(`Interaction failed after ${latency}ms:`, error);
       
       eventBus.emitError(error instanceof Error ? error.message : String(error), { requestId, latency });
+      
+      // Record failure to bot_activity
+      const interaction = req.body ? JSON.parse(req.body.toString('utf8')) : {};
+      const interactionId = interaction.id;
+      if (interactionId) {
+        await IdempotencyService.recordFailure({
+          interactionId,
+          requestId,
+          error: error instanceof Error ? error : new Error(String(error)),
+          latency,
+        });
+      }
       
       res.status(500).json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
