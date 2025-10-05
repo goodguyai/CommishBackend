@@ -14,12 +14,12 @@ The frontend uses React with TypeScript, Vite, and shadcn/ui components built on
 ### Technical Implementations
 - **Frontend**: React, TypeScript, Vite, Wouter (routing), TanStack Query (server state), Zustand (client state). Features owner mapping, reminder management, and league settings.
 - **Backend**: Node.js with Express, TypeScript. Employs a modular, service-oriented pattern for Discord, Sleeper, DeepSeek LLM, and RAG functionalities, with Zod validation for API routes.
-- **Database**: PostgreSQL with Drizzle ORM and pgvector extension for vector storage, hosted on Supabase.
-- **Discord Integration**: Handles Ed25519 signature verification, slash commands, OAuth2, and component interactions.
+- **Database**: PostgreSQL with Drizzle ORM and pgvector extension for vector storage, hosted on Supabase. All tables use server-generated UUID defaults via `gen_random_uuid()`.
+- **Discord Integration**: Handles Ed25519 signature verification, slash commands, OAuth2, and component interactions. Bot installation flow opens in new tab with auto-retry on window focus. Includes health check endpoint (`/api/v2/doctor/discord`) for validating Discord setup.
 - **AI/RAG System**: Processes league constitutions, uses OpenAI for text embeddings, DeepSeek LLM for chat completions, and pgvector for similarity search, featuring passage-scoped extraction and confidence thresholds.
 - **Sleeper Integration**: Read-only integration with Sleeper's public API for league data, with in-memory caching and scheduled sync jobs.
 - **Scheduling System**: `node-cron` for timezone-aware scheduling of weekly digests, data synchronization, and event-driven operations, including reminders and engagement features with idempotent job guards.
-- **Features**: Constitution upload/pasting with automatic indexing and versioning, quick polls, and an auto-meme feature. Session management is secure, utilizing PostgreSQL-backed `express-session` with HttpOnly cookies. Account and user management support demo and beta modes.
+- **Features**: Constitution upload/pasting with automatic indexing and versioning, quick polls, and an auto-meme feature. Session management is secure, utilizing PostgreSQL-backed `express-session` with HttpOnly cookies. Account and user management support demo and beta modes with automatic account creation during onboarding.
 
 ### System Design Choices
 - **Event-Driven Architecture**: Utilizes a custom EventBus for asynchronous operations.
