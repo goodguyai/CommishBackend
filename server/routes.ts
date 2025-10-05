@@ -2995,6 +2995,156 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // === END ACTIVATION FLOW ENDPOINTS ===
 
+  // === REAL DASHBOARD ENDPOINTS ===
+
+  // GET /api/v2/dashboard/:leagueId/stats - Real league stats
+  app.get("/api/v2/dashboard/:leagueId/stats", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      if (!leagueId) {
+        return res.status(400).json({ ok: false, code: 'BAD_LEAGUE', message: 'Invalid leagueId' });
+      }
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: 'LEAGUE_NOT_FOUND', message: 'League not found' });
+      }
+
+      // Count rules documents for this league
+      const docs = await storage.getDocuments(leagueId);
+      const rulesDocs = docs.length;
+
+      // Count bot activity in last 24 hours for this league
+      const events = await storage.getRecentEvents(100);
+      const leagueEvents = events.filter(e => e.leagueId === leagueId);
+      const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const activityLast24h = leagueEvents.filter(e => 
+        e.createdAt && new Date(e.createdAt).getTime() >= oneDayAgo
+      ).length;
+
+      // Get member count
+      const members = await storage.getMembers(leagueId);
+      const ownersCount = members.length;
+
+      res.json({
+        ok: true,
+        stats: {
+          rulesDocs,
+          activityLast24h,
+          ownersCount,
+        }
+      });
+    } catch (error) {
+      console.error("Dashboard stats error:", error);
+      res.status(500).json({ ok: false, code: 'STATS_FETCH_FAILED', message: 'Failed to fetch stats' });
+    }
+  });
+
+  // GET /api/v2/dashboard/:leagueId/rag - Real RAG status
+  app.get("/api/v2/dashboard/:leagueId/rag", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      if (!leagueId) {
+        return res.status(400).json({ ok: false, code: 'BAD_LEAGUE', message: 'Invalid leagueId' });
+      }
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: 'LEAGUE_NOT_FOUND', message: 'League not found' });
+      }
+
+      // Get documents and embeddings for this league
+      const docs = await storage.getDocuments(leagueId);
+      const embeddings = await storage.getEmbeddings(leagueId);
+      
+      const indexed = embeddings.length > 0;
+      const embeddedCount = embeddings.length;
+
+      // Get recent docs info
+      const recentDocs = docs.slice(0, 10).map(d => ({
+        id: d.id,
+        title: d.title,
+        chars: d.content?.length || 0,
+        createdAt: d.createdAt,
+      }));
+
+      res.json({
+        ok: true,
+        rag: {
+          indexed,
+          embeddedCount,
+          recentDocs,
+        }
+      });
+    } catch (error) {
+      console.error("Dashboard RAG error:", error);
+      res.status(500).json({ ok: false, code: 'RAG_FETCH_FAILED', message: 'Failed to fetch RAG status' });
+    }
+  });
+
+  // GET /api/v2/dashboard/:leagueId/activity - Real activity logs
+  app.get("/api/v2/dashboard/:leagueId/activity", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      if (!leagueId) {
+        return res.status(400).json({ ok: false, code: 'BAD_LEAGUE', message: 'Invalid leagueId' });
+      }
+
+      // Verify league exists
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: 'LEAGUE_NOT_FOUND', message: 'League not found' });
+      }
+
+      // Get bot_activity records for this league
+      const activities = await storage.getBotActivities?.(leagueId, 50);
+      
+      if (!activities) {
+        // Fallback to events if bot_activity not available
+        const events = await storage.getRecentEvents(50);
+        const leagueEvents = events.filter(e => e.leagueId === leagueId);
+        
+        const activity = leagueEvents.map(e => ({
+          kind: e.type,
+          key: (e.payload as any)?.command || (e.payload as any)?.action || '',
+          status: 'success',
+          detail: e.payload,
+          requestId: e.requestId || '',
+          at: e.createdAt,
+        }));
+
+        return res.json({
+          ok: true,
+          activity,
+        });
+      }
+
+      const activity = activities.map(a => ({
+        kind: a.kind,
+        key: a.key || '',
+        status: a.status,
+        detail: a.detail || {},
+        requestId: a.requestId || '',
+        at: a.createdAt,
+      }));
+
+      res.json({
+        ok: true,
+        activity,
+      });
+    } catch (error) {
+      console.error("Dashboard activity error:", error);
+      res.status(500).json({ ok: false, code: 'ACTIVITY_FETCH_FAILED', message: 'Failed to fetch activity' });
+    }
+  });
+
+  // === END REAL DASHBOARD ENDPOINTS ===
+
   // Health check with real database connectivity test
   app.get("/api/health", async (req, res) => {
     const startTime = Date.now();

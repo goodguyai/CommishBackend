@@ -1,0 +1,404 @@
+Got it. You’re right: parts of the dashboard are still wired to mock data, and a couple of server paths are reading IDs wrong (or not at all), which breaks stats, RAG status, and activity logs. Below is a hard-mode, soup-to-nuts plan that (1) fixes the specific dashboard breakages, (2) locks down a single source of truth for IDs across the stack, and (3) gives you a clean, repeatable E2E test harness so we stop playing whack-a-mole.
+
+I’m giving you exact patches (backend + frontend), DB migrations, and an E2E checklist. You can hand this straight to Replit.
+
+⸻
+
+What’s broken (and why)
+	1.	/api/v2/setup/discord UUID crash (22P02)
+Root cause: code attempted to persist an empty string into a UUID column (leagueId). We must generate the ID server-side when it’s missing and never trust the client.
+	2.	Dashboard “real” tiles (stats, RAG, activity) still failing
+	•	ID discipline is inconsistent: routes rely on leagueId from the client or localStorage; server handlers don’t resolve league context from session consistently; some queries run with '' or null.
+	•	RAG status assumes an index exists; when it doesn’t, it throws instead of returning an “unindexed” state.
+	•	Activity tile expects rows in bot_activity, but the interactions aren’t consistently logging (or they log without a league context).
+	3.	Demo vs Beta wiring
+	•	“Beta” leagues don’t have featureFlags.demo=true. The UI needs to derive mode by inspecting features.demo (absent/false ⇒ Beta).
+	•	The dashboard still points to mock endpoints for some tiles; we need real, stable JSON contracts.
+
+⸻
+
+Single Source of Truth (SSOT)
+
+Identifiers & where they come from:
+
+Name	Type	Where it lives (authoritative)	How server gets it	How client gets it
+accountId	UUID	accounts.id	session after onboarding	via /api/app/me
+leagueId	UUID	leagues.id	session (preferred) or path param	store in localStorage.selectedLeagueId after activation; confirm via /api/leagues/:id
+guildId	string	leagues.discord.guild_id (inside JSONB channels or features)	payload of Discord setup + DB	fetched during setup
+channelId	string	leagues.discord.channel_id	payload of Discord setup + DB	chosen in setup wizard
+
+Rules:
+	•	Server generates leagueId if absent on creation. Never write '' to UUID columns.
+	•	Every “league-scoped” route accepts leagueId OR resolves it from session (fallback), and validates with Zod.
+	•	Client stores selectedLeagueId after successful activation; server remains source of truth.
+
+⸻
+
+Backend patches (drop-in)
+
+1) Fix the empty-UUID crash in Discord setup
+
+// server/routes.ts (inside POST /api/v2/setup/discord)
+import { z } from 'zod';
+import { randomUUID } from 'crypto';
+
+const Body = z.object({
+  leagueId: z.string().uuid().optional(),
+  guildId: z.string().min(1),
+  channelId: z.string().min(1),
+  // ... whatever else you accept
+});
+
+app.post('/api/v2/setup/discord', async (req, res) => {
+  const parsed = Body.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok:false, code:'BAD_REQUEST', message: parsed.error.issues[0]?.message ?? 'Invalid body' });
+  }
+
+  const { guildId, channelId } = parsed.data;
+  let { leagueId } = parsed.data;
+
+  // **Generate** leagueId server-side if missing
+  leagueId = leagueId ?? randomUUID();
+
+  // persist league + channels atomically
+  await db.transaction(async (tx) => {
+    // upsert league (or create)
+    await tx`insert into leagues (id, channels, features)
+             values (${leagueId}::uuid, ${tx.json({
+               discord: { guild_id: guildId, channel_id: channelId }
+             })}, ${tx.json({ activated: true })})
+             on conflict (id) do update
+             set channels = excluded.channels,
+                 features = jsonb_set(coalesce(leagues.features, '{}'::jsonb), '{activated}', 'true'::jsonb, true)`;
+
+    // OPTIONAL: mark in session for later endpoints
+    req.session.leagueId = leagueId;
+  });
+
+  return res.json({ ok:true, leagueId });
+});
+
+If you also accept Sleeper wiring in this step, include it in features or integrations JSONB. The point is: never write an empty string to a UUID column.
+
+⸻
+
+2) Real dashboard endpoints (stable contracts)
+
+Create three real, non-mock endpoints the frontend can rely on. They must not throw when data is missing; instead, return a structured “empty/unknown” state.
+
+2.1 /api/v2/dashboard/:leagueId/stats
+
+// server/routes.ts
+app.get('/api/v2/dashboard/:leagueId/stats', async (req, res) => {
+  const Params = z.object({ leagueId: z.string().uuid() });
+  const parsed = Params.safeParse(req.params);
+  if (!parsed.success) return res.status(400).json({ ok:false, code:'BAD_LEAGUE', message:'Invalid leagueId' });
+
+  const { leagueId } = parsed.data;
+
+  // examples – tailor to your schema
+  const [{ rules_count = 0 }] =
+    await db`select count(*)::int as rules_count from rules_docs where league_id = ${leagueId}::uuid`;
+
+  const [{ activity_24h = 0 }] =
+    await db`select count(*)::int as activity_24h
+             from bot_activity
+             where league_id = ${leagueId}::uuid and created_at >= now() - interval '24 hours'`;
+
+  // add other rollups as needed
+  return res.json({
+    ok: true,
+    stats: {
+      rulesDocs: rules_count,
+      activityLast24h: activity_24h,
+      // …digestCount, ownersCount, etc. when you have them
+    }
+  });
+});
+
+2.2 /api/v2/dashboard/:leagueId/rag
+
+app.get('/api/v2/dashboard/:leagueId/rag', async (req, res) => {
+  const Params = z.object({ leagueId: z.string().uuid() });
+  const parsed = Params.safeParse(req.params);
+  if (!parsed.success) return res.status(400).json({ ok:false, code:'BAD_LEAGUE' });
+
+  const { leagueId } = parsed.data;
+
+  // Example: RAG stats – don't throw if missing
+  // Suppose you track indexes in rules_docs with embeddings metadata
+  const docRows =
+    await db`select id, title, length(content) as chars, created_at
+             from rules_docs
+             where league_id = ${leagueId}::uuid
+             order by created_at desc limit 10`;
+
+  const [{ embedded_count = 0 }] =
+    await db`select count(*)::int as embedded_count
+             from rules_docs
+             where league_id = ${leagueId}::uuid and coalesce(metadata->>'embedded','false') = 'true'`;
+
+  const indexed = embedded_count > 0;
+  return res.json({
+    ok: true,
+    rag: {
+      indexed,
+      embeddedCount: embedded_count,
+      recentDocs: docRows.map(r => ({ id: r.id, title: r.title, chars: r.chars, createdAt: r.created_at }))
+    }
+  });
+});
+
+If your embedding pipeline stores stats elsewhere, adapt the queries. The contract should always answer: indexed? how many vectors/docs? recent docs? No exceptions thrown for “no index yet”.
+
+2.3 /api/v2/dashboard/:leagueId/activity
+
+app.get('/api/v2/dashboard/:leagueId/activity', async (req, res) => {
+  const Params = z.object({ leagueId: z.string().uuid() });
+  const parsed = Params.safeParse(req.params);
+  if (!parsed.success) return res.status(400).json({ ok:false, code:'BAD_LEAGUE' });
+
+  const { leagueId } = parsed.data;
+
+  const rows =
+    await db`select kind, key, status, detail, request_id, created_at
+             from bot_activity
+             where league_id = ${leagueId}::uuid
+             order by created_at desc
+             limit 50`;
+
+  return res.json({
+    ok: true,
+    activity: rows.map(r => ({
+      kind: r.kind,
+      key: r.key,
+      status: r.status,
+      detail: r.detail,
+      requestId: r.request_id,
+      at: r.created_at
+    }))
+  });
+});
+
+
+⸻
+
+3) Ensure interactions log into bot_activity (with leagueId)
+
+Where you handle slash commands / posts, record the event with a league context (and make it idempotent).
+
+// server/services/botActivity.ts
+export async function logActivity(tx, { leagueId, guildId, channelId, kind, key, status, detail = {}, requestId }) {
+  await tx`insert into bot_activity
+           (league_id, guild_id, channel_id, kind, key, status, detail, request_id)
+           values (${leagueId}::uuid, ${guildId}, ${channelId}, ${kind}, ${key}, ${status}, ${tx.json(detail)}, ${requestId})`;
+}
+
+In your interaction handler:
+
+try {
+  // resolve leagueId from DB: guildId/channelId → leagueId
+  const leagueRow = await db`select id from leagues where (channels->'discord'->>'guild_id') = ${guildId} limit 1`;
+  const leagueId = leagueRow?.[0]?.id ?? null;
+
+  // …do work…
+  await logActivity(db, {
+    leagueId,
+    guildId,
+    channelId,
+    kind: 'slash',
+    key: commandName,
+    status: 'success',
+    detail: { userId, options },
+    requestId: res.locals.requestId
+  });
+
+} catch (err) {
+  await logActivity(db, {
+    leagueId: null, // if not resolvable, still log
+    guildId, channelId,
+    kind: 'slash', key: commandName, status:'error',
+    detail: { message: String(err) }, requestId: res.locals.requestId
+  });
+  throw err;
+}
+
+This guarantees the activity tile isn’t empty once the bot starts receiving commands.
+
+⸻
+
+4) DB migration (idempotent)
+
+If you don’t already have these:
+
+-- migrations.sql (append safely)
+create extension if not exists pgcrypto;
+
+create table if not exists accounts (
+  id uuid primary key default gen_random_uuid(),
+  email text unique not null,
+  name text,
+  discord_user_id text,
+  plan text not null default 'beta',
+  created_at timestamp default now()
+);
+
+create table if not exists leagues (
+  id uuid primary key default gen_random_uuid(),
+  account_id uuid references accounts(id),
+  name text,
+  features jsonb default '{}'::jsonb,    -- { activated:bool, demo:bool, ... }
+  channels jsonb default '{}'::jsonb,    -- { discord: { guild_id, channel_id }, ... }
+  personality jsonb default '{}'::jsonb, -- bot tone knobs
+  created_at timestamp default now()
+);
+
+create table if not exists rules_docs (
+  id uuid primary key default gen_random_uuid(),
+  league_id uuid references leagues(id),
+  title text,
+  content text,
+  metadata jsonb default '{}'::jsonb, -- { embedded: bool, vectors: int, model: "text-embedding-3-small", ... }
+  created_at timestamp default now()
+);
+
+create table if not exists bot_activity (
+  id uuid primary key default gen_random_uuid(),
+  league_id uuid references leagues(id),
+  guild_id text,
+  channel_id text,
+  kind text not null,       -- "slash" | "digest" | "post" | etc.
+  key text,
+  status text not null,     -- "success" | "error" | "skipped"
+  detail jsonb default '{}'::jsonb,
+  request_id text,
+  created_at timestamp default now()
+);
+
+
+⸻
+
+Frontend patches
+
+1) Use real endpoints for dashboard tiles (and pass leagueId)
+
+// client/src/pages/Dashboard.tsx (top)
+const leagueId = localStorage.getItem('selectedLeagueId'); // still store this after activation
+
+// Stats
+const { data: statsResp } = useQuery({
+  queryKey: ['dash.stats', leagueId],
+  enabled: !!leagueId,
+  queryFn: () => api(`/api/v2/dashboard/${leagueId}/stats`)
+});
+
+// RAG
+const { data: ragResp } = useQuery({
+  queryKey: ['dash.rag', leagueId],
+  enabled: !!leagueId,
+  queryFn: () => api(`/api/v2/dashboard/${leagueId}/rag`)
+});
+
+// Activity
+const { data: actResp } = useQuery({
+  queryKey: ['dash.activity', leagueId],
+  enabled: !!leagueId,
+  queryFn: () => api(`/api/v2/dashboard/${leagueId}/activity`)
+});
+
+Render with defensive UI states (empty arrays, 0s) so it never blows up while real data arrives.
+
+2) Mode badge = Beta unless features.demo === true
+
+// client/src/components/layout/AppShell.tsx
+const { data: leagueResp } = useQuery({
+  queryKey: ['league', selectedLeagueId],
+  enabled: !!selectedLeagueId,
+  queryFn: () => api(`/api/leagues/${selectedLeagueId}`)
+});
+
+const isDemoMode = Boolean(leagueResp?.league?.features?.demo === true);
+const modeLabel = isDemoMode ? 'Demo' : 'Beta';
+
+
+⸻
+
+E2E: “Agentic clickthrough” tests you can run in Replit
+
+These catch exactly the failures you hit (IDs blank, missing index, no activity).
+
+Core cases:
+	1.	Discord Setup creates valid UUIDs
+
+# should respond with {ok:true, leagueId: "<uuid>"}
+curl -s -X POST "$APP/api/v2/setup/discord" \
+  -H "Content-Type: application/json" \
+  --data '{"guildId":"<GUILD>","channelId":"<CHAN>"}' | jq
+
+Assert: leagueId matches UUID regex, DB has leagues(id=leagueId).
+	2.	Bot activity records on a stub slash command
+
+	•	Run /help in the server (or invoke your interactions handler test)
+
+curl -s "$APP/api/v2/dashboard/$LEAGUE_ID/activity" | jq '.activity | length'
+
+Assert: ≥ 1 once a command hits.
+	3.	RAG status doesn’t throw when empty
+
+curl -s "$APP/api/v2/dashboard/$LEAGUE_ID/rag" | jq
+
+Assert: ok:true and rag.indexed is false (until you index).
+	4.	Rules indexing flips RAG state
+
+	•	Post a rules doc:
+
+curl -s -X POST "$APP/api/v2/rules/$LEAGUE_ID/docs" \
+  -H "Content-Type: application/json" \
+  --data '{"title":"League Constitution","content":"..."}'
+
+	•	Run embed/index job (your endpoint/cron).
+	•	Call /dashboard/:leagueId/rag again ⇒ indexed:true and embeddedCount>0.
+
+	5.	Dashboard tiles render real data
+
+	•	Playwright steps navigate to /app, verify tiles:
+	•	Stats count equals /dashboard/:leagueId/stats
+	•	RAG “Indexed” badge matches API
+	•	Activity list shows last event
+
+Add these to your existing Playwright suite; the only extra is the three real endpoints above and their assertions.
+
+⸻
+
+Reliability & Observability (so we stop guessing)
+	•	Idempotency: generate request key for Discord posts (kind+key+guild+channel+hash(payload)), skip duplicates inside 10 minutes.
+	•	Rate-limit discipline: obey Discord retry_after; backoff + jitter.
+	•	Doctors:
+	•	/api/_debug/routes – route manifest
+	•	/api/_debug/health – DB, Discord client, session store, base URL
+	•	/api/v2/doctor/discord – perms, commands, DM permission, intents
+	•	bot_activity is your live audit; the dashboard’s Activity tile becomes your heartbeat.
+
+⸻
+
+Cutover checklist (10 minutes)
+	1.	Run the migration (safe, idempotent).
+	2.	Drop in the server route patches (Discord setup, 3 dashboard endpoints, activity logging).
+	3.	Patch the frontend to call the new endpoints (and Beta/Demo badge).
+	4.	Restart app; open /api/_debug/health and /api/_debug/routes (admin key) → both green.
+	5.	Run the 5 curl checks above; then Playwright “agentic clickthrough”.
+	6.	In Discord, run /help and verify the Activity tile updates (and DB has a log row).
+	7.	Hit /dashboard/:leagueId/rag before and after indexing to confirm state flips.
+
+⸻
+
+Why this will make the tiles light up (and stay that way)
+	•	We removed the empty-UUID write (no more 22P02).
+	•	We enforced Zod validation on every league-scoped endpoint.
+	•	We made dashboard contracts real and non-throwing.
+	•	We log every Discord interaction to bot_activity with leagueId, so Activity always has data.
+	•	The RAG endpoint gracefully handles “no index yet” instead of erroring.
+	•	The tests are targeted at the exact seams that were breaking.
+
+If you want, I can also hand you a thin React adapter that maps these three responses to your current Dashboard card props (so you don’t touch card components), plus a small seed script to create a fake activity row for local sanity checks.
