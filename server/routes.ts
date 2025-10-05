@@ -2609,6 +2609,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
+  // POST /api/v2/setup/account - Create account during onboarding
+  app.post("/api/v2/setup/account", async (req, res) => {
+    const Body = z.object({
+      email: z.string().email(),
+      name: z.string().min(1),
+    });
+    
+    const body = Body.safeParse(req.body);
+    if (!body.success) {
+      return res.status(400).json({ ok: false, code: "BAD_REQUEST", message: "Invalid request body" });
+    }
+
+    try {
+      const { email, name } = body.data;
+      
+      // Check if account with this email already exists
+      const existingAccount = await storage.getAccountByEmail(email);
+      if (existingAccount) {
+        // Return existing account
+        req.session.accountId = existingAccount.id;
+        return res.json({ ok: true, accountId: existingAccount.id });
+      }
+      
+      // Create new account
+      const accountId = await storage.createAccount({
+        email,
+        name,
+        plan: 'beta',
+      });
+      
+      // Store in session
+      req.session.accountId = accountId;
+      
+      res.json({ ok: true, accountId });
+    } catch (e) {
+      console.error("[Account Creation]", e);
+      res.status(500).json({ ok: false, code: "ACCOUNT_CREATE_FAILED", message: "Failed to create account" });
+    }
+  });
+
   // POST /api/v2/setup/discord
   app.post("/api/v2/setup/discord", async (req, res) => {
     const Body = z.object({

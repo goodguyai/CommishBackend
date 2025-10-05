@@ -11,7 +11,7 @@ import { api } from '@/lib/apiApp';
 import { toast } from 'sonner';
 import confetti from 'canvas-confetti';
 
-type Step = 'discord' | 'sleeper' | 'rules' | 'complete';
+type Step = 'account' | 'discord' | 'sleeper' | 'rules' | 'complete';
 
 interface DiscordGuild {
   id: string;
@@ -35,7 +35,7 @@ interface SleeperLeague {
 
 export function OnboardingPage() {
   const [location, setLocation] = useLocation();
-  const [currentStep, setCurrentStep] = useState<Step>('discord');
+  const [currentStep, setCurrentStep] = useState<Step>('account');
   
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
   const [selectedGuildId, setSelectedGuildId] = useState<string>('');
@@ -62,6 +62,11 @@ export function OnboardingPage() {
   const [leagueId, setLeagueId] = useState<string>('');
   const [needsBotInstall, setNeedsBotInstall] = useState(false);
   const [botInstallGuildId, setBotInstallGuildId] = useState<string>('');
+  
+  // Account creation state
+  const [accountEmail, setAccountEmail] = useState('');
+  const [accountName, setAccountName] = useState('');
+  const [isCreatingAccount, setIsCreatingAccount] = useState(false);
 
   useEffect(() => {
     const checkResumeState = async () => {
@@ -70,6 +75,8 @@ export function OnboardingPage() {
         
         if (user.accountId) {
           setAccountId(user.accountId);
+          // Skip account step if account already exists
+          setCurrentStep('discord');
         }
         
         if (user.leagueId) {
@@ -392,6 +399,38 @@ export function OnboardingPage() {
     setCurrentStep('rules');
   };
 
+  const handleCreateAccount = async () => {
+    if (!accountEmail.trim() || !accountName.trim()) {
+      toast.error('Please provide your email and name');
+      return;
+    }
+
+    setIsCreatingAccount(true);
+    try {
+      const result = await api<{ ok: boolean; accountId: string }>(
+        '/api/v2/setup/account',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            email: accountEmail,
+            name: accountName,
+          }),
+        }
+      );
+
+      if (result.ok && result.accountId) {
+        setAccountId(result.accountId);
+        toast.success('Account created!');
+        setCurrentStep('discord');
+      }
+    } catch (e) {
+      toast.error('Failed to create account');
+      console.error(e);
+    } finally {
+      setIsCreatingAccount(false);
+    }
+  };
+
   const handleIndexRules = async () => {
     if (!rulesContent.trim()) {
       toast.error('Please enter your league rules');
@@ -452,7 +491,8 @@ export function OnboardingPage() {
   };
 
   const steps = [
-    { id: 'discord', name: 'Discord', completed: currentStep !== 'discord' },
+    { id: 'account', name: 'Account', completed: currentStep !== 'account' },
+    { id: 'discord', name: 'Discord', completed: currentStep !== 'account' && currentStep !== 'discord' },
     { id: 'sleeper', name: 'Sleeper', completed: currentStep === 'rules' || currentStep === 'complete' },
     { id: 'rules', name: 'Rules', completed: currentStep === 'complete' },
   ];
@@ -499,6 +539,7 @@ export function OnboardingPage() {
         <Card className="bg-[#111820] border-[#1f2937]">
           <CardHeader>
             <CardTitle className="text-[#F5F7FA]">
+              {currentStep === 'account' && 'Create Your Account'}
               {currentStep === 'discord' && 'Connect Discord'}
               {currentStep === 'sleeper' && 'Connect Sleeper (Optional)'}
               {currentStep === 'rules' && 'Index Your Rules'}
@@ -506,6 +547,54 @@ export function OnboardingPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
+            {currentStep === 'account' && (
+              <div className="space-y-4" data-testid="setup-step-account">
+                <p className="text-[#9CA3AF] text-sm">
+                  Create your account to get started with THE COMMISH
+                </p>
+
+                <div>
+                  <Label className="text-[#F5F7FA]">Email</Label>
+                  <Input
+                    type="email"
+                    value={accountEmail}
+                    onChange={(e) => setAccountEmail(e.target.value)}
+                    placeholder="your@email.com"
+                    className="bg-[#1f2937] border-[#374151] text-[#F5F7FA]"
+                    data-testid="input-account-email"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-[#F5F7FA]">Name</Label>
+                  <Input
+                    type="text"
+                    value={accountName}
+                    onChange={(e) => setAccountName(e.target.value)}
+                    placeholder="Your Name"
+                    className="bg-[#1f2937] border-[#374151] text-[#F5F7FA]"
+                    data-testid="input-account-name"
+                  />
+                </div>
+
+                <Button
+                  onClick={handleCreateAccount}
+                  disabled={isCreatingAccount || !accountEmail.trim() || !accountName.trim()}
+                  className="w-full"
+                  data-testid="button-create-account"
+                >
+                  {isCreatingAccount ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Creating Account...
+                    </>
+                  ) : (
+                    'Continue'
+                  )}
+                </Button>
+              </div>
+            )}
+
             {currentStep === 'discord' && (
               <div className="space-y-4" data-testid="setup-step-discord">
                 <p className="text-[#9CA3AF] text-sm">

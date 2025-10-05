@@ -280,9 +280,12 @@ export function DashboardPage() {
 
   // Fetch current league data
   const { data: leagueData } = useQuery<{ league: League }>({
-    queryKey: ['/api/demo/leagues', leagueId],
+    queryKey: ['/api/leagues', leagueId],
     enabled: !!leagueId,
   });
+
+  // Check if current league is in demo mode
+  const isDemoMode = leagueData?.league?.featureFlags && (leagueData.league.featureFlags as any)?.demo === true;
 
   // Initialize settings when league data loads
   useEffect(() => {
@@ -304,6 +307,8 @@ export function DashboardPage() {
     }
   }, [leagueData?.league]);
 
+  // TODO: Real endpoints need to return matching structures (DashboardStats, DiscordIntegration, etc.)
+  // For now, use mock endpoints for consistent data display in both demo and beta
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ['/api/mock/dashboard/stats'],
   });
@@ -1026,9 +1031,6 @@ export function DashboardPage() {
     if (cron === '0 12 * * *') return 'Daily at noon';
     return cron;
   };
-
-  // Check if current league is in demo mode
-  const isDemoMode = leagueData?.league?.featureFlags && (leagueData.league.featureFlags as any)?.demo === true;
 
   return (
     <div className="space-y-6" data-testid="dashboard-root">
