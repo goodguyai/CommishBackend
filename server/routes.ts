@@ -2533,9 +2533,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // POST /api/v2/setup/discord
   app.post("/api/v2/setup/discord", async (req, res) => {
     const Body = z.object({
-      accountId: z.string(),
-      guildId: z.string(),
-      channelId: z.string(),
+      accountId: z.string().uuid().optional(),
+      guildId: z.string().min(1),
+      channelId: z.string().min(1),
       timezone: z.string().optional(),
     });
     
@@ -2545,7 +2545,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     try {
-      const { accountId, guildId, channelId, timezone } = body.data;
+      const { accountId: providedAccountId, guildId, channelId, timezone } = body.data;
+      
+      // Ensure we have a valid accountId - create one if needed
+      let accountId = providedAccountId;
+      if (!accountId) {
+        // Check if there's a Discord session with user info
+        const discordUser = req.session?.discord;
+        if (discordUser?.userId) {
+          // Try to find existing account by Discord user ID
+          const existingAccount = await storage.getAccountByDiscordId(discordUser.userId);
+          if (existingAccount) {
+            accountId = existingAccount.id;
+          } else {
+            // Create new account
+            accountId = await storage.createAccount({
+              discordUserId: discordUser.userId,
+              email: `discord-${discordUser.userId}@temp.commish`,
+              name: discordUser.username || 'Discord User',
+              plan: 'beta',
+            });
+          }
+        } else {
+          // No session - create anonymous account for now
+          accountId = await storage.createAccount({
+            email: `temp-${nanoid(10)}@temp.commish`,
+            name: 'Temporary User',
+            plan: 'beta',
+          });
+        }
+      }
       
       const existingLeagues = await storage.getLeaguesByGuildId(guildId);
       let leagueId: string;
