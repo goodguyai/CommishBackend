@@ -115,17 +115,16 @@ export class DiscordService {
     return `https://discord.com/oauth2/authorize?${params}`;
   }
 
-  generateBotInstallUrl(guildId: string, redirectUri: string): string {
-    const params = new URLSearchParams({
-      client_id: this.clientId,
-      scope: "bot applications.commands",
-      permissions: "84992", // View Channels (1024) + Send Messages (2048) + Read History (65536) + Embed Links (16384)
-      guild_id: guildId,
-      disable_guild_select: "true",
-      redirect_uri: redirectUri,
-    });
-
-    return `https://discord.com/oauth2/authorize?${params}`;
+  generateBotInstallUrl(guildId: string): string {
+    const url = new URL('https://discord.com/api/oauth2/authorize');
+    url.searchParams.set('client_id', this.clientId);
+    url.searchParams.set('scope', 'bot applications.commands');
+    url.searchParams.set('permissions', env.discord.botPermissions);
+    url.searchParams.set('guild_id', guildId);
+    url.searchParams.set('disable_guild_select', 'true');
+    
+    // No redirect_uri or response_type for bot install
+    return url.toString();
   }
 
   async exchangeCodeForToken(code: string, redirectUri: string): Promise<{
@@ -726,6 +725,36 @@ export class DiscordService {
       console.error("Error posting welcome message:", error);
       throw error;
     }
+  }
+
+  // Get bot user info
+  async getBotUser(): Promise<DiscordUser> {
+    const response = await fetch(`${this.baseUrl}/users/@me`, {
+      headers: {
+        Authorization: `Bot ${this.botToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Discord API error: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  // Get global commands
+  async getGlobalCommands(): Promise<any[]> {
+    const response = await fetch(`${this.baseUrl}/applications/${this.clientId}/commands`, {
+      headers: {
+        Authorization: `Bot ${this.botToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Discord API error: ${response.statusText}`);
+    }
+
+    return response.json();
   }
 }
 

@@ -223,7 +223,28 @@ export function OnboardingPage() {
   const handleInstallBot = async () => {
     try {
       const { url } = await api<{ url: string }>(`/api/v2/discord/bot-install-url?guildId=${botInstallGuildId}`);
-      window.location.href = url;
+      
+      // Open in new tab so user stays on setup page
+      window.open(url, '_blank', 'noopener,noreferrer');
+      
+      // Set up focus listener to auto-retry when user returns
+      const handleFocus = () => {
+        console.log('[Bot Install] Window focused, retrying channel fetch...');
+        
+        // Small delay to allow Discord to process bot addition
+        setTimeout(() => {
+          if (botInstallGuildId) {
+            handleGuildSelect(botInstallGuildId);
+          }
+        }, 1000);
+        
+        // Remove listener after first retry
+        window.removeEventListener('focus', handleFocus);
+      };
+      
+      window.addEventListener('focus', handleFocus);
+      
+      toast.info('Install the bot in the Discord tab, then return here');
     } catch (e) {
       console.error('[Install Bot]', e);
       toast.error('Failed to generate bot install URL');

@@ -41,6 +41,7 @@ const envSchema = z.object({
   DISCORD_CLIENT_SECRET: z.string().min(1, "DISCORD_CLIENT_SECRET is required"),
   DISCORD_PUBLIC_KEY: z.string().min(1, "DISCORD_PUBLIC_KEY is required for signature verification"),
   DISCORD_BOT_TOKEN: z.string().min(1, "DISCORD_BOT_TOKEN is required"),
+  DISCORD_BOT_PERMISSIONS: z.string().min(1, "DISCORD_BOT_PERMISSIONS is required"),
   
   // Application Configuration
   APP_BASE_URL: z.string().url("APP_BASE_URL must be a valid URL (e.g., https://your-replit-domain)"),
@@ -112,6 +113,7 @@ export function validateEnvironment(): EnvConfig {
       console.error("  • DISCORD_CLIENT_SECRET - Discord application secret");
       console.error("  • DISCORD_PUBLIC_KEY - Discord application public key for verification");
       console.error("  • DISCORD_BOT_TOKEN - Discord bot token with permissions");
+      console.error("  • DISCORD_BOT_PERMISSIONS - Discord bot permission integer");
       console.error("  • APP_BASE_URL - Your application's public URL");
       console.error("  • ADMIN_KEY - Strong random string for admin endpoints");
       console.error("  • SESSION_SECRET - Session encryption secret");
@@ -158,6 +160,7 @@ export const env = {
       clientSecret: getEnv().DISCORD_CLIENT_SECRET,
       publicKey: getEnv().DISCORD_PUBLIC_KEY,
       botToken: getEnv().DISCORD_BOT_TOKEN,
+      botPermissions: getEnv().DISCORD_BOT_PERMISSIONS,
     };
   },
   get app() {

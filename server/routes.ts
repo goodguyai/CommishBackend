@@ -755,9 +755,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "guildId is required" });
       }
 
-      // Use server's APP_BASE_URL for consistency
-      const redirectUri = env.app.baseUrl;
-      const botInstallUrl = discordService.generateBotInstallUrl(guildId, redirectUri);
+      const botInstallUrl = discordService.generateBotInstallUrl(guildId);
       res.json({ url: botInstallUrl });
     } catch (error) {
       console.error("Error generating bot install URL:", error);
@@ -2408,23 +2406,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET /api/v2/discord/bot-install-url - Generate bot installation URL
   app.get('/api/v2/discord/bot-install-url', (req, res) => {
     try {
-      const guildId = String(req.query.guildId ?? '');
-      if (!guildId) {
+      const { guildId } = req.query;
+      if (!guildId || typeof guildId !== 'string') {
         return res.status(400).json({ error: 'MISSING_GUILD_ID', message: 'guildId query parameter required' });
       }
 
-      // Bot permissions: View Channels (1024) + Send Messages (2048) + Embed Links (16384) 
-      // + Read Message History (65536) + Add Reactions (64) + Use Slash Commands (2147483648)
-      const permissions = 1024 + 2048 + 16384 + 65536 + 64 + 2147483648;
-      
-      const url = new URL('https://discord.com/oauth2/authorize');
+      const url = new URL('https://discord.com/api/oauth2/authorize');
       url.searchParams.set('client_id', env.discord.clientId);
       url.searchParams.set('scope', 'bot applications.commands');
-      url.searchParams.set('permissions', String(permissions));
+      url.searchParams.set('permissions', env.discord.botPermissions);
       url.searchParams.set('guild_id', guildId);
       url.searchParams.set('disable_guild_select', 'true');
-      url.searchParams.set('redirect_uri', `${env.app.baseUrl}/setup?bot-installed=true`);
-      url.searchParams.set('response_type', 'code');
+
+      // CRITICAL: No redirect_uri or response_type for bot install
+      // Bot installations don't use OAuth code flow
 
       res.json({ url: url.toString() });
     } catch (e) {
@@ -4423,6 +4418,102 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // === END PHASE 1 ENDPOINTS ===
+
+  // === DEBUG ENDPOINTS ===
+
+  // GET /api/_debug/routes - List all registered routes (admin only)
+  app.get('/api/_debug/routes', requireAdminKey, (req, res) => {
+    const routes: any[] = [];
+    
+    // Walk Express router stack
+    const walkStack = (stack: any[], basePath = '') => {
+      stack.forEach((layer: any) => {
+        if (layer.route) {
+          // Regular route
+          const methods = Object.keys(layer.route.methods).map(m => m.toUpperCase());
+          routes.push({
+            methods,
+            path: basePath + layer.route.path,
+          });
+        } else if (layer.name === 'router' && layer.handle?.stack) {
+          // Nested router
+          const path = layer.regexp?.source?.match(/^\^\\\/([^\\?]+)/)?.[1] || '';
+          walkStack(layer.handle.stack, basePath + (path ? '/' + path : ''));
+        }
+      });
+    };
+    
+    walkStack((app as any)._router.stack);
+    
+    res.set('Cache-Control', 'no-store');
+    res.json({ count: routes.length, routes });
+  });
+
+  // GET /api/_debug/health - System health check (admin only)
+  app.get('/api/_debug/health', requireAdminKey, async (req, res) => {
+    const checks: any = { ok: true, timestamp: new Date().toISOString() };
+    
+    // Base URL hygiene
+    const baseUrl = env.app.baseUrl;
+    checks.baseUrl = {
+      value: baseUrl,
+      lowercase: baseUrl === baseUrl.toLowerCase(),
+      noTrailingSlash: !baseUrl.endsWith('/'),
+      ok: baseUrl === baseUrl.toLowerCase() && !baseUrl.endsWith('/'),
+    };
+    
+    // Database
+    try {
+      const result = await db.execute('SELECT 1 as test');
+      checks.database = { ok: true, connected: true };
+    } catch (e: any) {
+      checks.ok = false;
+      checks.database = { ok: false, error: e.message };
+    }
+    
+    // Discord Bot
+    try {
+      const botUser = await discordService.getBotUser();
+      checks.discordBot = { 
+        ok: true, 
+        id: botUser.id, 
+        username: botUser.username,
+      };
+    } catch (e: any) {
+      checks.ok = false;
+      checks.discordBot = { ok: false, error: e.message };
+    }
+    
+    // Slash Commands
+    try {
+      const commands = await discordService.getGlobalCommands();
+      checks.slashCommands = { 
+        ok: Array.isArray(commands), 
+        count: commands?.length ?? 0,
+      };
+    } catch (e: any) {
+      checks.ok = false;
+      checks.slashCommands = { ok: false, error: e.message };
+    }
+    
+    // Session
+    checks.session = {
+      hasSession: !!req.session,
+      hasDiscord: !!req.session?.discord,
+      guildsCount: req.session?.discord?.guilds?.length ?? 0,
+    };
+    
+    // Environment
+    checks.environment = {
+      nodeEnv: process.env.NODE_ENV,
+      hasAllSecrets: !!(env.discord.botPermissions && env.discord.clientId && env.discord.clientSecret && env.discord.botToken),
+    };
+    
+    res.set('Cache-Control', 'no-store');
+    res.status(checks.ok ? 200 : 503).json(checks);
+  });
+
+  // === END DEBUG ENDPOINTS ===
 
   const httpServer = createServer(app);
   return httpServer;

@@ -124,6 +124,16 @@ app.use((req, res, next) => {
     next();
   });
 
+  // Production guard: block mock endpoints
+  if (getEnv().NODE_ENV === 'production') {
+    app.use((req, res, next) => {
+      if (req.path.startsWith('/api/mock/')) {
+        return res.status(410).json({ error: 'GONE', message: 'Mock endpoints disabled in production' });
+      }
+      next();
+    });
+  }
+
   // Add JSON parsing for ALL routes EXCEPT Discord interactions
   const jsonParser = express.json();
   app.use((req, res, next) => {
