@@ -2677,19 +2677,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      const commands = discordService.getSlashCommands();
-      await discordService.registerGuildCommands(guildId, commands);
+      // Register slash commands (non-blocking - log errors but don't fail setup)
+      try {
+        const commands = discordService.getSlashCommands();
+        await discordService.registerGuildCommands(guildId, commands);
+      } catch (cmdError) {
+        console.warn('[Discord Setup] Command registration warning (non-critical):', cmdError);
+      }
       
-      const welcomeMessage = {
-        embeds: [{
-          title: '🎉 THE COMMISH is live here!',
-          description: 'Try `/rules`, `/scoring`, or continue setup to connect your Sleeper league.',
-          color: 0x009898,
-          footer: { text: 'Beta • THE COMMISH' },
-        }],
-      };
-      
-      await discordService.postMessage(channelId, welcomeMessage);
+      // Post welcome message (non-blocking - log errors but don't fail setup)
+      try {
+        const welcomeMessage = {
+          embeds: [{
+            title: '🎉 THE COMMISH is live here!',
+            description: 'Try `/rules`, `/scoring`, or continue setup to connect your Sleeper league.',
+            color: 0x009898,
+            footer: { text: 'Beta • THE COMMISH' },
+          }],
+        };
+        
+        await discordService.postMessage(channelId, welcomeMessage);
+      } catch (msgError) {
+        console.warn('[Discord Setup] Welcome message warning (non-critical):', msgError);
+      }
       
       await storage.createEvent({
         type: "COMMAND_EXECUTED",
