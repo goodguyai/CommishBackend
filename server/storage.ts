@@ -55,6 +55,7 @@ export interface IStorage {
 
   // Document methods
   getDocument(id: string): Promise<Document | undefined>;
+  getDocuments(leagueId: string): Promise<Document[]>;
   getDocumentsByLeague(leagueId: string): Promise<Document[]>;
   getDocumentsWithMetadata(leagueId: string): Promise<Array<{
     id: string;
@@ -79,6 +80,7 @@ export interface IStorage {
   createEmbedding(ruleId: string, contentHash: string, vector: number[], provider?: string, model?: string): Promise<string>;
   getEmbeddingByContentHash(contentHash: string): Promise<{ id: string; embedding: number[] } | null>;
   searchSimilarEmbeddings(leagueId: string, queryVector: number[], limit: number, threshold: number): Promise<EmbeddingResult[]>;
+  getEmbeddings(leagueId?: string): Promise<any[]>;
 
   // Fact methods
   getFact(leagueId: string, key: string): Promise<Fact | undefined>;
@@ -109,6 +111,7 @@ export interface IStorage {
     embeddingsCount: number;
     lastUpdated: Date | null;
   }>;
+  getBotActivities(leagueId: string, limit?: number): Promise<any[]>;
 
   // Pending setup methods
   getPendingSetup(sessionId: string): Promise<PendingSetup | undefined>;
@@ -367,10 +370,14 @@ export class DatabaseStorage implements IStorage {
     return documents[0];
   }
 
-  async getDocumentsByLeague(leagueId: string): Promise<Document[]> {
+  async getDocuments(leagueId: string): Promise<Document[]> {
     return this.db.select().from(schema.documents)
       .where(eq(schema.documents.leagueId, leagueId))
       .orderBy(desc(schema.documents.createdAt));
+  }
+
+  async getDocumentsByLeague(leagueId: string): Promise<Document[]> {
+    return this.getDocuments(leagueId);
   }
 
   async getDocumentsWithMetadata(leagueId: string): Promise<Array<{
@@ -651,6 +658,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Analytics methods
+  async getBotActivities(leagueId: string, limit: number = 50): Promise<any[]> {
+    return this.db.select().from(schema.botActivity)
+      .where(eq(schema.botActivity.leagueId, leagueId))
+      .orderBy(desc(schema.botActivity.createdAt))
+      .limit(limit);
+  }
+
   async getLeagueIndexStats(leagueId: string): Promise<{
     documentsCount: number;
     rulesCount: number;
@@ -1625,8 +1639,11 @@ export class MemStorage implements IStorage {
 
   // Continue with stub implementations for all other interface methods...
   async getDocument(id: string): Promise<Document | undefined> { return this.documents.get(id); }
-  async getDocumentsByLeague(leagueId: string): Promise<Document[]> { 
+  async getDocuments(leagueId: string): Promise<Document[]> { 
     return Array.from(this.documents.values()).filter(d => d.leagueId === leagueId);
+  }
+  async getDocumentsByLeague(leagueId: string): Promise<Document[]> { 
+    return this.getDocuments(leagueId);
   }
   async getDocumentsWithMetadata(leagueId: string): Promise<Array<{
     id: string;
@@ -1698,6 +1715,11 @@ export class MemStorage implements IStorage {
 
   async getEmbeddingByContentHash(contentHash: string): Promise<{ id: string; embedding: number[] } | null> { return null; }
   async createEmbedding(ruleId: string, contentHash: string, vector: number[], provider?: string, model?: string): Promise<string> { return this.generateId(); }
+  async getEmbeddings(leagueId?: string): Promise<any[]> {
+    // MemStorage doesn't have embeddings storage, return empty array
+    return [];
+  }
+
   async searchSimilarEmbeddings(leagueId: string, queryVector: number[], limit: number, threshold: number): Promise<EmbeddingResult[]> {
     return [];
   }
@@ -1786,6 +1808,11 @@ export class MemStorage implements IStorage {
       total_tokens: 0,
       unique_users: 0,
     };
+  }
+
+  async getBotActivities(leagueId: string, limit: number = 50): Promise<any[]> {
+    // MemStorage doesn't have bot activities storage, return empty array
+    return [];
   }
 
   async getLeagueIndexStats(leagueId: string): Promise<{

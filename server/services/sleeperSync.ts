@@ -2,6 +2,7 @@ import { sleeperClient, SleeperClient } from './sleeperClient';
 import { mapSleeperLeagueToSettings, type NormalizedSettings } from './sleeperMapping';
 import { storage } from '../storage';
 import type { SleeperLeague } from './sleeperClient';
+import { createConstitutionPipeline } from './constitutionPipeline';
 
 export interface LinkSleeperLeagueParams {
   leagueId: string;
@@ -138,6 +139,18 @@ export async function runSleeperSync(leagueId: string): Promise<NormalizedSettin
   }
 
   console.log(`[SleeperSync] Synced league ${leagueId}: ${diffs.length} changes detected`);
+
+  // Trigger constitution rendering pipeline if settings changed
+  if (diffs.length > 0) {
+    try {
+      console.log(`[SleeperSync] Triggering constitution pipeline due to settings changes`);
+      const pipeline = createConstitutionPipeline(storage);
+      const pipelineResult = await pipeline.renderAndIndexConstitution(leagueId);
+      console.log(`[SleeperSync] Constitution pipeline result: ${pipelineResult.summary}`);
+    } catch (error) {
+      console.error(`[SleeperSync] Constitution pipeline failed:`, error);
+    }
+  }
 
   return normalized;
 }

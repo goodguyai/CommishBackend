@@ -14,6 +14,7 @@ import { sleeperService } from "./services/sleeper";
 import { sleeperClient } from "./services/sleeperClient";
 import { runSleeperSync, linkSleeperLeague, saveSleeperLink } from "./services/sleeperSync";
 import { constitutionRenderer } from "./services/constitutionRenderer";
+import { createConstitutionPipeline } from "./services/constitutionPipeline";
 import { deepSeekService } from "./services/deepseek";
 import { RAGService } from "./services/rag";
 import { generateDigestContent } from "./services/digest";
@@ -28,7 +29,7 @@ import { ContentService } from "./services/content";
 import { AuthService } from "./services/auth";
 import { DemoService } from "./services/demo";
 import { IdempotencyService } from "./services/idempotency";
-import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, leagues } from "@shared/schema";
+import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
 
 // Extend express-session types to include csrfToken and Discord OAuth
@@ -3154,6 +3155,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         payload: { action: "settings_overrides_updated", updatedBy },
       });
       
+      // Trigger constitution rendering pipeline
+      try {
+        console.log(`[Save Overrides] Triggering constitution pipeline for league ${leagueId}`);
+        const pipeline = createConstitutionPipeline(storage);
+        const pipelineResult = await pipeline.renderAndIndexConstitution(leagueId);
+        console.log(`[Save Overrides] Constitution pipeline result: ${pipelineResult.summary}`);
+      } catch (pipelineError) {
+        console.error(`[Save Overrides] Constitution pipeline failed:`, pipelineError);
+      }
+      
       res.json({ ok: true });
     } catch (e) {
       console.error("[Save Overrides]", e);
@@ -3176,65 +3187,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { leagueId } = parsed.data;
       
-      // Get league info for context
+      // Get league info for validation
       const league = await storage.getLeague(leagueId);
       if (!league) {
         return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
       
-      // Get base settings and overrides
-      const baseSettings = await storage.getLeagueSettings(leagueId);
-      const overridesData = await storage.getLeagueSettingsOverrides(leagueId);
-      
-      // Merge settings for rendering context
-      const merged = { ...baseSettings };
-      for (const category of ['scoring', 'roster', 'waivers', 'playoffs', 'trades', 'misc']) {
-        if (baseSettings?.[category] || overridesData?.[category]) {
-          merged[category] = {
-            ...(baseSettings?.[category] || {}),
-            ...(overridesData?.[category] || {}),
-          };
-        }
-      }
-      
-      // Build context for template rendering
-      const context = {
-        league: {
-          name: league.name,
-          season: new Date().getFullYear().toString(),
-        },
-        scoring: merged.scoring || {},
-        roster: merged.roster || {},
-        waivers: merged.waivers || {},
-        playoffs: merged.playoffs || {},
-        trades: merged.trades || {},
-        misc: merged.misc || {},
-      };
-      
-      // Get all templates
-      const templates = await storage.getConstitutionTemplates(leagueId);
-      
-      // Render each template and save
-      let renderedCount = 0;
-      for (const template of templates) {
-        const renderedMd = constitutionRenderer.render(template.templateMd, context);
-        
-        await storage.saveConstitutionRender({
-          leagueId,
-          slug: template.slug,
-          contentMd: renderedMd,
-        });
-        
-        renderedCount++;
-      }
+      // Use the constitution pipeline for rendering and indexing
+      const pipeline = createConstitutionPipeline(storage);
+      const result = await pipeline.renderAndIndexConstitution(leagueId);
       
       await storage.createEvent({
         type: "COMMAND_EXECUTED",
         leagueId,
-        payload: { action: "constitution_rendered", sections: renderedCount },
+        payload: { 
+          action: "constitution_rendered", 
+          sections: result.sectionsRendered,
+          indexed: result.sectionsIndexed,
+          success: result.success,
+        },
       });
       
-      res.json({ ok: true, sections: renderedCount });
+      res.json({ 
+        ok: result.success, 
+        sections: result.sectionsRendered,
+        indexed: result.sectionsIndexed,
+        errors: result.errors,
+        summary: result.summary,
+      });
     } catch (e) {
       console.error("[Render Constitution]", e);
       res.status(500).json({ ok: false, code: "RENDER_FAILED", message: "Failed to render constitution" });
@@ -3426,7 +3406,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const rulesDocs = docs.length;
 
       // Count bot activity in last 24 hours for this league
-      const events = await storage.getRecentEvents(100);
+      const events = await storage.getRecentEvents(undefined, 100);
       const leagueEvents = events.filter(e => e.leagueId === leagueId);
       const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
       const activityLast24h = leagueEvents.filter(e => 
@@ -3474,7 +3454,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const embeddedCount = embeddings.length;
 
       // Get recent docs info
-      const recentDocs = docs.slice(0, 10).map(d => ({
+      const recentDocs = docs.slice(0, 10).map((d: Document) => ({
         id: d.id,
         title: d.title,
         chars: d.content?.length || 0,
@@ -3515,7 +3495,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (!activities) {
         // Fallback to events if bot_activity not available
-        const events = await storage.getRecentEvents(50);
+        const events = await storage.getRecentEvents(undefined, 50);
         const leagueEvents = events.filter(e => e.leagueId === leagueId);
         
         const activity = leagueEvents.map(e => ({
@@ -3533,7 +3513,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const activity = activities.map(a => ({
+      const activity = activities.map((a: any) => ({
         kind: a.kind,
         key: a.key || '',
         status: a.status,
@@ -3693,7 +3673,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const activeLeagues = allLeagues.length;
       
       // Count recent rules queries from events
-      const recentEvents = await storage.getRecentEvents(100);
+      const recentEvents = await storage.getRecentEvents(undefined, 100);
       const rulesQueries = recentEvents.filter(e => e.type === 'COMMAND_EXECUTED' && 
         (e.payload as any)?.command === 'rules').length;
       
@@ -3703,7 +3683,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         allLeagues.map(l => storage.getReminders(l.id))
       );
       const upcomingDeadlines = allReminders.flat()
-        .filter(r => r.status === 'pending' && new Date(r.scheduledFor) > now).length;
+        .filter(r => r.enabled && (!r.lastFired || new Date(r.lastFired) < now)).length;
       
       // Estimate AI tokens from event count (rough approximation)
       const aiTokensUsed = recentEvents.filter(e => 
@@ -3763,11 +3743,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({
         leagueName: leagueWithSleeper.name || 'Unknown League',
         leagueId: leagueWithSleeper.sleeperLeagueId,
-        season: leagueWithSleeper.season || new Date().getFullYear(),
-        week: leagueWithSleeper.currentWeek || 1,
-        lastSync: leagueWithSleeper.lastSleeperSync 
-          ? `${Math.floor((Date.now() - new Date(leagueWithSleeper.lastSleeperSync).getTime()) / 60000)} min ago`
-          : 'Never',
+        season: new Date().getFullYear(),
+        week: 1,
+        lastSync: 'Never', // TODO: Get from sleeperIntegrations table
         cacheStatus: 'Fresh',
         apiCalls: '23/1000', // Approximation - could track actual calls
       });
@@ -3817,7 +3795,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const docs = await storage.getDocuments(leagueWithDocs.id);
       const embeddings = await storage.getEmbeddings(leagueWithDocs.id);
-      const recentEvents = await storage.getRecentEvents(10);
+      const recentEvents = await storage.getRecentEvents(undefined, 10);
       const rulesQueries = recentEvents
         .filter(e => e.type === 'COMMAND_EXECUTED' && (e.payload as any)?.command === 'rules')
         .map(e => ({
@@ -3852,7 +3830,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/ai/status", async (req, res) => {
     try {
       const health = await fetch(`${env.app.baseUrl}/api/health`).then(r => r.json());
-      const recentEvents = await storage.getRecentEvents(100);
+      const recentEvents = await storage.getRecentEvents(undefined, 100);
       const aiRequests = recentEvents.filter(e => 
         e.type === 'COMMAND_EXECUTED' && 
         ['rules', 'digest', 'scoring', 'clarify'].includes((e.payload as any)?.command || '')
@@ -3882,7 +3860,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/activity", async (req, res) => {
     try {
-      const recentEvents = await storage.getRecentEvents(20);
+      const recentEvents = await storage.getRecentEvents(undefined, 20);
       const activities = recentEvents.map((e, idx) => ({
         id: e.id,
         icon: e.type === 'COMMAND_EXECUTED' ? '🎮' 
@@ -3968,12 +3946,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Idempotency check using interaction.id from Discord
       const interactionId = interaction.id;
       if (interactionId) {
-        const isDuplicate = await IdempotencyService.checkDuplicate({
-          interactionId,
-          requestId,
-        });
+        const result = await IdempotencyService.checkDuplicate(interactionId, requestId);
 
-        if (isDuplicate) {
+        if (result.isDuplicate) {
           console.log(`[${requestId}] Duplicate interaction detected: ${interactionId}`);
           return res.json({
             type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -4093,14 +4068,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Record success to bot_activity
         if (interactionId) {
-          await IdempotencyService.recordSuccess({
-            interactionId,
+          await IdempotencyService.recordSuccess(interactionId, {
             requestId,
-            guildId: guildId || null,
-            userId,
-            commandName: commandName || 'unknown',
+            leagueId: league?.id,
+            guildId: guildId || undefined,
+            channelId: interaction.channel_id,
+            kind: commandName || 'unknown',
             response,
-            latency,
           });
         }
 
@@ -4136,11 +4110,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const interaction = req.body ? JSON.parse(req.body.toString('utf8')) : {};
       const interactionId = interaction.id;
       if (interactionId) {
-        await IdempotencyService.recordFailure({
-          interactionId,
+        await IdempotencyService.recordFailure(interactionId, {
           requestId,
+          kind: interaction.data?.name || 'unknown',
           error: error instanceof Error ? error : new Error(String(error)),
-          latency,
         });
       }
       

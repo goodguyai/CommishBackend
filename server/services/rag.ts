@@ -66,7 +66,6 @@ export class RAGService {
         type,
         content,
         version,
-        title: title || "League Constitution",
       };
 
       const documentId = await this.storage.createDocument(document);
