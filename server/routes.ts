@@ -3,9 +3,10 @@ import express from "express";
 import { createServer, type Server } from "http";
 import { z } from "zod";
 import { nanoid } from "nanoid";
+import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { storage } from "./storage";
 import { env, getEnv } from "./services/env";
 import { verifyDiscordSignature, generateRequestId } from "./lib/crypto";
@@ -2654,6 +2655,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "MISSING_GUILD_ID", message: "guildId query parameter required" });
       }
 
+      // Validate guildId is a valid Discord snowflake
+      if (!/^\d{10,20}$/.test(guildId)) {
+        return res.status(400).json({ error: "BAD_GUILD_ID", message: "guildId must be a Discord snowflake (10-20 digits)" });
+      }
+
       console.log(`[Discord Channels] Fetching channels for guild ${guildId}`);
       
       const response = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
@@ -3289,6 +3295,161 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.status(500).json({ ok: false, code: "SYNC_FAILED", message: "Failed to sync Sleeper league" });
+    }
+  });
+
+  // POST /api/v2/sleeper/link - Link Sleeper account to league
+  app.post("/api/v2/sleeper/link", async (req, res) => {
+    try {
+      const { leagueId: maybeLeagueId, sleeperUserId } = req.body || {};
+      if (!/^[0-9a-z_]+$/i.test(sleeperUserId || "")) {
+        return res.status(400).json({ ok: false, code: "BAD_SLP_USER", message: "Invalid Sleeper user ID" });
+      }
+      
+      const leagueId = (typeof maybeLeagueId === "string" && /^[0-9a-f-]{36}$/i.test(maybeLeagueId)) ? maybeLeagueId : randomUUID();
+      
+      await db.execute(sql`
+        INSERT INTO sleeper_integrations (league_id, sleeper_user_id)
+        VALUES (${leagueId}, ${sleeperUserId})
+        ON CONFLICT (league_id) DO UPDATE SET sleeper_user_id = ${sleeperUserId}
+      `);
+      
+      res.json({ ok: true, leagueId });
+    } catch (e: any) {
+      console.error("[Sleeper Link]", e);
+      res.status(500).json({ ok: false, code: "SLEEPER_LINK_FAILED", message: "Failed to link Sleeper account" });
+    }
+  });
+
+  // POST /api/v2/sleeper/sync/:leagueId - Manual sync with leagueId in URL
+  app.post("/api/v2/sleeper/sync/:leagueId", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      if (!/^[0-9a-f-]{36}$/i.test(leagueId)) {
+        return res.status(400).json({ ok: false, code: "INVALID_LEAGUE_ID", message: "Invalid league ID format" });
+      }
+      
+      const result = await db.execute(sql`
+        SELECT sleeper_user_id FROM sleeper_integrations WHERE league_id = ${leagueId}
+      `);
+      
+      const row = (result as unknown as any[])[0];
+      if (!row?.sleeper_user_id) {
+        return res.status(400).json({ ok: false, code: "NO_SLP_USER", message: "Sleeper not linked to this league" });
+      }
+      
+      // Fetch leagues for user from Sleeper API
+      const currentYear = new Date().getFullYear();
+      const leaguesResponse = await fetch(`https://api.sleeper.app/v1/user/${row.sleeper_user_id}/leagues/nfl/${currentYear}`);
+      const leagues = await leaguesResponse.json();
+      
+      const sl = leagues?.[0];
+      if (!sl?.league_id) {
+        return res.status(404).json({ ok: false, code: "NO_LEAGUES_FOUND", message: "No Sleeper leagues found for this user" });
+      }
+      
+      // Save settings
+      const settings = sl?.settings ?? {};
+      await db.execute(sql`
+        UPDATE sleeper_integrations
+        SET sleeper_league_id = ${sl.league_id}, settings = ${JSON.stringify(settings)}::jsonb, last_sync = now()
+        WHERE league_id = ${leagueId}
+      `);
+      
+      // Update leagues table with Sleeper features
+      await db.execute(sql`
+        UPDATE leagues
+        SET features = COALESCE(features, '{}'::jsonb) || jsonb_build_object('sleeper', ${JSON.stringify({
+          roster_positions: sl.roster_positions,
+          scoring_settings: sl.scoring_settings,
+          trade_deadline: settings.trade_deadline,
+          waiver_type: settings.waiver_type,
+          playoff_teams: settings.playoff_teams,
+          playoff_round_type: settings.playoff_round_type,
+          keeper_count: settings.keeper_count,
+          ...settings
+        })}::jsonb)
+        WHERE id = ${leagueId}
+      `);
+      
+      res.json({ ok: true, sleeperLeagueId: sl.league_id, settings });
+    } catch (e: any) {
+      console.error("[Sleeper Sync]", e);
+      res.status(500).json({ ok: false, code: "SLEEPER_SYNC_FAILED", message: "Failed to sync Sleeper league" });
+    }
+  });
+
+  // GET /api/dashboard/stats/:leagueId - Dashboard stats for specific league
+  app.get("/api/dashboard/stats/:leagueId", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      const docCountResult = await db.execute(sql`
+        SELECT COUNT(*)::int AS c FROM rag_docs WHERE league_id = ${leagueId}
+      `);
+      const docCount = (docCountResult as unknown as any[])[0]?.c ?? 0;
+      
+      const lastBotResult = await db.execute(sql`
+        SELECT created_at, kind, status FROM bot_activity WHERE league_id = ${leagueId} ORDER BY created_at DESC LIMIT 1
+      `);
+      const lastBot = (lastBotResult as unknown as any[])[0];
+      
+      const sleeperResult = await db.execute(sql`
+        SELECT sleeper_league_id, last_sync FROM sleeper_integrations WHERE league_id = ${leagueId}
+      `);
+      const sleeper = (sleeperResult as unknown as any[])[0];
+      
+      res.json({
+        leagueId,
+        rag: { docCount, lastIngest: lastBot?.created_at ?? null },
+        sleeper: { leagueId: sleeper?.sleeper_league_id ?? null, lastSync: sleeper?.last_sync ?? null },
+        bot: { lastKind: lastBot?.kind ?? null, lastStatus: lastBot?.status ?? null },
+      });
+    } catch (e) {
+      console.error("[Dashboard Stats]", e);
+      res.status(500).json({ error: "STATS_FAILED", message: "Failed to fetch stats" });
+    }
+  });
+
+  // GET /api/dashboard/integrations/:leagueId - Integration status for league
+  app.get("/api/dashboard/integrations/:leagueId", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      const discordResult = await db.execute(sql`
+        SELECT guild_id, channel_id, bot_installed FROM discord_integrations WHERE league_id = ${leagueId}
+      `);
+      const disc = (discordResult as unknown as any[])[0];
+      
+      const sleeperResult = await db.execute(sql`
+        SELECT sleeper_user_id, sleeper_league_id, last_sync FROM sleeper_integrations WHERE league_id = ${leagueId}
+      `);
+      const sleep = (sleeperResult as unknown as any[])[0];
+      
+      res.json({ discord: disc || null, sleeper: sleep || null });
+    } catch (e) {
+      console.error("[Dashboard Integrations]", e);
+      res.status(500).json({ error: "INTEGRATIONS_FAILED", message: "Failed to fetch integrations" });
+    }
+  });
+
+  // GET /api/dashboard/activity/:leagueId - Recent bot activity for league
+  app.get("/api/dashboard/activity/:leagueId", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+      
+      const result = await db.execute(sql`
+        SELECT created_at, kind, status, detail
+        FROM bot_activity 
+        WHERE league_id = ${leagueId}
+        ORDER BY created_at DESC 
+        LIMIT 100
+      `);
+      
+      res.json({ items: (result as unknown as any[]) || [] });
+    } catch (e) {
+      console.error("[Dashboard Activity]", e);
+      res.status(500).json({ error: "ACTIVITY_FAILED", message: "Failed to fetch activity" });
     }
   });
 

@@ -1,3 +1,4 @@
+import "./services/envGuard";
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
@@ -181,7 +182,7 @@ app.use((req, res, next) => {
       proxy: true,
       cookie: {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: getEnv().NODE_ENV === 'production', // Secure only in production (behind HTTPS proxy)
         sameSite: "lax",
         path: '/',
         maxAge: 30 * 24 * 60 * 60 * 1000,
