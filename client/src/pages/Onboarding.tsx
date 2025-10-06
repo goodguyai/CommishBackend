@@ -352,11 +352,11 @@ export function OnboardingPage() {
 
     setIsLoadingLeagues(true);
     try {
-      const leagues = await api<SleeperLeague[]>(
+      const result = await api<{ ok: boolean; leagues: SleeperLeague[] }>(
         `/api/v2/sleeper/leagues?username=${encodeURIComponent(sleeperUsername)}&season=${sleeperSeason}`
       );
-      setSleeperLeagues(leagues);
-      if (leagues.length === 0) {
+      setSleeperLeagues(result.leagues);
+      if (result.leagues.length === 0) {
         toast.info(`No leagues found for "${sleeperUsername}" in ${sleeperSeason}. Check spelling or try a different season.`);
       }
     } catch (e) {
