@@ -4396,7 +4396,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Check permissions for admin commands
         const isCommish = league ? await isUserCommish(league.id, userId) : false;
-        const adminCommands = ["config", "digest", "reindex", "freeze", "clarify", "trade_fairness"];
+        const adminCommands = ["config", "digest", "reindex", "freeze", "clarify", "trade_fairness", "constitution"];
         
         if (adminCommands.includes(commandName!) && !isCommish) {
           return res.json({
@@ -4438,6 +4438,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             break;
           case "digest":
             response = await handleDigestCommand(interaction, league!, requestId);
+            break;
+          case "constitution":
+            response = await handleConstitutionCommand(interaction, league!, requestId);
             break;
           case "poll":
             response = await handlePollCommand(interaction, league!, requestId);
@@ -6857,11 +6860,26 @@ async function handleConfigCommand(interaction: any, league: any, requestId: str
 }
 
 async function handleDigestCommand(interaction: any, league: any, requestId: string) {
+  const reportType = interaction.data?.options?.find((o: any) => o.name === "type")?.value;
+  const week = interaction.data?.options?.find((o: any) => o.name === "week")?.value;
+  
+  if (!reportType) {
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Please specify a report type (weekly, waivers, trades, or standings).",
+        flags: 64,
+      },
+    };
+  }
+
   setTimeout(async () => {
     try {
-      if (!league.channelId) {
+      const channelId = interaction.channel_id;
+      
+      if (!channelId) {
         await discordService.followUpInteraction(interaction.token, {
-          content: "❌ No channel configured for digests. Please set one with `/config`.",
+          content: "❌ Unable to determine channel. Please try again.",
           flags: 64,
         });
         return;
@@ -6875,39 +6893,173 @@ async function handleDigestCommand(interaction: any, league: any, requestId: str
         return;
       }
 
-      const sleeperData = await sleeperService.syncLeagueData(league.sleeperLeagueId);
-      const digest = await generateDigestContent(league, sleeperData);
-
-      let description = digest.sections.map(s => `**${s.title}**\n${s.content}`).join("\n\n");
+      let markdown: string;
+      let reportTitle: string;
       
-      if (description.length > 3800) {
-        description = description.substring(0, 3797) + "...";
+      switch (reportType) {
+        case "weekly":
+          const weeklyWeek = week || await getCurrentWeek(league.sleeperLeagueId);
+          markdown = await reportsService.generateWeeklyRecap(league.id, weeklyWeek);
+          reportTitle = `📊 Week ${weeklyWeek} Recap`;
+          break;
+          
+        case "waivers":
+          const waiversWeek = week || await getCurrentWeek(league.sleeperLeagueId);
+          markdown = await reportsService.generateWaiversReport(league.id, waiversWeek);
+          reportTitle = `💰 Week ${waiversWeek} Waivers Report`;
+          break;
+          
+        case "trades":
+          markdown = await reportsService.generateTradesDigest(league.id, week);
+          reportTitle = week ? `🤝 Trades - Week ${week}` : `🤝 Trades Digest`;
+          break;
+          
+        case "standings":
+          const currentYear = new Date().getFullYear().toString();
+          const season = currentYear;
+          markdown = await reportsService.generateStandingsReport(league.id, season);
+          reportTitle = `📈 Standings - ${season}`;
+          break;
+          
+        default:
+          await discordService.followUpInteraction(interaction.token, {
+            content: "❌ Invalid report type. Use weekly, waivers, trades, or standings.",
+            flags: 64,
+          });
+          return;
+      }
+
+      if (markdown.length > 4000) {
+        markdown = markdown.substring(0, 3997) + "...";
       }
 
       const embed = {
-        title: `📊 ${digest.leagueName} - Weekly Digest`.substring(0, 256),
-        description,
+        title: reportTitle.substring(0, 256),
+        description: markdown,
         color: 0x00D2FF,
-        footer: { text: `THE COMMISH • Generated ${new Date(digest.timestamp).toLocaleString()}` },
-        timestamp: new Date(digest.timestamp).toISOString(),
+        footer: { text: `THE COMMISH • Generated ${new Date().toLocaleString()}` },
+        timestamp: new Date().toISOString(),
       };
 
-      await discordService.postMessage(league.channelId, { embeds: [embed] });
+      await discordService.postMessage(channelId, { embeds: [embed] });
       
       await storage.createEvent({
         type: "COMMAND_EXECUTED",
         leagueId: league.id,
-        payload: { command: "digest_manual", success: true },
+        payload: { command: "digest", reportType, week, success: true, requestId },
       });
 
       await discordService.followUpInteraction(interaction.token, {
-        content: "✅ Digest posted successfully!",
+        content: "✅ Report posted successfully!",
         flags: 64,
       });
     } catch (error) {
-      console.error("Digest command failed:", error);
+      console.error(`[${requestId}] Digest command failed:`, error);
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        leagueId: league.id,
+        payload: { 
+          command: "digest", 
+          reportType,
+          week,
+          error: error instanceof Error ? error.message : String(error),
+          requestId 
+        },
+      });
       await discordService.followUpInteraction(interaction.token, {
-        content: "❌ Failed to generate digest. Please try again.",
+        content: "❌ Failed to generate report. Please try again.",
+        flags: 64,
+      });
+    }
+  }, 100);
+
+  return {
+    type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+    data: { flags: 64 },
+  };
+}
+
+async function getCurrentWeek(sleeperLeagueId: string): Promise<number> {
+  try {
+    const leagueData = await sleeperService.getLeague(sleeperLeagueId);
+    return leagueData?.settings?.leg || 1;
+  } catch (error) {
+    console.error("Failed to get current week, defaulting to 1:", error);
+    return 1;
+  }
+}
+
+async function handleConstitutionCommand(interaction: any, league: any, requestId: string) {
+  const subcommand = interaction.data?.options?.[0]?.name;
+  const force = interaction.data?.options?.[0]?.options?.find((o: any) => o.name === "force")?.value || false;
+  
+  if (subcommand !== "render") {
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Invalid subcommand. Use `/constitution render`.",
+        flags: 64,
+      },
+    };
+  }
+
+  setTimeout(async () => {
+    try {
+      console.log(`[${requestId}] Constitution render requested for league ${league.id}, force=${force}`);
+      
+      const pipeline = createConstitutionPipeline(storage);
+      const result = await pipeline.renderAndIndexConstitution(league.id);
+      
+      if (!result.success) {
+        const errorDetails = result.errors.length > 0 
+          ? `\n\n**Errors:**\n${result.errors.map(e => `• ${e.slug}: ${e.error}`).join('\n')}`
+          : '';
+        
+        await discordService.followUpInteraction(interaction.token, {
+          content: `⚠️ Constitution render completed with errors.\n\n${result.summary}${errorDetails}`,
+          flags: 64,
+        });
+        return;
+      }
+      
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId: league.id,
+        payload: { 
+          command: "constitution_render", 
+          sectionsRendered: result.sectionsRendered,
+          sectionsIndexed: result.sectionsIndexed,
+          success: true,
+          requestId 
+        },
+      });
+
+      const successMessage = [
+        "✅ **Constitution Re-rendered Successfully**",
+        "",
+        `📄 **Sections Rendered:** ${result.sectionsRendered}`,
+        `🔍 **Sections Indexed:** ${result.sectionsIndexed}`,
+        "",
+        result.summary ? `_${result.summary}_` : "",
+      ].join('\n');
+
+      await discordService.followUpInteraction(interaction.token, {
+        content: successMessage,
+        flags: 64,
+      });
+    } catch (error) {
+      console.error(`[${requestId}] Constitution render failed:`, error);
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        leagueId: league.id,
+        payload: { 
+          command: "constitution_render", 
+          error: error instanceof Error ? error.message : String(error),
+          requestId 
+        },
+      });
+      await discordService.followUpInteraction(interaction.token, {
+        content: "❌ Failed to render constitution. Please try again or check the logs.",
         flags: 64,
       });
     }

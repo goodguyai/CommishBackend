@@ -578,7 +578,48 @@ export class DiscordService {
       },
       {
         name: "digest",
-        description: "Generate and post the weekly digest immediately",
+        description: "Generate and post league reports (Commissioner only)",
+        options: [
+          {
+            name: "type",
+            description: "Type of report to generate",
+            type: 3, // STRING
+            required: true,
+            choices: [
+              { name: "Weekly Recap", value: "weekly" },
+              { name: "Waivers Report", value: "waivers" },
+              { name: "Trades Digest", value: "trades" },
+              { name: "Standings", value: "standings" },
+            ],
+          },
+          {
+            name: "week",
+            description: "Week number (optional, defaults to current week)",
+            type: 4, // INTEGER
+            required: false,
+            min_value: 1,
+            max_value: 18,
+          },
+        ],
+      },
+      {
+        name: "constitution",
+        description: "Manage league constitution (Commissioner only)",
+        options: [
+          {
+            name: "render",
+            description: "Re-render constitution from templates",
+            type: 1, // SUB_COMMAND
+            options: [
+              {
+                name: "force",
+                description: "Force re-render even if recently rendered",
+                type: 5, // BOOLEAN
+                required: false,
+              },
+            ],
+          },
+        ],
       },
       {
         name: "poll",
