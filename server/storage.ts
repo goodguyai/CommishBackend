@@ -188,6 +188,21 @@ export interface IStorage {
   linkUserAccount(userId: string, accountId: string, role: string): Promise<void>;
   findDemoLeague(accountId: string): Promise<string | null>;
 
+  // Sleeper sync methods
+  saveSleeperLink(params: { leagueId: string; sleeperLeagueId: string; season: string; username?: string }): Promise<void>;
+  getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string } | null>;
+  saveSleeperSnapshot(params: { leagueId: string; payload: any }): Promise<void>;
+  getLeagueSettings(leagueId: string): Promise<any | null>;
+  saveLeagueSettings(params: { leagueId: string; scoring: any; roster: any; waivers: any; playoffs: any; trades: any; misc: any }): Promise<void>;
+  saveSettingsChangeEvent(params: { leagueId: string; source: string; path: string; oldValue: any; newValue: any }): Promise<void>;
+  getSettingsChangeEvents(leagueId: string, limit?: number): Promise<any[]>;
+  saveConstitutionTemplate(params: { leagueId: string; slug: string; templateMd: string }): Promise<void>;
+  getConstitutionTemplates(leagueId: string): Promise<any[]>;
+  saveConstitutionRender(params: { leagueId: string; slug: string; contentMd: string }): Promise<void>;
+  getConstitutionRenders(leagueId: string): Promise<any[]>;
+  getLeagueSettingsOverrides(leagueId: string): Promise<any | null>;
+  saveLeagueSettingsOverrides(params: { leagueId: string; overrides: any; updatedBy?: string }): Promise<void>;
+
   // Migration methods
   runRawSQL(query: string): Promise<any>;
   ensurePgVectorExtension(): Promise<void>;
@@ -1121,6 +1136,163 @@ export class DatabaseStorage implements IStorage {
       ))
       .limit(1);
     return results[0]?.id || null;
+  }
+
+  // Sleeper sync methods implementation
+  async saveSleeperLink(params: { leagueId: string; sleeperLeagueId: string; season: string; username?: string }): Promise<void> {
+    await this.db.insert(schema.sleeperIntegrations)
+      .values({
+        leagueId: params.leagueId,
+        sleeperLeagueId: params.sleeperLeagueId,
+        season: params.season,
+        username: params.username || null,
+      })
+      .onConflictDoUpdate({
+        target: schema.sleeperIntegrations.leagueId,
+        set: {
+          sleeperLeagueId: params.sleeperLeagueId,
+          season: params.season,
+          username: params.username || null,
+        },
+      });
+  }
+
+  async getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string } | null> {
+    const results = await this.db.select()
+      .from(schema.sleeperIntegrations)
+      .where(eq(schema.sleeperIntegrations.leagueId, leagueId))
+      .limit(1);
+    return results[0] || null;
+  }
+
+  async saveSleeperSnapshot(params: { leagueId: string; payload: any }): Promise<void> {
+    await this.db.insert(schema.sleeperSettingsSnapshots)
+      .values({
+        leagueId: params.leagueId,
+        payload: params.payload,
+      });
+  }
+
+  async getLeagueSettings(leagueId: string): Promise<any | null> {
+    const results = await this.db.select()
+      .from(schema.leagueSettings)
+      .where(eq(schema.leagueSettings.leagueId, leagueId))
+      .limit(1);
+    return results[0] || null;
+  }
+
+  async saveLeagueSettings(params: { leagueId: string; scoring: any; roster: any; waivers: any; playoffs: any; trades: any; misc: any }): Promise<void> {
+    await this.db.insert(schema.leagueSettings)
+      .values({
+        leagueId: params.leagueId,
+        scoring: params.scoring,
+        roster: params.roster,
+        waivers: params.waivers,
+        playoffs: params.playoffs,
+        trades: params.trades,
+        misc: params.misc,
+      })
+      .onConflictDoUpdate({
+        target: schema.leagueSettings.leagueId,
+        set: {
+          scoring: params.scoring,
+          roster: params.roster,
+          waivers: params.waivers,
+          playoffs: params.playoffs,
+          trades: params.trades,
+          misc: params.misc,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  async saveSettingsChangeEvent(params: { leagueId: string; source: string; path: string; oldValue: any; newValue: any }): Promise<void> {
+    await this.db.insert(schema.settingsChangeEvents)
+      .values({
+        leagueId: params.leagueId,
+        source: params.source,
+        path: params.path,
+        oldValue: params.oldValue,
+        newValue: params.newValue,
+      });
+  }
+
+  async getSettingsChangeEvents(leagueId: string, limit: number = 50): Promise<any[]> {
+    return this.db.select()
+      .from(schema.settingsChangeEvents)
+      .where(eq(schema.settingsChangeEvents.leagueId, leagueId))
+      .orderBy(desc(schema.settingsChangeEvents.detectedAt))
+      .limit(limit);
+  }
+
+  async saveConstitutionTemplate(params: { leagueId: string; slug: string; templateMd: string }): Promise<void> {
+    await this.db.insert(schema.constitutionTemplates)
+      .values({
+        leagueId: params.leagueId,
+        slug: params.slug,
+        templateMd: params.templateMd,
+      })
+      .onConflictDoUpdate({
+        target: [schema.constitutionTemplates.leagueId, schema.constitutionTemplates.slug],
+        set: {
+          templateMd: params.templateMd,
+        },
+      });
+  }
+
+  async getConstitutionTemplates(leagueId: string): Promise<any[]> {
+    return this.db.select()
+      .from(schema.constitutionTemplates)
+      .where(eq(schema.constitutionTemplates.leagueId, leagueId))
+      .orderBy(schema.constitutionTemplates.slug);
+  }
+
+  async saveConstitutionRender(params: { leagueId: string; slug: string; contentMd: string }): Promise<void> {
+    await this.db.insert(schema.constitutionRender)
+      .values({
+        leagueId: params.leagueId,
+        slug: params.slug,
+        contentMd: params.contentMd,
+      })
+      .onConflictDoUpdate({
+        target: [schema.constitutionRender.leagueId, schema.constitutionRender.slug],
+        set: {
+          contentMd: params.contentMd,
+          renderedAt: new Date(),
+        },
+      });
+  }
+
+  async getConstitutionRenders(leagueId: string): Promise<any[]> {
+    return this.db.select()
+      .from(schema.constitutionRender)
+      .where(eq(schema.constitutionRender.leagueId, leagueId))
+      .orderBy(schema.constitutionRender.slug);
+  }
+
+  async getLeagueSettingsOverrides(leagueId: string): Promise<any | null> {
+    const results = await this.db.select()
+      .from(schema.leagueSettingsOverrides)
+      .where(eq(schema.leagueSettingsOverrides.leagueId, leagueId))
+      .limit(1);
+    return results[0] || null;
+  }
+
+  async saveLeagueSettingsOverrides(params: { leagueId: string; overrides: any; updatedBy?: string }): Promise<void> {
+    await this.db.insert(schema.leagueSettingsOverrides)
+      .values({
+        leagueId: params.leagueId,
+        overrides: params.overrides,
+        updatedBy: params.updatedBy || null,
+      })
+      .onConflictDoUpdate({
+        target: schema.leagueSettingsOverrides.leagueId,
+        set: {
+          overrides: params.overrides,
+          updatedBy: params.updatedBy || null,
+          updatedAt: new Date(),
+        },
+      });
   }
 
   // Migration methods implementation
