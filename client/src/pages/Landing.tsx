@@ -37,19 +37,39 @@ export function LandingPage() {
           ))}
         </div>
 
-        <div className="text-center">
-          <Link href="/app">
-            <Button 
-              size="md" 
-              className="bg-gradient-to-r from-brand-coral to-brand-pink text-text-primary hover:opacity-90 text-lg px-8 py-3 shadow-depth2" 
-              data-testid="button-enter-demo"
-            >
-              Enter Demo Mode
-            </Button>
-          </Link>
-          <p className="mt-4 text-sm text-text-muted">
-            Explore all features with sample data - no signup required
-          </p>
+        <div className="text-center space-y-4">
+          <div className="flex gap-4 justify-center">
+            <Link href="/login">
+              <Button 
+                size="md" 
+                className="bg-[#009898] hover:bg-[#007878] text-text-primary text-lg px-8 py-3 shadow-depth2" 
+                data-testid="button-login"
+              >
+                Sign In
+              </Button>
+            </Link>
+            <Link href="/onboarding">
+              <Button 
+                size="md" 
+                className="bg-gradient-to-r from-brand-coral to-brand-pink text-text-primary hover:opacity-90 text-lg px-8 py-3 shadow-depth2" 
+                data-testid="button-get-started"
+              >
+                Get Started
+              </Button>
+            </Link>
+          </div>
+          <div>
+            <Link href="/app">
+              <Button 
+                variant="ghost"
+                size="md" 
+                className="text-text-muted hover:text-text-secondary" 
+                data-testid="button-enter-demo"
+              >
+                Or try Demo Mode
+              </Button>
+            </Link>
+          </div>
         </div>
       </div>
     </div>

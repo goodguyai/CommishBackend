@@ -55,8 +55,9 @@ export function HomeCTAs() {
   };
 
   return (
-    <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
-      <Card className="bg-[#111820] border-[#1f2937]" data-testid="card-demo">
+    <div className="space-y-6">
+      <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+        <Card className="bg-[#111820] border-[#1f2937]" data-testid="card-demo">
         <CardHeader>
           <div className="flex items-center gap-3 mb-2">
             <div className="p-2 bg-yellow-500/10 rounded-lg">
@@ -115,6 +116,20 @@ export function HomeCTAs() {
           </Button>
         </CardContent>
       </Card>
+      </div>
+      
+      <div className="text-center">
+        <p className="text-[#9CA3AF] text-sm">
+          Already have an account?{' '}
+          <a 
+            href="/login" 
+            className="text-[#009898] hover:text-[#00b8b8] font-medium transition-colors"
+            data-testid="link-login"
+          >
+            Sign In
+          </a>
+        </p>
+      </div>
     </div>
   );
 }

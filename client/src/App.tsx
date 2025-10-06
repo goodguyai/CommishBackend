@@ -17,6 +17,7 @@ import { TerminalPage } from './pages/Terminal';
 import { OnboardingPage } from './pages/Onboarding';
 import { LandingPage } from './pages/Landing';
 import { HomePage } from './pages/Home';
+import { LoginPage } from './pages/Login';
 import StyleGuide from './pages/StyleGuide';
 import PreviewDashboard from './pages/PreviewDashboard';
 import { SleeperLinkPage } from './pages/SleeperLinkPage';
@@ -60,6 +61,7 @@ function AppRouter() {
     <Switch>
       <Route path="/" component={HomePage} />
       <Route path="/landing" component={LandingPage} />
+      <Route path="/login" component={LoginPage} />
       <Route path="/onboarding" component={OnboardingPage} />
       <Route path="/setup" component={OnboardingPage} />
       <Route path="/style-guide" component={StyleGuide} />

@@ -768,22 +768,18 @@ export function OnboardingPage() {
                   </div>
                 </div>
 
-                <Button
-                  onClick={handleSignIn}
-                  disabled={isSigningIn || !accountEmail.trim() || !accountPassword}
-                  variant="outline"
-                  className="w-full"
-                  data-testid="button-sign-in"
-                >
-                  {isSigningIn ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Signing In...
-                    </>
-                  ) : (
-                    'Sign In'
-                  )}
-                </Button>
+                <div className="text-center">
+                  <p className="text-[#9CA3AF] text-sm">
+                    Already have an account?{' '}
+                    <a 
+                      href="/login" 
+                      className="text-[#009898] hover:text-[#00b8b8] font-medium transition-colors"
+                      data-testid="link-login"
+                    >
+                      Sign In
+                    </a>
+                  </p>
+                </div>
               </div>
             )}
 
