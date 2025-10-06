@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, and, desc, sql, cosineDistance } from "drizzle-orm";
+import { eq, and, desc, sql, cosineDistance, lte } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import type {
   User, InsertUser, Account, InsertAccount, League, InsertLeague,
@@ -1068,7 +1068,7 @@ export class DatabaseStorage implements IStorage {
     return this.db.select().from(schema.contentQueue)
       .where(and(
         eq(schema.contentQueue.status, "queued"),
-        sql`${schema.contentQueue.scheduledAt} <= ${now.toISOString()}`
+        lte(schema.contentQueue.scheduledAt, now)
       ))
       .orderBy(schema.contentQueue.scheduledAt);
   }
