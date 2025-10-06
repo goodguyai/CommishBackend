@@ -43,6 +43,7 @@ export const accounts = pgTable("accounts", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email").notNull().unique(),
   discordUserId: text("discord_user_id"),
+  supabaseUserId: varchar("supabase_user_id").$type<string>().unique(),
   name: text("name"),
   plan: text("plan").default("beta"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -505,6 +506,7 @@ export const botActivity = pgTable("bot_activity", {
 export const insertAccountSchema = createInsertSchema(accounts).pick({
   email: true,
   discordUserId: true,
+  supabaseUserId: true,
   name: true,
   plan: true,
 });

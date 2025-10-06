@@ -31,6 +31,7 @@ export interface IStorage {
   getAccount(id: string): Promise<Account | undefined>;
   getAccountByEmail(email: string): Promise<Account | undefined>;
   getAccountByDiscordId(discordUserId: string): Promise<Account | undefined>;
+  getAccountBySupabaseUserId(supabaseUserId: string): Promise<Account | undefined>;
   createAccount(account: InsertAccount): Promise<string>;
   updateAccountDiscordId(accountId: string, discordUserId: string): Promise<void>;
 
@@ -276,6 +277,11 @@ export class DatabaseStorage implements IStorage {
 
   async getAccountByDiscordId(discordUserId: string): Promise<Account | undefined> {
     const accounts = await this.db.select().from(schema.accounts).where(eq(schema.accounts.discordUserId, discordUserId));
+    return accounts[0];
+  }
+
+  async getAccountBySupabaseUserId(supabaseUserId: string): Promise<Account | undefined> {
+    const accounts = await this.db.select().from(schema.accounts).where(eq(schema.accounts.supabaseUserId, supabaseUserId));
     return accounts[0];
   }
 
@@ -547,6 +553,38 @@ export class DatabaseStorage implements IStorage {
       sourceVersion: row.document_version,
       confidence: row.similarity,
     }));
+  }
+
+  async getEmbeddings(leagueId?: string): Promise<any[]> {
+    if (leagueId) {
+      const results = await this.db.execute(sql`
+        SELECT 
+          e.id,
+          e.rule_id,
+          e.content_hash,
+          e.provider,
+          e.model,
+          e.created_at
+        FROM ${schema.embeddings} e
+        JOIN ${schema.rules} r ON e.rule_id = r.id
+        WHERE r.league_id = ${leagueId}
+        ORDER BY e.created_at DESC
+      `);
+      return results as unknown as any[];
+    } else {
+      const results = await this.db.execute(sql`
+        SELECT 
+          id,
+          rule_id,
+          content_hash,
+          provider,
+          model,
+          created_at
+        FROM ${schema.embeddings}
+        ORDER BY created_at DESC
+      `);
+      return results as unknown as any[];
+    }
   }
 
   // Fact methods
@@ -1538,6 +1576,9 @@ export class MemStorage implements IStorage {
   async getAccountByDiscordId(discordUserId: string): Promise<Account | undefined> {
     return Array.from(this.accounts.values()).find(acc => acc.discordUserId === discordUserId);
   }
+  async getAccountBySupabaseUserId(supabaseUserId: string): Promise<Account | undefined> {
+    return Array.from(this.accounts.values()).find(acc => acc.supabaseUserId === supabaseUserId);
+  }
   async createAccount(account: InsertAccount): Promise<string> {
     const id = this.generateId();
     const newAccount: Account = { 
@@ -1545,6 +1586,7 @@ export class MemStorage implements IStorage {
       id, 
       createdAt: new Date(),
       discordUserId: account.discordUserId ?? null,
+      supabaseUserId: account.supabaseUserId ?? null,
       name: account.name ?? null,
       plan: account.plan ?? null
     };
