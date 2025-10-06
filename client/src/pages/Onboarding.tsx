@@ -367,6 +367,11 @@ export function OnboardingPage() {
       return;
     }
 
+    if (!leagueId) {
+      toast.error('League not created yet. Please complete Discord setup first.');
+      return;
+    }
+
     setIsSavingSleeper(true);
     try {
       const result = await api<{ ok: boolean }>(
@@ -374,9 +379,10 @@ export function OnboardingPage() {
         {
           method: 'POST',
           body: JSON.stringify({
-            accountId,
-            guildId: selectedGuildId,
+            leagueId,
             sleeperLeagueId: selectedSleeperLeagueId,
+            season: sleeperSeason,
+            username: sleeperUsername || undefined,
           }),
         }
       );

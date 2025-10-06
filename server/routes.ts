@@ -164,10 +164,12 @@ const getSleeperLeaguesSchema = z.object({
 });
 
 const setupSleeperSchema = z.object({
-  leagueId: z.string().uuid(),
+  leagueId: z.string().uuid().optional(),
   sleeperLeagueId: z.string().min(1),
   season: z.string().min(4),
   username: z.string().optional(),
+  guildId: z.string().optional(),
+  accountId: z.string().uuid().optional(),
 });
 
 const syncSleeperSchema = z.object({
@@ -3064,7 +3066,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      const { leagueId, sleeperLeagueId, season, username } = parsed.data;
+      let { leagueId, sleeperLeagueId, season, username, guildId, accountId } = parsed.data;
+      
+      // Server-side fallback: If leagueId is missing or empty, try to resolve it
+      if (!leagueId || leagueId.trim() === '') {
+        console.warn('[Sleeper Setup] leagueId missing, attempting to resolve from guildId or accountId');
+        
+        // Try to find league by guildId first
+        if (guildId) {
+          const existingLeagues = await storage.getLeaguesByGuildId(guildId);
+          if (existingLeagues.length > 0) {
+            leagueId = existingLeagues[0].id;
+            console.log(`[Sleeper Setup] Resolved leagueId ${leagueId} from guildId ${guildId}`);
+          }
+        }
+        
+        // If still no leagueId, try to create a new league (requires accountId)
+        if (!leagueId && accountId) {
+          console.warn('[Sleeper Setup] Creating new league for accountId', accountId);
+          leagueId = await storage.createLeague({
+            name: 'New League',
+            accountId,
+            guildId: guildId || null,
+            channelId: null,
+            sleeperLeagueId: null,
+            timezone: 'America/New_York',
+            featureFlags: {},
+          });
+          console.log(`[Sleeper Setup] Created new league ${leagueId}`);
+        }
+        
+        // Final validation: If still no leagueId, return clear error
+        if (!leagueId) {
+          return res.status(400).json({ 
+            ok: false, 
+            code: "LEAGUE_ID_REQUIRED", 
+            message: "leagueId is required. Please complete Discord setup first or provide guildId/accountId." 
+          });
+        }
+      }
+      
+      // Validate leagueId is a proper UUID
+      const uuidSchema = z.string().uuid();
+      const uuidValidation = uuidSchema.safeParse(leagueId);
+      if (!uuidValidation.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_LEAGUE_ID", 
+          message: "leagueId must be a valid UUID",
+          errors: uuidValidation.error.errors 
+        });
+      }
       
       // Save the Sleeper integration link
       await saveSleeperLink({
