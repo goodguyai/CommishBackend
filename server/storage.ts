@@ -190,7 +190,7 @@ export interface IStorage {
 
   // Sleeper sync methods
   saveSleeperLink(params: { leagueId: string; sleeperLeagueId: string; season: string; username?: string }): Promise<void>;
-  getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string } | null>;
+  getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string; username?: string | null; createdAt?: Date | null } | null>;
   saveSleeperSnapshot(params: { leagueId: string; payload: any }): Promise<void>;
   getLeagueSettings(leagueId: string): Promise<any | null>;
   saveLeagueSettings(params: { leagueId: string; scoring: any; roster: any; waivers: any; playoffs: any; trades: any; misc: any }): Promise<void>;
@@ -1157,7 +1157,7 @@ export class DatabaseStorage implements IStorage {
       });
   }
 
-  async getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string } | null> {
+  async getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string; username?: string | null; createdAt?: Date | null } | null> {
     const results = await this.db.select()
       .from(schema.sleeperIntegrations)
       .where(eq(schema.sleeperIntegrations.leagueId, leagueId))
@@ -2165,7 +2165,7 @@ export class MemStorage implements IStorage {
     console.log("MemStorage: saveSleeperLink not implemented");
   }
 
-  async getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string } | null> {
+  async getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string; username?: string | null; createdAt?: Date | null } | null> {
     return null;
   }
 

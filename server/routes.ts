@@ -2990,6 +2990,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== Sleeper Sync API endpoints ====================
 
+  // GET /api/v2/sleeper/integration/:leagueId - Get Sleeper integration for a league
+  app.get("/api/v2/sleeper/integration/:leagueId", async (req, res) => {
+    try {
+      const parsed = getSettingsSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid league ID",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId } = parsed.data;
+      
+      const integration = await storage.getSleeperIntegration(leagueId);
+      
+      if (!integration) {
+        return res.status(404).json({ ok: true, integration: null });
+      }
+      
+      res.json({ 
+        ok: true, 
+        integration: {
+          leagueId,
+          sleeperLeagueId: integration.sleeperLeagueId,
+          season: integration.season,
+          sport: integration.sport,
+          username: integration.username || undefined,
+          createdAt: integration.createdAt || undefined,
+        }
+      });
+    } catch (e) {
+      console.error("[Get Sleeper Integration]", e);
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get Sleeper integration" });
+    }
+  });
+
   // POST /api/v2/sleeper/sync - Trigger manual sync for a league
   app.post("/api/v2/sleeper/sync", async (req, res) => {
     try {

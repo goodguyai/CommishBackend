@@ -40,9 +40,9 @@ function AppRouter() {
           <Route path="/app/chat" component={ChatPage} />
           <Route path="/app/settings" component={SettingsPage} />
           <Route path="/app/terminal" component={TerminalPage} />
-          <Route path="/sleeper/link" component={SleeperLinkPage} />
-          <Route path="/settings/:leagueId" component={LeagueSettingsPage} />
-          <Route path="/constitution/:leagueId" component={ConstitutionTemplatesPage} />
+          <Route path="/app/sleeper/link" component={SleeperLinkPage} />
+          <Route path="/app/settings/:leagueId" component={LeagueSettingsPage} />
+          <Route path="/app/constitution/:leagueId" component={ConstitutionTemplatesPage} />
           <Route>
             <div className="text-center py-12">
               <h1 className="text-2xl font-bold text-text-primary mb-2">404</h1>
