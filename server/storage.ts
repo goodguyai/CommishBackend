@@ -1407,6 +1407,7 @@ export class MemStorage implements IStorage {
       channelId: league.channelId ?? null,
       timezone: league.timezone ?? null,
       tone: league.tone ?? null,
+      digestFrequency: league.digestFrequency ?? null,
       featureFlags: league.featureFlags ?? { qa: true, deadlines: true, digest: true, trade_helper: false, autoMeme: false, reminders: { lineupLock: true, waiver: true, tradeDeadline: true } },
       modelPrefs: league.modelPrefs ?? { maxTokens: 1000, provider: "deepseek" },
       channels: league.channels ?? { digests: null, reminders: null, polls: null, highlights: null },
@@ -1487,6 +1488,8 @@ export class MemStorage implements IStorage {
       ...document, 
       id, 
       createdAt: new Date(),
+      updatedAt: new Date(),
+      title: document.title || 'League Constitution',
       url: document.url ?? null,
       content: document.content ?? null
     };
@@ -1858,6 +1861,8 @@ export class MemStorage implements IStorage {
     const newReminder: Reminder = {
       id,
       ...data,
+      message: data.message ?? null,
+      channelId: data.channelId ?? null,
       timezone: data.timezone ?? "UTC",
       enabled: data.enabled ?? true,
       metadata: data.metadata ?? {},
