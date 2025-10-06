@@ -2155,6 +2155,59 @@ export class MemStorage implements IStorage {
       .find(l => l.accountId === accountId && (l.featureFlags as any)?.demo === true)?.id || null;
   }
 
+  // Sleeper sync methods (stub implementations for in-memory storage)
+  async saveSleeperLink(params: { leagueId: string; sleeperLeagueId: string; season: string; username?: string }): Promise<void> {
+    console.log("MemStorage: saveSleeperLink not implemented");
+  }
+
+  async getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string } | null> {
+    return null;
+  }
+
+  async saveSleeperSnapshot(params: { leagueId: string; payload: any }): Promise<void> {
+    console.log("MemStorage: saveSleeperSnapshot not implemented");
+  }
+
+  async getLeagueSettings(leagueId: string): Promise<any | null> {
+    return null;
+  }
+
+  async saveLeagueSettings(params: { leagueId: string; scoring: any; roster: any; waivers: any; playoffs: any; trades: any; misc: any }): Promise<void> {
+    console.log("MemStorage: saveLeagueSettings not implemented");
+  }
+
+  async saveSettingsChangeEvent(params: { leagueId: string; source: string; path: string; oldValue: any; newValue: any }): Promise<void> {
+    console.log("MemStorage: saveSettingsChangeEvent not implemented");
+  }
+
+  async getSettingsChangeEvents(leagueId: string, limit: number = 50): Promise<any[]> {
+    return [];
+  }
+
+  async saveConstitutionTemplate(params: { leagueId: string; slug: string; templateMd: string }): Promise<void> {
+    console.log("MemStorage: saveConstitutionTemplate not implemented");
+  }
+
+  async getConstitutionTemplates(leagueId: string): Promise<any[]> {
+    return [];
+  }
+
+  async saveConstitutionRender(params: { leagueId: string; slug: string; contentMd: string }): Promise<void> {
+    console.log("MemStorage: saveConstitutionRender not implemented");
+  }
+
+  async getConstitutionRenders(leagueId: string): Promise<any[]> {
+    return [];
+  }
+
+  async getLeagueSettingsOverrides(leagueId: string): Promise<any | null> {
+    return null;
+  }
+
+  async saveLeagueSettingsOverrides(params: { leagueId: string; overrides: any; updatedBy?: string }): Promise<void> {
+    console.log("MemStorage: saveLeagueSettingsOverrides not implemented");
+  }
+
   // Migration methods implementation (no-op for in-memory storage)
   async runRawSQL(query: string): Promise<any> {
     console.log("MemStorage: Ignoring SQL query:", query);
