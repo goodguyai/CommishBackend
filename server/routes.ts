@@ -11,6 +11,9 @@ import { env, getEnv } from "./services/env";
 import { verifyDiscordSignature, generateRequestId } from "./lib/crypto";
 import { discordService, InteractionResponseType, ComponentType } from "./services/discord";
 import { sleeperService } from "./services/sleeper";
+import { sleeperClient } from "./services/sleeperClient";
+import { runSleeperSync, linkSleeperLeague, saveSleeperLink } from "./services/sleeperSync";
+import { constitutionRenderer } from "./services/constitutionRenderer";
 import { deepSeekService } from "./services/deepseek";
 import { RAGService } from "./services/rag";
 import { generateDigestContent } from "./services/digest";
@@ -148,6 +151,40 @@ const createReminderSchemaV2 = z.object({
 });
 
 const getRemindersSchemaV2 = z.object({
+  leagueId: z.string().uuid(),
+});
+
+// Zod schemas for Sleeper Sync API routes
+const getSleeperLeaguesSchema = z.object({
+  username: z.string().min(1),
+  season: z.string().min(4),
+});
+
+const setupSleeperSchema = z.object({
+  leagueId: z.string().uuid(),
+  sleeperLeagueId: z.string().min(1),
+  season: z.string().min(4),
+  username: z.string().optional(),
+});
+
+const syncSleeperSchema = z.object({
+  leagueId: z.string().uuid(),
+});
+
+const getSettingsSchema = z.object({
+  leagueId: z.string().uuid(),
+});
+
+const saveOverridesSchema = z.object({
+  overrides: z.record(z.any()),
+  updatedBy: z.string().optional(),
+});
+
+const renderConstitutionSchema = z.object({
+  leagueId: z.string().uuid(),
+});
+
+const getConstitutionSectionsSchema = z.object({
   leagueId: z.string().uuid(),
 });
 
@@ -2772,76 +2809,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/v2/sleeper/leagues?username=...&season=...
+  // GET /api/v2/sleeper/leagues?username=X&season=YYYY - Discover Sleeper leagues for a user
   app.get("/api/v2/sleeper/leagues", async (req, res) => {
     try {
-      const { username, season } = req.query;
-      if (!username || typeof username !== 'string') {
-        return res.status(400).json({ ok: false, code: "NO_USERNAME", message: "Missing username" });
+      const parsed = getSleeperLeaguesSchema.safeParse(req.query);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid query parameters",
+          errors: parsed.error.errors 
+        });
       }
       
-      const currentYear = new Date().getFullYear();
-      const targetSeason = season || currentYear.toString();
+      const { username, season } = parsed.data;
       
-      const userResponse = await fetch(`https://api.sleeper.app/v1/user/${username}`);
-      if (!userResponse.ok) {
-        return res.status(404).json({ ok: false, code: "USER_NOT_FOUND", message: "Sleeper user not found" });
-      }
+      const leagues = await linkSleeperLeague({
+        leagueId: '', // Not used in discovery phase
+        username,
+        season,
+      });
       
-      const user = await userResponse.json();
-      
-      if (!user || !user.user_id) {
-        return res.status(404).json({ ok: false, code: "USER_NOT_FOUND", message: "Sleeper user not found" });
-      }
-      
-      const leaguesResponse = await fetch(
-        `https://api.sleeper.app/v1/user/${user.user_id}/leagues/nfl/${targetSeason}`
-      );
-      
-      if (!leaguesResponse.ok) {
-        return res.status(404).json({ ok: false, code: "NO_LEAGUES", message: "No leagues found" });
-      }
-      
-      const leagues = await leaguesResponse.json();
-      
-      const simplified = leagues.map((l: any) => ({
-        league_id: l.league_id,
-        name: l.name,
-        season: l.season,
-        total_rosters: l.total_rosters,
-        status: l.status,
-      }));
-      
-      res.json(simplified);
+      res.json({ ok: true, leagues });
     } catch (e) {
-      console.error("[Sleeper Leagues]", e);
+      console.error("[Sleeper Leagues Discovery]", e);
+      const errorMessage = e instanceof Error ? e.message : "Unknown error";
+      
+      if (errorMessage === 'SLEEPER_USER_NOT_FOUND') {
+        return res.status(404).json({ ok: false, code: "USER_NOT_FOUND", message: "Sleeper user not found" });
+      }
+      
+      if (errorMessage === 'SLEEPER_LEAGUES_NOT_FOUND') {
+        return res.status(404).json({ ok: false, code: "NO_LEAGUES", message: "No leagues found for user" });
+      }
+      
       res.status(500).json({ ok: false, code: "SLEEPER_LOOKUP_FAILED", message: "Failed to fetch Sleeper leagues" });
     }
   });
 
-  // POST /api/v2/setup/sleeper
+  // POST /api/v2/setup/sleeper - Link a Sleeper league to internal league
   app.post("/api/v2/setup/sleeper", async (req, res) => {
-    const Body = z.object({
-      accountId: z.string(),
-      guildId: z.string(),
-      sleeperLeagueId: z.string(),
-    });
-    
-    const body = Body.safeParse(req.body);
-    if (!body.success) {
-      return res.status(400).json({ ok: false, code: "BAD_REQUEST", message: "Invalid request body" });
-    }
-
     try {
-      const { accountId, guildId, sleeperLeagueId } = body.data;
-      
-      const leagues = await storage.getLeaguesByGuildId(guildId);
-      if (leagues.length === 0) {
-        return res.status(404).json({ ok: false, code: "NO_LEAGUE", message: "Discord not configured yet" });
+      const parsed = setupSleeperSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid request body",
+          errors: parsed.error.errors 
+        });
       }
+
+      const { leagueId, sleeperLeagueId, season, username } = parsed.data;
       
-      const leagueId = leagues[0].id;
+      // Save the Sleeper integration link
+      await saveSleeperLink({
+        leagueId,
+        sleeperLeagueId,
+        season,
+        username,
+      });
       
+      // Also update the league record for backward compatibility
       await storage.updateLeague(leagueId, {
         sleeperLeagueId,
       });
@@ -2849,15 +2878,257 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.createEvent({
         type: "COMMAND_EXECUTED",
         leagueId,
-        payload: { action: "league_sleeper_linked", sleeperLeagueId },
+        payload: { action: "sleeper_league_linked", sleeperLeagueId, season },
       });
       
       res.json({ ok: true, leagueId });
     } catch (e) {
       console.error("[Sleeper Setup]", e);
-      res.status(500).json({ ok: false, code: "SLEEPER_SETUP_FAILED", message: "Failed to configure Sleeper" });
+      res.status(500).json({ ok: false, code: "SLEEPER_SETUP_FAILED", message: "Failed to link Sleeper league" });
     }
   });
+
+  // ==================== Sleeper Sync API endpoints ====================
+
+  // POST /api/v2/sleeper/sync - Trigger manual sync for a league
+  app.post("/api/v2/sleeper/sync", async (req, res) => {
+    try {
+      const parsed = syncSleeperSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid request body",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId } = parsed.data;
+      
+      // Run the sync operation
+      const normalizedSettings = await runSleeperSync(leagueId);
+      
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId,
+        payload: { action: "sleeper_sync_completed" },
+      });
+      
+      res.json({ ok: true, settings: normalizedSettings });
+    } catch (e) {
+      console.error("[Sleeper Sync]", e);
+      const errorMessage = e instanceof Error ? e.message : "Unknown error";
+      
+      if (errorMessage === 'SLEEPER_NOT_LINKED') {
+        return res.status(404).json({ ok: false, code: "NOT_LINKED", message: "Sleeper league not linked" });
+      }
+      
+      if (errorMessage === 'SLEEPER_LEAGUE_FETCH_FAILED') {
+        return res.status(502).json({ ok: false, code: "FETCH_FAILED", message: "Failed to fetch from Sleeper API" });
+      }
+      
+      res.status(500).json({ ok: false, code: "SYNC_FAILED", message: "Failed to sync Sleeper league" });
+    }
+  });
+
+  // GET /api/v2/settings/:leagueId - Get league settings merged with overrides
+  app.get("/api/v2/settings/:leagueId", async (req, res) => {
+    try {
+      const parsed = getSettingsSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid league ID",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId } = parsed.data;
+      
+      // Get base settings from Sleeper sync
+      const baseSettings = await storage.getLeagueSettings(leagueId);
+      
+      // Get commissioner overrides
+      const overridesData = await storage.getLeagueSettingsOverrides(leagueId);
+      const overrides = overridesData || {};
+      
+      // Merge settings: overrides take precedence over base
+      const merged = { ...baseSettings };
+      for (const category of ['scoring', 'roster', 'waivers', 'playoffs', 'trades', 'misc']) {
+        if (baseSettings?.[category] || overrides?.[category]) {
+          merged[category] = {
+            ...(baseSettings?.[category] || {}),
+            ...(overrides?.[category] || {}),
+          };
+        }
+      }
+      
+      res.json({ 
+        ok: true, 
+        base: baseSettings || {}, 
+        overrides, 
+        merged 
+      });
+    } catch (e) {
+      console.error("[Get Settings]", e);
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get league settings" });
+    }
+  });
+
+  // PUT /api/v2/settings/:leagueId/overrides - Save commissioner overrides
+  app.put("/api/v2/settings/:leagueId/overrides", async (req, res) => {
+    try {
+      const paramsValidation = getSettingsSchema.safeParse(req.params);
+      if (!paramsValidation.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid league ID",
+          errors: paramsValidation.error.errors 
+        });
+      }
+
+      const bodyValidation = saveOverridesSchema.safeParse(req.body);
+      if (!bodyValidation.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid request body",
+          errors: bodyValidation.error.errors 
+        });
+      }
+
+      const { leagueId } = paramsValidation.data;
+      const { overrides, updatedBy } = bodyValidation.data;
+      
+      // Save the overrides
+      await storage.saveLeagueSettingsOverrides({
+        leagueId,
+        overrides,
+        updatedBy,
+      });
+      
+      // Log the change event
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId,
+        payload: { action: "settings_overrides_updated", updatedBy },
+      });
+      
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("[Save Overrides]", e);
+      res.status(500).json({ ok: false, code: "SAVE_FAILED", message: "Failed to save settings overrides" });
+    }
+  });
+
+  // POST /api/v2/constitution/:leagueId/render - Render constitution from templates
+  app.post("/api/v2/constitution/:leagueId/render", async (req, res) => {
+    try {
+      const parsed = renderConstitutionSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid league ID",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId } = parsed.data;
+      
+      // Get league info for context
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+      
+      // Get base settings and overrides
+      const baseSettings = await storage.getLeagueSettings(leagueId);
+      const overridesData = await storage.getLeagueSettingsOverrides(leagueId);
+      
+      // Merge settings for rendering context
+      const merged = { ...baseSettings };
+      for (const category of ['scoring', 'roster', 'waivers', 'playoffs', 'trades', 'misc']) {
+        if (baseSettings?.[category] || overridesData?.[category]) {
+          merged[category] = {
+            ...(baseSettings?.[category] || {}),
+            ...(overridesData?.[category] || {}),
+          };
+        }
+      }
+      
+      // Build context for template rendering
+      const context = {
+        league: {
+          name: league.name,
+          season: new Date().getFullYear().toString(),
+        },
+        scoring: merged.scoring || {},
+        roster: merged.roster || {},
+        waivers: merged.waivers || {},
+        playoffs: merged.playoffs || {},
+        trades: merged.trades || {},
+        misc: merged.misc || {},
+      };
+      
+      // Get all templates
+      const templates = await storage.getConstitutionTemplates(leagueId);
+      
+      // Render each template and save
+      let renderedCount = 0;
+      for (const template of templates) {
+        const renderedMd = constitutionRenderer.render(template.templateMd, context);
+        
+        await storage.saveConstitutionRender({
+          leagueId,
+          slug: template.slug,
+          contentMd: renderedMd,
+        });
+        
+        renderedCount++;
+      }
+      
+      await storage.createEvent({
+        type: "COMMAND_EXECUTED",
+        leagueId,
+        payload: { action: "constitution_rendered", sections: renderedCount },
+      });
+      
+      res.json({ ok: true, sections: renderedCount });
+    } catch (e) {
+      console.error("[Render Constitution]", e);
+      res.status(500).json({ ok: false, code: "RENDER_FAILED", message: "Failed to render constitution" });
+    }
+  });
+
+  // GET /api/v2/constitution/:leagueId/sections - Get all rendered constitution sections
+  app.get("/api/v2/constitution/:leagueId/sections", async (req, res) => {
+    try {
+      const parsed = getConstitutionSectionsSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid league ID",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId } = parsed.data;
+      
+      // Get all rendered sections
+      const sections = await storage.getConstitutionRenders(leagueId);
+      
+      res.json({ ok: true, sections });
+    } catch (e) {
+      console.error("[Get Constitution Sections]", e);
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get constitution sections" });
+    }
+  });
+
+  // ==================== End of Sleeper Sync API endpoints ====================
 
   // POST /api/v2/setup/activate
   app.post("/api/v2/setup/activate", async (req, res) => {
