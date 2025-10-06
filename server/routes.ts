@@ -30,6 +30,7 @@ import { AuthService } from "./services/auth";
 import { DemoService } from "./services/demo";
 import { IdempotencyService } from "./services/idempotency";
 import { reportsService } from "./services/reports";
+import { DiscordDoctorService } from "./services/discordDoctor";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
 
@@ -232,6 +233,7 @@ let tradeFairnessService: TradeFairnessService;
 let highlightsService: HighlightsService;
 let rivalriesService: RivalriesService;
 let contentService: ContentService;
+let discordDoctorService: DiscordDoctorService;
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize database connection
@@ -250,6 +252,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   highlightsService = new HighlightsService();
   rivalriesService = new RivalriesService();
   contentService = new ContentService();
+  discordDoctorService = new DiscordDoctorService(storage);
   
   const auth = new AuthService(storage);
   const demo = new DemoService(storage);
@@ -293,6 +296,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Discord embed description limit is 4096 chars, keep safe margin
       if (description.length > 3800) {
         description = description.substring(0, 3797) + "...";
+      }
+
+      // Validate Discord integration before posting
+      const validation = await discordDoctorService.validateBeforeOperation(league.id, "digest");
+      if (!validation.ok) {
+        console.warn(`Cannot send digest: ${validation.error}`);
+        await storage.createEvent({
+          type: "DIGEST_SKIPPED",
+          leagueId: league.id,
+          payload: { 
+            reason: validation.error,
+            recommendation: validation.recommendation,
+          },
+        });
+        return;
       }
 
       // Post digest to Discord channel
@@ -549,6 +567,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { reminderId, leagueId, channelId, message } = data;
       console.log(`[Scheduler] Reminder job due: ${reminderId} for league ${leagueId}`);
+
+      // Validate Discord integration before posting
+      const validation = await discordDoctorService.validateBeforeOperation(leagueId, "reminder");
+      if (!validation.ok) {
+        console.warn(`Cannot send reminder: ${validation.error}`);
+        await storage.createEvent({
+          type: "ERROR_OCCURRED",
+          leagueId,
+          payload: { 
+            error: "reminder_validation_failed",
+            reason: validation.error,
+            recommendation: validation.recommendation,
+          },
+        });
+        return;
+      }
 
       // Post reminder message to Discord
       await discordService.postMessage(channelId, {
@@ -2692,7 +2726,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/v2/doctor/discord - Discord setup health check
+  // GET /api/v2/doctor/discord - Discord setup health check (general)
   app.get("/api/v2/doctor/discord", async (req, res) => {
     const out: any = { ok: true, checks: {} };
 
@@ -2759,6 +2793,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ 
         ok: false, 
         error: e instanceof Error ? e.message : String(e) 
+      });
+    }
+  });
+
+  // GET /api/v2/doctor/discord/:leagueId - League-specific Discord health check
+  app.get("/api/v2/doctor/discord/:leagueId", async (req, res) => {
+    try {
+      const { leagueId } = req.params;
+
+      if (!leagueId) {
+        return res.status(400).json({
+          ok: false,
+          error: "League ID is required",
+        });
+      }
+
+      const healthCheck = await discordDoctorService.checkDiscordHealth(leagueId);
+
+      res.set('Cache-Control', 'no-store')
+         .status(healthCheck.healthy ? 200 : 409)
+         .json(healthCheck);
+    } catch (e) {
+      console.error("[Discord Doctor - League]", e);
+      res.status(500).json({
+        healthy: false,
+        checks: {
+          guildId: { exists: false },
+          channelId: { exists: false, recommended: true },
+          botToken: { valid: false },
+          botInGuild: { installed: false, canAccessGuild: false },
+          channelAccess: { canReach: false, canPost: false },
+          permissions: { hasRequired: false },
+        },
+        errors: [e instanceof Error ? e.message : String(e)],
+        recommendations: ["Contact support if this error persists"],
       });
     }
   });

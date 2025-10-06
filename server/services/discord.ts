@@ -408,6 +408,35 @@ export class DiscordService {
     }
   }
 
+  // Bot API helpers for health checks
+  async getChannel(channelId: string): Promise<any> {
+    const response = await fetch(`${this.baseUrl}/channels/${channelId}`, {
+      headers: {
+        Authorization: `Bot ${this.botToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to get channel: ${response.status} ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  async getGuildMember(guildId: string, userId: string): Promise<any> {
+    const response = await fetch(`${this.baseUrl}/guilds/${guildId}/members/${userId}`, {
+      headers: {
+        Authorization: `Bot ${this.botToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to get guild member: ${response.status} ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
   // Standard slash commands
   getSlashCommands(): any[] {
     return [
