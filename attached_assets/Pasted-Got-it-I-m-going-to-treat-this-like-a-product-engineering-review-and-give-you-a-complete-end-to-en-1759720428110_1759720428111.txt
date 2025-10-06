@@ -1,0 +1,309 @@
+Got it. I’m going to treat this like a product+engineering review and give you a complete, end-to-end plan that fixes the journey, closes gaps, and tells Replit exactly what to implement and test.
+
+Below is a deep, actionable blueprint organized around the Customer Journey and Commissioner workflows, with concrete API/db changes, Discord behaviors, tests, and hardening steps. This builds on what you already have (Discord OAuth, bot install, Sleeper link, rules indexing, dashboard) and fills the missing pieces so it’s cohesive and durable.
+
+⸻
+
+0) What’s missing / error-prone right now
+
+Where we’ve seen cracks (from your logs and behavior):
+	•	Setup/Discord 500 (UUID empty): backend tried to parse leagueId as UUID when the client sent an empty string → must generate on server if not present.
+	•	Bot installed but channels fail: needed structured BOT_NOT_IN_GUILD handling, install URL without redirect_uri, session persistence, and auto-retry after install (you added most of this).
+	•	Session cookie churn: fixed by trust proxy, cookie name, SameSite=Lax, and credentials: 'include'.
+	•	Caching/old HTML: fixed via no-store headers for HTML and build version header, but keep enforcing.
+	•	Dashboard using mocks: real data adapters missing (RAG stats, activity, league stats).
+	•	RAG & IDs: some calls read wrong IDs, breaking those tiles.
+	•	Sleeper “partial”: settings map exists, but no full loop: normalized settings → overrides → constitution render → RAG reindex → Discord behaviors.
+	•	No durable reporting pipeline: weekly recap, waivers, trades, standings not wired from Sleeper to dashboard+Discord.
+	•	Duplicate/legacy routes: risk of old paths and mocks lingering.
+
+The plan below closes all of that while upgrading UX.
+
+⸻
+
+1) Customer Journey (end-to-end)
+
+1.1 First Touch → Activation
+
+User goal: Try the product quickly, then convert to “beta” live league.
+
+App (web):
+	1.	Landing → “Try Demo” (no friction) OR “Get Started”.
+	2.	Account step (email + name). (Skip if already exists in session.)
+	3.	Connect Discord step:
+	•	Click “Connect”.
+	•	Choose server → if bot missing, “Install THE COMMISH” (opens in new tab) → auto-retry channels on return.
+	•	Choose channel for bot posts (validate bot has View, Send, Embed, Read History, Use Slash).
+	•	Doctor gate: “Discord Ready” checklist (permissions, intents, slash commands registered, test ping).
+	4.	Link Sleeper step:
+	•	Enter Sleeper username + season → we list their leagues → select one.
+	•	Click “Link”: we persist sleeper_integrations row.
+	•	Doctor gate: “Sleeper Ready” checklist (can fetch /league, snapshot saved, normalized settings present).
+	5.	Rules & Constitution step:
+	•	Provide Constitution source (upload, paste, URL) and auto-sections from Sleeper settings templates.
+	•	“Apply to Constitution” (render templates using merged settings) → RAG reindex.
+	•	Doctor gate: “Rules Ready” (index counts, sample Q/A returns non-empty).
+	6.	Personality & Digests (optional quick config):
+	•	Choose voice preset, pick digests (weekly recap, waivers summary, trades alert).
+	7.	“Finish” → redirect to /app beta dashboard (non-demo), store selectedLeagueId.
+
+Discord (chat):
+	•	On finishing Discord step, bot DMs or posts a single welcome card in the selected channel: “Hi, I’m THE COMMISH! Try /settings, /scoring, /waivers”.
+	•	Slash commands are ready and map to live data.
+
+What was missing before: explicit doctor gates, durable post-install retry, and storing leagueId on completion → now included.
+
+⸻
+
+1.2 Daily / Weekly Commissioner Experience
+
+Core loops you want:
+	•	Live config awareness: Bot and dashboard always reflect merged settings (Sleeper base + commissioner overrides).
+	•	Automated reporting (Discord & Dashboard):
+	•	Weekly Recap: final scores, top performers, luck/unluck, power rankings.
+	•	Waiver Report: results, FAAB spent, steals/bargains.
+	•	Trades Monitor: new trades, veto state (if applicable), analysis.
+	•	Standings & Playoff Odds (lightweight odds).
+	•	Injury/IR Watch: roster compliance nudges (polite + optional).
+	•	Engagement:
+	•	/poll creation templates (MVP already done), rivalry highlights, “meme this” for big moments.
+	•	Constitution upkeep:
+	•	When settings change in Sleeper, surface diffs; a click updates rendered constitution sections & reindexes RAG.
+	•	Moderation helpers:
+	•	/warn, /clean for message hygiene (if you enable Manage Messages).
+
+UX we add:
+	•	A “Commissioner Control Center” panel on the dashboard consolidating:
+	•	Sleeper sync status (last synced, counts).
+	•	Overrides diff (with quick “Apply to Constitution”).
+	•	Digest schedule settings.
+	•	Discord channel health (permission probe results).
+	•	Run now buttons with logs.
+
+⸻
+
+2) Sleeper: full coverage (settings + league data)
+
+What you have: settings mapping stub.
+What you need: settings + league activity pipeline.
+
+2.1 DB (add tables)
+
+-- Core roster and players context (minimal)
+create table if not exists sleeper_rosters (
+  league_id uuid not null references leagues(id) on delete cascade,
+  sleeper_roster_id text not null,
+  owner_id text,              -- sleeper user/team id
+  players jsonb not null default '[]'::jsonb,
+  bench jsonb not null default '[]'::jsonb,
+  ir jsonb not null default '[]'::jsonb,
+  updated_at timestamp default now(),
+  primary key (league_id, sleeper_roster_id)
+);
+
+-- Transactions (waivers/trades, etc.)
+create table if not exists sleeper_transactions (
+  league_id uuid not null references leagues(id) on delete cascade,
+  tx_id text not null,
+  type text not null,         -- 'waiver' | 'trade' | 'free_agent' | ...
+  status text,                -- completed/failed/pending
+  faab_spent int,
+  adds jsonb default '[]'::jsonb,  -- [{player_id, to_roster}]
+  drops jsonb default '[]'::jsonb, -- [{player_id, from_roster}]
+  parties jsonb default '[]'::jsonb, -- team ids
+  processed_at timestamp,
+  raw jsonb not null,
+  primary key (league_id, tx_id)
+);
+
+-- Matchups
+create table if not exists sleeper_matchups (
+  league_id uuid not null references leagues(id) on delete cascade,
+  week int not null,
+  matchup_id text not null,
+  roster_id_home text,
+  roster_id_away text,
+  score_home numeric,
+  score_away numeric,
+  status text, -- scheduled/live/final
+  raw jsonb not null,
+  primary key (league_id, week, matchup_id)
+);
+
+-- Standings snapshots (derived)
+create table if not exists league_standings (
+  league_id uuid not null references leagues(id) on delete cascade,
+  season text not null,
+  as_of timestamp not null default now(),
+  table jsonb not null, -- [{team, wins, losses, points_for, points_against, streak, ...}]
+  primary key (league_id, season, as_of)
+);
+
+2.2 Fetchers & schedules
+	•	Settings: already via runSleeperSync (every 6h).
+	•	Rosters: daily + on Sundays pre-kickoff; on demand for /roster.
+	•	Transactions: hourly during season; near-real-time if webhook substitute not available (polling).
+	•	Matchups: weekly load; live update window on game days (always backoff and memoize).
+	•	Standings: recompute after final scores (Sunday/Tuesday mornings).
+
+All fetchers use ETags/If-None-Match or cheap last-modified checks; idempotent upserts.
+
+2.3 Derived reports
+	•	Weekly Recap (computed from matchups + rosters):
+	•	Top Score, Narrowest Win, Highest Scorer Player, “Luck Index” (actual PF vs opp PF median), updated standings.
+	•	Waivers Report (from transactions):
+	•	List by FAAB spent, “Bargains” (low cost + high projected), “Overpays” (fun metric).
+	•	Trades Digest:
+	•	Value balance heuristic (lightweight, avoid heavy ML).
+	•	Standings & Playoff Odds:
+	•	Simple Elo-ish or win-share projection based on PF/PA trend (MVP: simple sort and a pseudo-odds).
+
+Each report: persisted to bot_activity as queued → posted, with rendered Markdown used both for Discord and a Dashboard “preview / run now”.
+
+⸻
+
+3) Constitution & RAG: automated bridge
+
+Already planned; tighten it:
+	•	Trigger: After runSleeperSync diffs OR when overrides updated.
+	•	Render: Regenerate Markdown sections for Slugs (scoring, waivers, roster, playoffs, trades).
+	•	Persist: constitution_render + rules_docs.
+	•	Index: call your RAG indexer with doc ids and metadata (league-scoped, permission-guarded).
+	•	Answer Cards: the bot uses the rendered text for authoritative answers; include source footers (“Constitution ▸ Scoring ▸ v2025-10-05”).
+
+⸻
+
+4) Discord: commands, permissions, behaviors
+
+4.1 Command Matrix
+
+Public (ephemeral by default)
+	•	/settings → summary with link to dashboard, shows merged core settings.
+	•	/scoring, /waivers, /roster, /playoffs → compact cards from merged settings.
+	•	/help → capabilities + examples.
+
+Commissioner-only (role-gated)
+	•	/digest run type:<weekly|waivers|trades|standings> → posts in configured channel.
+	•	/digest schedule set type:<…> cron:<…> → update scheduler; confirm.
+	•	/constitution render → rebuilds sections; confirms count.
+	•	/config channel set → chooses post channel; verifies permissions.
+
+Engagement
+	•	/poll create (you have), /rivalry set, /meme (attaches template over last highlight).
+
+Guardrails
+	•	For guild/channel change commands, always re-probe permissions and emit human-readable diagnosis.
+
+4.2 Events/Reactions (Optional, smart default OFF)
+	•	React 👍 ❤️ on posts matching high-sentiment or key phrases (only if Add Reactions granted and user enables).
+	•	Light “anti-drama” nudges: “Remember rule X on trades…” (only if rule is in constitution & user opted in).
+
+⸻
+
+5) Web App: dashboard tiles & flows
+
+New/updated tiles (real data):
+	•	Sleeper Status: last sync, next sync, counts of rosters/matchups/transactions; “Sync now”.
+	•	Settings (merged): show diffs vs overrides; “Apply to Constitution”.
+	•	Reports: Weekly Recap / Waivers / Trades / Standings cards with Preview + Run Now + Schedule.
+	•	Activity Log: settings_change_events and bot_activity (filters, pagination).
+	•	Health: Discord doctor (permissions & scopes), RAG index counts.
+
+UX polish
+	•	When a commissioner clicks Run Now, write bot_activity(queued) and optimistically show a progress bar; on post success, show jump-to-message link (store Discord message id in bot_activity.detail).
+
+⸻
+
+6) APIs to add/finish (server)
+
+Sleeper
+	•	GET /api/v2/sleeper/leagues?username&season → choices
+	•	POST /api/v2/setup/sleeper { leagueId, sleeperLeagueId, season, username? }
+	•	POST /api/v2/sleeper/sync { leagueId } → returns normalized settings + counts
+	•	POST /api/v2/sleeper/fetch { leagueId, what: 'rosters'|'transactions'|'matchups' } (optional on-demand)
+	•	GET /api/v2/sleeper/status/:leagueId → { lastSettings, lastRosters, lastTransactions, lastMatchups }
+
+Settings & Constitution
+	•	GET /api/v2/settings/:leagueId → { base, overrides, merged }
+	•	PUT /api/v2/settings/:leagueId/overrides → partial JSON
+	•	POST /api/v2/constitution/:leagueId/render → sections count
+	•	POST /api/v2/rag/reindex/:leagueId → (if you want a separate knob)
+
+Reports
+	•	POST /api/v2/reports/:leagueId/run { type } → queues & returns bot_activity id
+	•	GET /api/v2/reports/:leagueId/preview?type → returns rendered markdown (no post)
+
+Observability
+	•	GET /api/_debug/health → add sleeper & reports blocks
+	•	GET /api/_debug/routes (admin-key protected)
+
+All POST/PUT use CSRF & Zod; write to bot_activity with idempotency keys.
+
+⸻
+
+7) Test plan (agentic + E2E)
+
+Agentic clickthrough (Playwright):
+	1.	Account → Discord → Bot Install → Channel select → Doctor passes.
+	2.	Sleeper link: username → select league → Link passes → Doctor passes.
+	3.	Sync now: Sleeper status updates; Settings tile shows values.
+	4.	Add override (PPR=0.5) → diff chip appears.
+	5.	Apply to Constitution → RAG index count increases; /scoring answers reflect PPR=0.5.
+	6.	Run Weekly Recap (with mocked matchup data) → preview renders → “Run Now” posts to test channel → bot_activity shows posted.
+	7.	Permissions probe: flip a channel lacking Embed Links → doctor shows red; fix → green.
+	8.	Regression: refresh page/session → guilds and channel persist; dashboard in Beta mode, not demo.
+
+Integration tests (vitest/jest):
+	•	Mapping unit tests (Sleeper payload → normalized).
+	•	Overrides merge tests (nested keys).
+	•	Constitution renderer tests (mustache variables).
+	•	Reports render tests with sample data.
+	•	Idempotency tests: duplicate run doesn’t double-post.
+
+Reliability tests:
+	•	Simulate 500/429 from Sleeper; verify backoff and no spam.
+	•	Discord post retries with idempotency key.
+
+⸻
+
+8) Replit hardening (extra oomph)
+	•	Secrets hygiene: enforce X-Admin-Key for all debug endpoints; verify no secrets logged.
+	•	Kill mocks: gate /api/mock/* behind NODE_ENV !== 'production'; return 410 otherwise.
+	•	Cache headers: no-store for HTML; immutable for assets. Keep the BUILD_VERSION header.
+	•	Session: ensure cookie name commish.sid, SameSite=Lax, Secure, HttpOnly, trust proxy 1, client fetch uses credentials: 'include'.
+	•	Route manifest: run on boot, log a digest (to detect duplicates).
+	•	Cost control: run fetchers on a seasonal cadence; use ETags; compute reports only when needed; sample logs.
+
+⸻
+
+9) Concrete “Do this next in Replit” (ordered)
+	1.	SQL: create the extra tables (sleeper_rosters, sleeper_transactions, sleeper_matchups, league_standings) + you already have sleeper_integrations, league_settings, overrides, settings_change_events, constitution_*.
+	2.	Services: add sleeperClient.ts, sleeperFetchers.ts (rosters/transactions/matchups), and reports.ts (weekly recap, waivers, trades, standings).
+	3.	Sync job: wire sleeper.sync (6h) and reports.weekly (Sun night / Tue morning).
+	4.	Settings merge: ensure all bot commands read merged settings.
+	5.	Constitution render: ensure render → rules_docs → RAG index is one click.
+	6.	Dashboard tiles: replace mocks using new endpoints; add Preview/Run Now buttons and a log viewer from bot_activity.
+	7.	Doctor gates: Discord doctor + Sleeper doctor must pass before “Finish Setup” button enables.
+	8.	Slash commands: confirm /scoring, /waivers, /roster, /playoffs, /settings, /digest run work against live data.
+	9.	Playwright: add the 8 E2E tests above and run them as a suite.
+	10.	Smoke checks: add /api/_debug/health CI gate (returns green blocks for discord/sleeper/rag).
+
+⸻
+
+10) Acceptance criteria (what we sign off on)
+	•	Setup completes without manual fixes; user lands on Beta dashboard with their real league selected.
+	•	Bot replies instantly to /settings and the four core rules commands with merged values.
+	•	Sleeper Sync runs manually and on schedule; dashboard shows last sync time and counts.
+	•	Overrides update the dashboard diff + /scoring output + constitution render in one click.
+	•	Weekly Recap preview/Run Now works; Discord post appears; bot_activity records posted.
+	•	Doctor gates flag missing Discord permissions and recover when fixed.
+	•	E2E: all steps green.
+
+⸻
+
+This is the full, end-to-end plan to make the customer journey smooth and the commissioner experience powerful—no more “one step, one error” pain. If you want, I can cut this into:
+	•	Replit Work Order.md (copypasteable checklist),
+	•	migrations.sql for the tables above, and
+	•	stubs for sleeperClient.ts, sleeperFetchers.ts, reports.ts, and the new routes.
+
+Say the word and I’ll drop those artifacts inline so you can paste them directly into the repo.
