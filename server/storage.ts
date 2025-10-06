@@ -219,6 +219,12 @@ export interface IStorage {
   getSleeperTransactions(leagueId: string, filters?: { week?: number; type?: string }): Promise<any[]>;
   getSleeperMatchups(leagueId: string, week?: number): Promise<any[]>;
 
+  // Constitution drafts methods (Phase 13)
+  createConstitutionDraft(params: { leagueId: string; source: string; proposed: any; status?: string }): Promise<string>;
+  getConstitutionDrafts(leagueId: string): Promise<any[]>;
+  getConstitutionDraft(draftId: string): Promise<any | null>;
+  updateConstitutionDraft(draftId: string, updates: { status?: string; decidedAt?: Date }): Promise<void>;
+
   // Migration methods
   runRawSQL(query: string): Promise<any>;
   ensurePgVectorExtension(): Promise<void>;
@@ -1521,6 +1527,44 @@ export class DatabaseStorage implements IStorage {
     return matchups;
   }
 
+  // Constitution drafts methods (Phase 13)
+  async createConstitutionDraft(params: { leagueId: string; source: string; proposed: any; status?: string }): Promise<string> {
+    const inserted = await this.db.insert(schema.constitutionDrafts)
+      .values({
+        leagueId: params.leagueId,
+        source: params.source,
+        proposed: params.proposed,
+        status: params.status || 'PENDING',
+      })
+      .returning({ id: schema.constitutionDrafts.id });
+    
+    return inserted[0].id;
+  }
+
+  async getConstitutionDrafts(leagueId: string): Promise<any[]> {
+    const drafts = await this.db.select()
+      .from(schema.constitutionDrafts)
+      .where(eq(schema.constitutionDrafts.leagueId, leagueId))
+      .orderBy(desc(schema.constitutionDrafts.createdAt));
+    
+    return drafts;
+  }
+
+  async getConstitutionDraft(draftId: string): Promise<any | null> {
+    const drafts = await this.db.select()
+      .from(schema.constitutionDrafts)
+      .where(eq(schema.constitutionDrafts.id, draftId))
+      .limit(1);
+    
+    return drafts[0] || null;
+  }
+
+  async updateConstitutionDraft(draftId: string, updates: { status?: string; decidedAt?: Date }): Promise<void> {
+    await this.db.update(schema.constitutionDrafts)
+      .set(updates)
+      .where(eq(schema.constitutionDrafts.id, draftId));
+  }
+
   // Migration methods implementation
   async runRawSQL(query: string): Promise<any> {
     return this.db.execute(sql.raw(query));
@@ -2486,6 +2530,24 @@ export class MemStorage implements IStorage {
 
   async getSleeperMatchups(leagueId: string, week?: number): Promise<any[]> {
     return [];
+  }
+
+  // Constitution drafts methods (Phase 13) - stub implementations
+  async createConstitutionDraft(params: { leagueId: string; source: string; proposed: any; status?: string }): Promise<string> {
+    console.log("MemStorage: createConstitutionDraft not implemented");
+    return this.generateId();
+  }
+
+  async getConstitutionDrafts(leagueId: string): Promise<any[]> {
+    return [];
+  }
+
+  async getConstitutionDraft(draftId: string): Promise<any | null> {
+    return null;
+  }
+
+  async updateConstitutionDraft(draftId: string, updates: { status?: string; decidedAt?: Date }): Promise<void> {
+    console.log("MemStorage: updateConstitutionDraft not implemented");
   }
 
   // Migration methods implementation (no-op for in-memory storage)

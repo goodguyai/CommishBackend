@@ -1,0 +1,228 @@
+Perfect — let’s pick up right where that left off and finish the full Phase 13 code drop.
+Below is the continuation of section 3.3, then the AI pages, tests, and the health checklist so you can give the whole thing to Replit or your engineer as one atomic update.
+
+⸻
+
+3.3 Automation — Announcements (continued)
+
+      if ("skipped" in r && r.skipped)
+        toast.info("Skipped: identical announcement already sent recently");
+      else toast.success("Announcement sent!");
+    } catch (e:any) {
+      toast.error("Send failed: " + (e.message ?? ""));
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold">Announcements</h2>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Write your announcement..."
+        className="w-full min-h-[120px] p-2 rounded bg-gray-800 text-gray-100"
+      />
+      <div className="flex items-center gap-3">
+        <select
+          value={mention}
+          onChange={(e) => setMention(e.target.value as any)}
+          className="bg-gray-900 border border-gray-700 p-1 rounded"
+        >
+          <option value="">No Mention</option>
+          <option value="@everyone">@everyone</option>
+          <option value="@here">@here</option>
+        </select>
+        <Button onClick={onPreview} variant="secondary">Preview</Button>
+        <Button onClick={onSend}>Send</Button>
+      </div>
+      <p className="text-sm text-gray-400">
+        Cooldown: 1 per minute per channel (guarded on server). Duplicate messages automatically skipped.
+      </p>
+    </div>
+  );
+}
+
+Mount this in your “Automation” section next to the Reactions page.
+
+⸻
+
+3.4 AI → Q&A page
+
+client/src/pages/AIAsk.tsx
+
+import { useState } from "react";
+import { api } from "../lib/apiApp";
+import { Button } from "../components/ui/Button";
+import { toast } from "sonner";
+
+export default function AIAsk({ leagueId }: { leagueId: string }) {
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
+
+  async function onAsk() {
+    setAnswer("");
+    try {
+      const r = await api<{ ok:boolean; content:string }>(`/api/ai/ask`, {
+        method: "POST",
+        body: { leagueId, question }
+      });
+      setAnswer(r.content);
+    } catch (e) {
+      toast.error("AI request failed");
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold">Ask the Commish AI</h2>
+      <textarea
+        value={question}
+        onChange={(e) => setQuestion(e.target.value)}
+        placeholder="Example: What's the trade deadline rule?"
+        className="w-full min-h-[120px] p-2 rounded bg-gray-800 text-gray-100"
+      />
+      <Button onClick={onAsk}>Ask</Button>
+      {answer && (
+        <div className="mt-4 p-3 bg-gray-900 rounded border border-gray-700 whitespace-pre-wrap">
+          {answer}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+⸻
+
+3.5 AI → Recaps page
+
+client/src/pages/AIRecaps.tsx
+
+import { useState } from "react";
+import { api } from "../lib/apiApp";
+import { Button } from "../components/ui/Button";
+import { toast } from "sonner";
+
+export default function AIRecaps({ leagueId }: { leagueId: string }) {
+  const [week, setWeek] = useState<number>(1);
+  const [recap, setRecap] = useState<string>("");
+
+  async function onGenerate() {
+    try {
+      const r = await api<{ ok:boolean; recap:{ markdown:string } }>(`/api/ai/recap`, {
+        method: "POST",
+        body: { leagueId, week }
+      });
+      setRecap(r.recap.markdown);
+    } catch {
+      toast.error("Failed to generate recap");
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold">Weekly Recaps</h2>
+      <div className="flex items-center gap-2">
+        <label>Week</label>
+        <input
+          type="number"
+          min={1}
+          value={week}
+          onChange={(e) => setWeek(parseInt(e.target.value))}
+          className="w-20 bg-gray-900 border border-gray-700 p-1 rounded"
+        />
+        <Button onClick={onGenerate}>Generate</Button>
+      </div>
+      {recap && (
+        <pre className="mt-3 p-3 bg-gray-900 text-gray-100 rounded border border-gray-700 whitespace-pre-wrap">
+{recap}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+
+⸻
+
+4️⃣ Playwright / API tests (add to tests/phase13.spec.ts)
+
+import { test, expect } from "@playwright/test";
+
+test("Sleeper → Constitution drafts round-trip", async ({ request }) => {
+  const build = await request.post("/api/v2/constitution/drafts/build", {
+    data: { leagueId: "LEAGUE_ID", sleeperSettings: { playoff_teams: 4 } },
+  });
+  expect(build.ok()).toBeTruthy();
+  const { draft } = await build.json();
+  const apply = await request.post(`/api/v2/constitution/drafts/${draft.id}/apply`, { data: { leagueId: "LEAGUE_ID" } });
+  expect(apply.ok()).toBeTruthy();
+});
+
+test("Reaction policy heuristic", async () => {
+  const { evaluate } = await import("../server/services/reactionPolicy");
+  expect(evaluate("gg")).toBe("❤️");
+  expect(evaluate("awesome!")).toBe("👍");
+});
+
+test("Announcement cooldown guard", async () => {
+  const { allow } = await import("../server/lib/rateLimiter");
+  const key = "announce:test";
+  expect(allow(key, 1, 1)).toBeTruthy();
+  expect(allow(key, 1, 1)).toBeFalsy(); // immediately again blocked
+});
+
+test("AI recap tool", async () => {
+  const { aiRecap } = await import("../server/ai/agent");
+  const r = await aiRecap({ leagueId: "LEAGUE_ID", week: 1 });
+  expect(r.markdown).toContain("Week");
+});
+
+Run with npx playwright test tests/phase13.spec.ts.
+
+⸻
+
+5️⃣ Health Checklist & cURL Smoke Tests
+
+Before deploy
+
+# Database
+psql $DATABASE_URL -f migrations/2025-10-06_phase13.sql
+
+# Lint + build
+npm run lint && npm run build
+
+At runtime logs should include
+
+✅ Environment validation passed
+🎮 Discord: Client ready
+Scheduled Sleeper Settings Sync: every 6 hours (UTC)
+[express] serving on port 5000
+
+Quick smoke checks
+
+# Draft list (should 200)
+curl -s "$APP_BASE_URL/api/v2/constitution/drafts?leagueId=YOUR_LEAGUE"
+
+# AI ask
+curl -s -X POST "$APP_BASE_URL/api/ai/ask" \
+  -H 'Content-Type: application/json' \
+  -d '{"leagueId":"YOUR_LEAGUE","question":"When is the trade deadline?"}'
+
+Expect { ok:true } and a short textual answer.
+
+⸻
+
+✅ Wrap-up
+
+This completes the Phase 13 full system patch.
+It gives you:
+	•	Robust database schema with idempotent jobs & drafts
+	•	Sleeper ↔ Constitution sync via reversible drafts
+	•	Discord reaction & announcement automation (safe + rate-limited)
+	•	DeepSeek-powered Q&A and Recaps with plug-in tools
+	•	Fully mountable React dashboard pages
+	•	Automated test suite & smoke commands
+
+You can now copy this entire patch into your Replit project, commit, and push.
+Next optional step (Phase 14) would be polish & persistence: wiring league feature toggles in Supabase (leagues.features) and UI settings saves. Would you like me to prep that follow-up patch?

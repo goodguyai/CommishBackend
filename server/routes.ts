@@ -32,6 +32,9 @@ import { DemoService } from "./services/demo";
 import { IdempotencyService } from "./services/idempotency";
 import { reportsService } from "./services/reports";
 import { DiscordDoctorService } from "./services/discordDoctor";
+import * as constitutionDraftsService from "./services/constitutionDrafts";
+import * as announceService from "./services/announceService";
+import { aiAsk, aiRecap } from "./ai/agent";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
 import { verifySupabaseToken, requireSupabaseAuth } from "./middleware/auth";
@@ -226,6 +229,46 @@ const sleeperStatusSchema = z.object({
 
 const sleeperSyncTriggerSchema = z.object({
   leagueId: z.string().uuid(),
+});
+
+// Zod schemas for Phase 13 API endpoints
+const buildConstitutionDraftSchema = z.object({
+  leagueId: z.string().uuid(),
+  sleeperSettings: z.any(),
+});
+
+const getConstitutionDraftsSchema = z.object({
+  leagueId: z.string().uuid(),
+});
+
+const applyConstitutionDraftSchema = z.object({
+  draftId: z.string().uuid(),
+});
+
+const rejectConstitutionDraftSchema = z.object({
+  draftId: z.string().uuid(),
+});
+
+const announcePreviewSchema = z.object({
+  text: z.string().min(1),
+});
+
+const announceSendSchema = z.object({
+  leagueId: z.string().uuid(),
+  guildId: z.string(),
+  channelId: z.string(),
+  text: z.string().min(1),
+  mention: z.enum(['@everyone', '@here']).optional(),
+});
+
+const aiAskSchema = z.object({
+  leagueId: z.string().uuid(),
+  question: z.string().min(1),
+});
+
+const aiRecapSchema = z.object({
+  leagueId: z.string().uuid(),
+  week: z.number().int().min(1).max(18),
 });
 
 // Module-level variables that will be initialized after env validation
@@ -3626,6 +3669,248 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e) {
       console.error("[Get Constitution Sections]", e);
       res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get constitution sections" });
+    }
+  });
+
+  // ==================== Constitution Drafts API Endpoints (Phase 13) ====================
+  
+  // POST /api/v2/constitution/drafts/build - Build draft from Sleeper settings
+  app.post("/api/v2/constitution/drafts/build", async (req, res) => {
+    try {
+      const parsed = buildConstitutionDraftSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid input",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId, sleeperSettings } = parsed.data;
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      const draft = await constitutionDraftsService.buildDraftFromSleeper(leagueId, sleeperSettings);
+      
+      res.json({ ok: true, draft });
+    } catch (e) {
+      console.error("[Build Constitution Draft]", e);
+      res.status(500).json({ ok: false, code: "BUILD_FAILED", message: "Failed to build draft" });
+    }
+  });
+
+  // GET /api/v2/constitution/drafts/:leagueId - List drafts for league
+  app.get("/api/v2/constitution/drafts/:leagueId", async (req, res) => {
+    try {
+      const parsed = getConstitutionDraftsSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid league ID",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId } = parsed.data;
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      const drafts = await constitutionDraftsService.listDrafts(leagueId);
+      
+      res.json({ ok: true, drafts });
+    } catch (e) {
+      console.error("[List Constitution Drafts]", e);
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to list drafts" });
+    }
+  });
+
+  // POST /api/v2/constitution/drafts/:draftId/apply - Apply a draft
+  app.post("/api/v2/constitution/drafts/:draftId/apply", async (req, res) => {
+    try {
+      const parsed = applyConstitutionDraftSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid input",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { draftId } = parsed.data;
+      
+      const updatedDraft = await constitutionDraftsService.applyDraft(draftId);
+      
+      res.json({ ok: true, draft: updatedDraft });
+    } catch (e: any) {
+      console.error("[Apply Constitution Draft]", e);
+      if (e.message === "DRAFT_NOT_FOUND") {
+        return res.status(404).json({ ok: false, code: "DRAFT_NOT_FOUND", message: "Draft not found or already processed" });
+      }
+      res.status(500).json({ ok: false, code: "APPLY_FAILED", message: "Failed to apply draft" });
+    }
+  });
+
+  // POST /api/v2/constitution/drafts/:draftId/reject - Reject a draft
+  app.post("/api/v2/constitution/drafts/:draftId/reject", async (req, res) => {
+    try {
+      const parsed = rejectConstitutionDraftSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid input",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { draftId } = parsed.data;
+      
+      const updatedDraft = await constitutionDraftsService.rejectDraft(draftId);
+      
+      res.json({ ok: true, draft: updatedDraft });
+    } catch (e: any) {
+      console.error("[Reject Constitution Draft]", e);
+      if (e.message === "DRAFT_NOT_FOUND") {
+        return res.status(404).json({ ok: false, code: "DRAFT_NOT_FOUND", message: "Draft not found or already processed" });
+      }
+      res.status(500).json({ ok: false, code: "REJECT_FAILED", message: "Failed to reject draft" });
+    }
+  });
+
+  // ==================== Announcement API Endpoints (Phase 13) ====================
+  
+  // POST /api/announce/preview - Preview announcement
+  app.post("/api/announce/preview", async (req, res) => {
+    try {
+      const parsed = announcePreviewSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid input",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { text } = parsed.data;
+      
+      const preview = await announceService.preview(text);
+      
+      res.json(preview);
+    } catch (e) {
+      console.error("[Announce Preview]", e);
+      res.status(500).json({ ok: false, code: "PREVIEW_FAILED", message: "Failed to preview announcement" });
+    }
+  });
+
+  // POST /api/announce/send - Send announcement with guardrails
+  app.post("/api/announce/send", async (req, res) => {
+    try {
+      const parsed = announceSendSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid input",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId, guildId, channelId, text, mention } = parsed.data;
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      const result = await announceService.post({
+        client: discordService.getClient(),
+        guildId,
+        channelId,
+        text,
+        mention,
+        leagueId,
+      });
+      
+      res.json(result);
+    } catch (e: any) {
+      console.error("[Announce Send]", e);
+      if (e.message === "CHANNEL_NOT_FOUND") {
+        return res.status(404).json({ ok: false, code: "CHANNEL_NOT_FOUND", message: "Channel not found" });
+      }
+      if (e.message === "COOLDOWN") {
+        return res.status(429).json({ ok: false, code: "COOLDOWN", message: "Announcements are rate-limited" });
+      }
+      res.status(500).json({ ok: false, code: "SEND_FAILED", message: "Failed to send announcement" });
+    }
+  });
+
+  // ==================== AI API Endpoints (Phase 13) ====================
+  
+  // POST /api/ai/ask - AI Q&A with RAG
+  app.post("/api/ai/ask", async (req, res) => {
+    try {
+      const parsed = aiAskSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid input",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId, question } = parsed.data;
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      const response = await aiAsk({ leagueId, question });
+      
+      res.json({ ok: true, ...response });
+    } catch (e) {
+      console.error("[AI Ask]", e);
+      res.status(500).json({ ok: false, code: "AI_FAILED", message: "Failed to get AI response" });
+    }
+  });
+
+  // POST /api/ai/recap - Generate weekly recap
+  app.post("/api/ai/recap", async (req, res) => {
+    try {
+      const parsed = aiRecapSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid input",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId, week } = parsed.data;
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      const response = await aiRecap({ leagueId, week });
+      
+      res.json({ ok: true, ...response });
+    } catch (e) {
+      console.error("[AI Recap]", e);
+      res.status(500).json({ ok: false, code: "AI_FAILED", message: "Failed to generate recap" });
     }
   });
 

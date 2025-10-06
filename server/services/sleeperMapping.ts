@@ -102,3 +102,58 @@ export function mapSleeperLeagueToSettings(sleeperLeague: SleeperLeague): Normal
 
   return { scoring, roster, waivers, playoffs, trades, misc };
 }
+
+// Phase 13: Constitution diff and apply functions
+export type Change = { 
+  label: string;
+  before: any; 
+  after: any; 
+  path: string;
+};
+
+export function diffSleeperToConstitution(sleeper: any, constitution: any): Change[] {
+  const out: Change[] = [];
+  const pairs: Array<[string, string, string]> = [
+    // [sleeperKey, constitutionPath, label]
+    ["roster_positions", "rules.rosters.positions", "Roster Positions"],
+    ["playoff_teams", "rules.playoffs.teams", "Playoff Teams"],
+    ["trade_deadline", "rules.trades.deadline", "Trade Deadline"],
+    ["waiver_type", "rules.waivers.type", "Waiver Type"],
+    ["waiver_clear_days", "rules.waivers.clear_days", "Waiver Clear Days"],
+    ["scoring_settings.rec", "rules.scoring.receptions", "Reception Scoring"],
+    ["scoring_settings.pass_td", "rules.scoring.pass_td", "Passing TD"],
+    ["scoring_settings.rush_td", "rules.scoring.rush_td", "Rushing TD"],
+  ];
+
+  for (const [sKey, cPath, label] of pairs) {
+    const sVal = getDeep(sleeper, sKey);
+    const cVal = getDeep(constitution, cPath);
+    if (normalize(sVal) !== normalize(cVal)) {
+      out.push({ label, before: cVal, after: sVal, path: cPath });
+    }
+  }
+  return out;
+}
+
+function getDeep(obj: any, path: string) {
+  return path.split(".").reduce((o, k) => (o ? o[k] : undefined), obj);
+}
+
+function setDeep(obj: any, path: string, value: any) {
+  const keys = path.split(".");
+  const last = keys.pop()!;
+  const parent = keys.reduce((o, k) => (o[k] ??= {}), obj);
+  parent[last] = value;
+}
+
+function normalize(v: any) {
+  return v === null || v === undefined ? null : JSON.stringify(v);
+}
+
+export function applyChanges(doc: any, changes: Change[]) {
+  const copy = JSON.parse(JSON.stringify(doc ?? {}));
+  for (const ch of changes) {
+    setDeep(copy, ch.path, ch.after);
+  }
+  return copy;
+}

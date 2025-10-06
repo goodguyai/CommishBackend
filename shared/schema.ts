@@ -502,6 +502,16 @@ export const botActivity = pgTable("bot_activity", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const constitutionDrafts = pgTable("constitution_drafts", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").notNull().references(() => leagues.id, { onDelete: "cascade" }),
+  source: text("source").notNull(),
+  proposed: jsonb("proposed").notNull(),
+  status: text("status").notNull().default("PENDING"),
+  createdAt: timestamp("created_at").defaultNow(),
+  decidedAt: timestamp("decided_at"),
+});
+
 // Insert schemas
 export const insertAccountSchema = createInsertSchema(accounts).pick({
   email: true,
@@ -729,6 +739,13 @@ export const insertBotActivitySchema = createInsertSchema(botActivity).pick({
   requestId: true,
 });
 
+export const insertConstitutionDraftsSchema = createInsertSchema(constitutionDrafts).pick({
+  leagueId: true,
+  source: true,
+  proposed: true,
+  status: true,
+});
+
 export const insertSleeperIntegrationSchema = createInsertSchema(sleeperIntegrations).pick({
   leagueId: true,
   sleeperLeagueId: true,
@@ -872,6 +889,8 @@ export type ContentQueue = typeof contentQueue.$inferSelect;
 export type InsertContentQueue = z.infer<typeof insertContentQueueSchema>;
 export type BotActivity = typeof botActivity.$inferSelect;
 export type InsertBotActivity = z.infer<typeof insertBotActivitySchema>;
+export type ConstitutionDraft = typeof constitutionDrafts.$inferSelect;
+export type InsertConstitutionDraft = z.infer<typeof insertConstitutionDraftsSchema>;
 export type SleeperIntegration = typeof sleeperIntegrations.$inferSelect;
 export type InsertSleeperIntegration = z.infer<typeof insertSleeperIntegrationSchema>;
 export type SleeperSettingsSnapshot = typeof sleeperSettingsSnapshots.$inferSelect;

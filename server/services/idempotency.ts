@@ -131,16 +131,63 @@ export class IdempotencyService {
       const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
       
       // Delete records OLDER than 48h (use lt, not gte)
-      const result = await db
+      await db
         .delete(botActivity)
         .where(sql`${botActivity.createdAt} < ${fortyEightHoursAgo}`);
       
-      const deletedCount = result.rowCount || 0;
-      console.log(`[Idempotency] Cleaned up ${deletedCount} old records`);
-      return deletedCount;
+      console.log(`[Idempotency] Cleaned up old records`);
+      return 0;
     } catch (e) {
       console.error('[Idempotency] Cleanup failed:', e);
       return 0;
     }
+  }
+}
+
+// Simplified helpers for Phase 13
+type MarkStatus = "PENDING" | "SUCCESS" | "FAILED";
+
+export async function hasSucceeded(key: string): Promise<boolean> {
+  try {
+    const existing = await db
+      .select()
+      .from(botActivity)
+      .where(
+        and(
+          eq(botActivity.key, key),
+          eq(botActivity.status, 'SUCCESS')
+        )
+      )
+      .limit(1);
+    return existing.length > 0;
+  } catch (e) {
+    console.error('hasSucceeded check failed:', e);
+    return false;
+  }
+}
+
+export async function mark(params: {
+  leagueId?: string;
+  guildId?: string;
+  channelId?: string;
+  kind: string;
+  key: string;
+  status: MarkStatus;
+  detail?: any;
+  requestId?: string;
+}): Promise<void> {
+  try {
+    await db.insert(botActivity).values({
+      leagueId: params.leagueId,
+      guildId: params.guildId,
+      channelId: params.channelId,
+      kind: params.kind,
+      key: params.key,
+      status: params.status,
+      detail: params.detail ?? {},
+      requestId: params.requestId,
+    });
+  } catch (e) {
+    console.error('Failed to mark activity:', e);
   }
 }

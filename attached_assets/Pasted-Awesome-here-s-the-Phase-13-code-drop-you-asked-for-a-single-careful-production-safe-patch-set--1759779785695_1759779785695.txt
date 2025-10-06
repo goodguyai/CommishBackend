@@ -1,0 +1,632 @@
+Awesome — here’s the Phase 13 code drop you asked for: a single, careful, production-safe patch set you can paste into Replit (or hand to your dev). It’s written to stabilize the stack first, then add the new features (Sleeper→Constitution drafts, Reactions, Announcements, AI Q&A/Recaps), without breaking what’s already working.
+
+I’ve split this into:
+	1.	Idempotent DB migration (run once)
+	2.	Backend files (new + edits)
+	3.	Frontend files (new pages)
+	4.	Playwright tests (additions)
+	5.	Health checklist & curl tests
+
+Everything below is self-contained; no background promises. You can copy/paste file-by-file.
+
+⸻
+
+1) Database migration (idempotent)
+
+Create a new file: migrations/2025-10-06_phase13.sql
+
+-- === Phase 13: schema hardening and new features ===
+
+-- 1) leagues.features column (jsonb) for automation toggles
+ALTER TABLE IF EXISTS leagues
+  ADD COLUMN IF NOT EXISTS features jsonb DEFAULT '{}'::jsonb;
+
+-- 2) bot_activity: records outbound jobs/interactions for idempotency/ops
+CREATE TABLE IF NOT EXISTS bot_activity (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id uuid REFERENCES leagues(id) ON DELETE SET NULL,
+  guild_id text,
+  channel_id text,
+  kind text NOT NULL,         -- e.g., 'announce','reaction','recap','ask'
+  key text,                   -- idempotency key
+  status text NOT NULL,       -- 'PENDING'|'SUCCESS'|'FAILED'
+  detail jsonb DEFAULT '{}'::jsonb,
+  request_id text,
+  created_at timestamp DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS bot_activity_kind_idx ON bot_activity(kind);
+CREATE INDEX IF NOT EXISTS bot_activity_key_idx ON bot_activity(key);
+CREATE INDEX IF NOT EXISTS bot_activity_league_idx ON bot_activity(league_id);
+
+-- 3) constitution_drafts: reversible proposals from Sleeper→Constitution
+CREATE TABLE IF NOT EXISTS constitution_drafts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id uuid NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+  source text NOT NULL,        -- 'sleeper-sync'|'manual'
+  proposed jsonb NOT NULL,     -- array of changes [{path,from,to,label}]
+  status text NOT NULL DEFAULT 'PENDING', -- 'PENDING'|'APPLIED'|'REJECTED'
+  created_at timestamp DEFAULT now(),
+  decided_at timestamp
+);
+CREATE INDEX IF NOT EXISTS constitution_drafts_league_idx ON constitution_drafts(league_id);
+CREATE INDEX IF NOT EXISTS constitution_drafts_status_idx ON constitution_drafts(status);
+
+-- 4) guardrails – ensure unique Discord channel mapping table exists (if you have one)
+-- (Skip if you already have it. Shown as defensive example.)
+-- CREATE TABLE IF NOT EXISTS league_channels (...);
+
+Apply it however you normally run SQL (your Drizzle push has SSL trouble); running this exact SQL via your DB console is fine. It’s 100% idempotent.
+
+⸻
+
+2) Backend
+
+2.1 Guardrails: rate limiter & retry
+
+Create: server/lib/rateLimiter.ts
+
+// Lightweight token-bucket limiter (per key) for bots/jobs.
+type Bucket = { tokens: number; last: number };
+
+const buckets = new Map<string, Bucket>();
+
+export function allow(key: string, ratePerSec = 1, burst = 3): boolean {
+  const now = Date.now();
+  const b = buckets.get(key) ?? { tokens: burst, last: now };
+  const delta = (now - b.last) / 1000;
+  b.tokens = Math.min(burst, b.tokens + delta * ratePerSec);
+  b.last = now;
+  if (b.tokens >= 1) { b.tokens -= 1; buckets.set(key,b); return true; }
+  buckets.set(key,b); return false;
+}
+
+export function snapshot() {
+  return Array.from(buckets.entries()).map(([key,b]) => ({ key, tokens: b.tokens }));
+}
+
+Create: server/lib/retry.ts
+
+export type RetryOpts = { tries?: number; baseMs?: number; factor?: number; onRetry?: (err: any, attempt: number) => void };
+
+export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOpts = {}): Promise<T> {
+  const tries = opts.tries ?? 4;
+  const base = opts.baseMs ?? 300;
+  const factor = opts.factor ?? 2;
+
+  let attempt = 0, lastErr: any;
+  while (attempt < tries) {
+    try { return await fn(); }
+    catch (err: any) {
+      lastErr = err; attempt++;
+      const status = err?.status ?? err?.response?.status;
+      if (status && status < 500 && status !== 429) break; // don't retry bad requests
+      if (attempt >= tries) break;
+      const delay = base * Math.pow(factor, attempt - 1);
+      opts.onRetry?.(err, attempt);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
+2.2 Idempotency service (augment existing)
+
+Create/replace: server/services/idempotency.ts
+
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+
+type MarkStatus = "PENDING" | "SUCCESS" | "FAILED";
+
+export async function hasSucceeded(key: string) {
+  const rows = await db.execute(sql`
+    SELECT 1 FROM bot_activity WHERE key = ${key} AND status = 'SUCCESS' LIMIT 1
+  `);
+  return rows?.rows?.length > 0;
+}
+
+export async function mark(
+  { leagueId, guildId, channelId, kind, key, status, detail, requestId }:
+  { leagueId?: string; guildId?: string; channelId?: string; kind: string; key: string; status: MarkStatus; detail?: any; requestId?: string }
+) {
+  await db.execute(sql`
+    INSERT INTO bot_activity (league_id, guild_id, channel_id, kind, key, status, detail, request_id)
+    VALUES (${leagueId ?? null}, ${guildId ?? null}, ${channelId ?? null}, ${kind}, ${key}, ${status}, ${JSON.stringify(detail ?? {})}::jsonb, ${requestId ?? null})
+  `);
+}
+
+This hooks into the existing bot_activity table. It does not alter any other code unless you import/use it.
+
+2.3 Sleeper → Constitution mapping
+
+Create: server/services/sleeperMapping.ts
+
+// Maps Sleeper league settings to constitution paths and labels.
+// Add/extend as you expand coverage.
+export type Change = { path: string; from: any; to: any; label: string };
+
+export function diffSleeperToConstitution(sleeper: any, constitution: any): Change[] {
+  const out: Change[] = [];
+  const pairs: Array<[string, string, string]> = [
+    // [sleeperKey, constitutionPath, label]
+    ["roster_positions", "rules.rosters.positions", "Roster Positions"],
+    ["playoff_teams", "rules.playoffs.teams", "Playoff Teams"],
+    ["trade_deadline", "rules.trades.deadline", "Trade Deadline"],
+    ["waiver_type", "rules.waivers.type", "Waiver Type"],
+    ["waiver_clear_days", "rules.waivers.clear_days", "Waiver Clear Days"],
+    ["scoring_settings.rec", "rules.scoring.receptions", "Reception Scoring"],
+    ["scoring_settings.pass_td", "rules.scoring.pass_td", "Passing TD"],
+    ["scoring_settings.rush_td", "rules.scoring.rush_td", "Rushing TD"],
+    // add more as needed
+  ];
+
+  for (const [sKey, cPath, label] of pairs) {
+    const sVal = getDeep(sleeper, sKey);
+    const cVal = getDeep(constitution, cPath);
+    if (normalize(sVal) !== normalize(cVal)) out.push({ path: cPath, from: cVal, to: sVal, label });
+  }
+  return out;
+}
+
+function getDeep(obj: any, path: string) {
+  return path.split(".").reduce((o, k) => (o ? o[k] : undefined), obj);
+}
+function setDeep(obj: any, path: string, value: any) {
+  const keys = path.split(".");
+  const last = keys.pop()!;
+  const parent = keys.reduce((o, k) => (o[k] ??= {}), obj);
+  parent[last] = value;
+}
+function normalize(v: any) {
+  return v === null || v === undefined ? null : JSON.stringify(v);
+}
+
+export function applyChanges(doc: any, changes: Change[]) {
+  const copy = JSON.parse(JSON.stringify(doc ?? {}));
+  for (const ch of changes) setDeep(copy, ch.path, ch.to);
+  return copy;
+}
+
+Create: server/services/constitutionDrafts.ts
+
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+import { diffSleeperToConstitution, applyChanges } from "./sleeperMapping";
+import { withRetry } from "../lib/retry";
+
+export async function buildDraftFromSleeper(leagueId: string, sleeperSettings: any) {
+  // Fetch latest constitution doc (JSON) for league
+  const cur = await db.execute(sql`SELECT constitution FROM leagues WHERE id = ${leagueId} LIMIT 1`);
+  const constitution = cur.rows?.[0]?.constitution ?? {};
+  const proposed = diffSleeperToConstitution(sleeperSettings, constitution);
+  const ins = await db.execute(sql`
+    INSERT INTO constitution_drafts (league_id, source, proposed, status)
+    VALUES (${leagueId}, 'sleeper-sync', ${JSON.stringify(proposed)}::jsonb, 'PENDING')
+    RETURNING id, proposed, status, created_at
+  `);
+  return ins.rows?.[0];
+}
+
+export async function listDrafts(leagueId: string) {
+  const res = await db.execute(sql`
+    SELECT id, source, proposed, status, created_at, decided_at
+    FROM constitution_drafts
+    WHERE league_id = ${leagueId}
+    ORDER BY created_at DESC
+  `);
+  return res.rows;
+}
+
+export async function applyDraft(leagueId: string, draftId: string) {
+  const d = await db.execute(sql`
+    SELECT proposed FROM constitution_drafts WHERE id = ${draftId} AND league_id = ${leagueId} AND status = 'PENDING'
+  `);
+  if (d.rows.length === 0) throw new Error("DRAFT_NOT_FOUND");
+  const proposed = d.rows[0].proposed;
+
+  const cur = await db.execute(sql`SELECT constitution FROM leagues WHERE id = ${leagueId}`);
+  const constitution = cur.rows?.[0]?.constitution ?? {};
+
+  const updated = applyChanges(constitution, proposed);
+  await withRetry(() => db.execute(sql`
+    UPDATE leagues SET constitution = ${JSON.stringify(updated)}::jsonb WHERE id = ${leagueId}
+  `));
+
+  await db.execute(sql`
+    UPDATE constitution_drafts SET status = 'APPLIED', decided_at = now()
+    WHERE id = ${draftId}
+  `);
+}
+
+export async function rejectDraft(leagueId: string, draftId: string) {
+  const upd = await db.execute(sql`
+    UPDATE constitution_drafts SET status = 'REJECTED', decided_at = now()
+    WHERE id = ${draftId} AND league_id = ${leagueId} AND status = 'PENDING'
+  `);
+  if (upd.rowCount === 0) throw new Error("DRAFT_NOT_FOUND");
+}
+
+2.4 Reactions policy
+
+Create: server/services/reactionPolicy.ts
+
+import { allow } from "../lib/rateLimiter";
+
+export type ReactionDecision = "👍" | "❤️" | null;
+
+export function evaluate(content: string): ReactionDecision {
+  if (!content) return null;
+  if (/\b(gg|nice|good game|great game)\b/i.test(content)) return "❤️";
+  // extremely light-weight positive sentiment heuristic
+  if (/\b(thanks|awesome|love|great|amazing|fun)\b/i.test(content)) return "👍";
+  return null;
+}
+
+export function allowedForChannel(channelId: string, emoji: string) {
+  // rate-limit per channel+emoji to avoid spam
+  return allow(`react:${channelId}:${emoji}`, 0.2, 2); // ~1 reaction / 5s, burst 2
+}
+
+Wire in your Discord event pipeline (if you don’t already have one):
+
+Create: server/discord/events/messageCreate.ts
+
+import { ReactionDecision, evaluate, allowedForChannel } from "../../services/reactionPolicy";
+import { Client, Message } from "discord.js";
+
+export function registerMessageCreate(client: Client) {
+  client.on("messageCreate", async (msg: Message) => {
+    try {
+      if (msg.author.bot) return;
+      const decision = evaluate(msg.content);
+      if (!decision) return;
+      if (!allowedForChannel(msg.channelId, decision)) return;
+      await msg.react(decision);
+    } catch (e) {
+      console.error("[Reaction]", e);
+    }
+  });
+}
+
+Call registerMessageCreate(discordClient) once in your Discord bootstrap (where the bot client is created).
+
+2.5 Announcements (guardrails)
+
+Create: server/services/announceService.ts
+
+import { Client, TextChannel } from "discord.js";
+import { withRetry } from "../lib/retry";
+import { allow } from "../lib/rateLimiter";
+import { hasSucceeded, mark } from "./../services/idempotency";
+
+export async function preview(text: string) {
+  // could run LLM tone-check here; for now just echo
+  return { ok: true, preview: text };
+}
+
+export async function post({
+  client, guildId, channelId, text, mention, leagueId, requestId
+}: {
+  client: Client; guildId: string; channelId: string; text: string; mention?: "@everyone"|"@here"|string; leagueId?: string; requestId?: string;
+}) {
+  const idemKey = `announce:${guildId}:${channelId}:${text}:${mention ?? ""}`;
+  if (await hasSucceeded(idemKey)) return { ok: true, skipped: true };
+
+  // cooldown guard per channel
+  if (!allow(`announce:${channelId}`, 1/60, 1)) { // 1 per minute
+    return { ok: false, code: "COOLDOWN", message: "Announcements are rate-limited" };
+  }
+
+  const channel = await withRetry(async () => {
+    const ch = await client.channels.fetch(channelId);
+    if (!ch || !ch.isTextBased()) throw new Error("CHANNEL_NOT_FOUND");
+    return ch as TextChannel;
+  });
+
+  const body = mention ? `${mention} ${text}` : text;
+
+  const msg = await withRetry(() => channel.send({ content: body }));
+  await mark({ kind: "announce", key: idemKey, status: "SUCCESS", detail: { messageId: msg.id }, guildId, channelId, leagueId, requestId });
+  return { ok: true, messageId: msg.id };
+}
+
+Add routes in your main routes file (see §2.7).
+
+2.6 DeepSeek AI tools & agent
+
+Create: server/ai/tools.ts
+
+import type { Request } from "express";
+import { db } from "../db";
+import { sql } from "drizzle-orm";
+
+export const tools = {
+  async fetch_rule({ leagueId, query }: { leagueId: string; query: string }) {
+    const res = await db.execute(sql`
+      SELECT rule_id, title, content, path
+      FROM rules_index
+      WHERE league_id = ${leagueId} AND to_tsvector('english', content) @@ plainto_tsquery(${query})
+      ORDER BY ts_rank(to_tsvector('english', content), plainto_tsquery(${query})) DESC
+      LIMIT 5
+    `);
+    return res.rows;
+  },
+  async fetch_setting({ leagueId, key }: { leagueId: string; key: string }) {
+    const res = await db.execute(sql`SELECT settings FROM leagues WHERE id = ${leagueId}`);
+    const settings = res.rows?.[0]?.settings ?? {};
+    return { key, value: settings[key] };
+  },
+  async summarize_thread({ messages }: { messages: Array<{author:string; content:string}> }) {
+    // simple deterministic summary placeholder (you can LLM it later)
+    const last = messages.at(-1);
+    return { summary: `Thread of ${messages.length} messages. Last by ${last?.author ?? "n/a"}.` };
+  },
+  async generate_recap({ leagueId, week }: { leagueId: string; week: number }) {
+    // skeleton recap using stored stats (assumes you have weekly stats table)
+    return { title: `Week ${week} Recap`, markdown: `## Week ${week}\n- Top scorer: TBD\n- Close game: TBD\n` };
+  }
+};
+
+export type ToolName = keyof typeof tools;
+
+export async function callTool(name: ToolName, args: any) {
+  // @ts-ignore
+  return tools[name](args);
+}
+
+Create: server/ai/agent.ts
+
+import { callTool, ToolName } from "./tools";
+
+// Minimal DeepSeek wrapper stub. Replace with your actual client call.
+async function deepseekChat(messages: Array<{role:"user"|"system"|"assistant"|"tool"; content:string; name?:string}>) {
+  // If the assistant requests a tool call, simulate function calling:
+  const last = messages.at(-1);
+  if (last?.role === "user" && /recap/i.test(last.content)) {
+    return { type: "tool_call", name: "generate_recap", arguments: { leagueId: "LEAGUE_ID", week: 1 } };
+  }
+  return { type: "final", content: "Here’s an answer. (Replace with real DeepSeek call.)" };
+}
+
+export async function aiAsk({ leagueId, question }: { leagueId: string; question: string }) {
+  const convo = [{ role:"user" as const, content: question }];
+  const first = await deepseekChat(convo);
+  if (first.type === "tool_call") {
+    const result = await callTool(first.name as ToolName, { leagueId, ...(first.arguments ?? {}) });
+    const second = await deepseekChat([
+      ...convo,
+      { role:"tool", name:first.name, content: JSON.stringify(result) }
+    ]);
+    if (second.type === "final") return { content: second.content, citations: [] };
+  }
+  if (first.type === "final") return { content: first.content, citations: [] };
+  return { content: "I couldn't find an answer.", citations: [] };
+}
+
+export async function aiRecap({ leagueId, week }: { leagueId: string; week: number }) {
+  const res = await callTool("generate_recap", { leagueId, week });
+  return res; // { title, markdown }
+}
+
+2.7 Routes (bind everything)
+
+Edit your main server/routes.ts and add these sections (search for a good spot under other v2 APIs):
+
+// ---- Constitution drafts
+import * as Drafts from "./services/constitutionDrafts";
+
+app.get("/api/v2/constitution/drafts", async (req, res) => {
+  const leagueId = (req.query.leagueId as string) || "";
+  if (!leagueId) return res.status(400).json({ ok:false, code:"BAD_REQUEST", message:"Missing leagueId" });
+  const drafts = await Drafts.listDrafts(leagueId);
+  res.json({ ok:true, drafts });
+});
+
+app.post("/api/v2/constitution/drafts/build", async (req, res) => {
+  // expects { leagueId, sleeperSettings }
+  const { leagueId, sleeperSettings } = req.body ?? {};
+  if (!leagueId || !sleeperSettings) return res.status(400).json({ ok:false, code:"BAD_REQUEST" });
+  const draft = await Drafts.buildDraftFromSleeper(leagueId, sleeperSettings);
+  res.json({ ok:true, draft });
+});
+
+app.post("/api/v2/constitution/drafts/:id/apply", async (req, res) => {
+  const { leagueId } = req.body ?? {};
+  if (!leagueId) return res.status(400).json({ ok:false, code:"BAD_REQUEST" });
+  await Drafts.applyDraft(leagueId, req.params.id);
+  res.json({ ok:true });
+});
+
+app.post("/api/v2/constitution/drafts/:id/reject", async (req, res) => {
+  const { leagueId } = req.body ?? {};
+  if (!leagueId) return res.status(400).json({ ok:false, code:"BAD_REQUEST" });
+  await Drafts.rejectDraft(leagueId, req.params.id);
+  res.json({ ok:true });
+});
+
+// ---- Announce
+import { preview as announcePreview, post as announcePost } from "./services/announceService";
+import { discordClient } from "./services/discordClient"; // adjust import to your actual client
+
+app.post("/api/announce/preview", async (req, res) => {
+  const { text } = req.body ?? {};
+  if (!text) return res.status(400).json({ ok:false, code:"BAD_REQUEST" });
+  const p = await announcePreview(text);
+  res.json(p);
+});
+
+app.post("/api/announce/send", async (req, res) => {
+  const { guildId, channelId, text, mention, leagueId } = req.body ?? {};
+  if (!guildId || !channelId || !text) return res.status(400).json({ ok:false, code:"BAD_REQUEST" });
+  const r = await announcePost({ client: discordClient, guildId, channelId, text, mention, leagueId, requestId: req.requestId });
+  if (!r.ok) return res.status(429).json(r);
+  res.json(r);
+});
+
+// ---- AI
+import { aiAsk, aiRecap } from "./ai/agent";
+
+app.post("/api/ai/ask", async (req, res) => {
+  const { leagueId, question } = req.body ?? {};
+  if (!leagueId || !question) return res.status(400).json({ ok:false, code:"BAD_REQUEST" });
+  const ans = await aiAsk({ leagueId, question });
+  res.json({ ok:true, ...ans });
+});
+
+app.post("/api/ai/recap", async (req, res) => {
+  const { leagueId, week } = req.body ?? {};
+  if (!leagueId || typeof week !== "number") return res.status(400).json({ ok:false, code:"BAD_REQUEST" });
+  const recap = await aiRecap({ leagueId, week });
+  res.json({ ok:true, recap });
+});
+
+// ---- Health enrichments (optional)
+import { snapshot as limiterStats } from "./lib/rateLimiter";
+app.get("/api/_debug/health", async (req, res) => {
+  res.json({
+    ok: true,
+    limiter: limiterStats(),
+    time: new Date().toISOString()
+  });
+});
+
+Snowflake fix for the “YOUR_GUILD_ID” error: ensure when you call Discord APIs you pass the real guild ID string from OAuth (don’t use placeholders). If you type-guard, prefer String(guildId) and never coerce to number.
+
+⸻
+
+3) Frontend pages (new)
+
+All use your existing api() helper (already set to credentials: 'include').
+
+3.1 Constitution Drafts
+
+Create: client/src/pages/ConstitutionDrafts.tsx
+
+import { useEffect, useState } from "react";
+import { api } from "../lib/apiApp";
+import { Button } from "../components/ui/Button";
+import { toast } from "sonner";
+
+type Draft = { id: string; source: string; proposed: Array<{path:string; from:any; to:any; label:string}>; status: string; created_at: string };
+
+export default function ConstitutionDrafts({ leagueId }: { leagueId: string }) {
+  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const r = await api<{ ok:boolean; drafts: Draft[] }>(`/api/v2/constitution/drafts?leagueId=${leagueId}`);
+      setDrafts(r.drafts);
+    } catch (e) {
+      toast.error("Failed to load drafts");
+    } finally { setLoading(false); }
+  }
+
+  async function apply(id: string) {
+    try {
+      await api(`/api/v2/constitution/drafts/${id}/apply`, { method:"POST", body: { leagueId } });
+      toast.success("Applied");
+      refresh();
+    } catch { toast.error("Failed to apply"); }
+  }
+
+  async function reject(id: string) {
+    try {
+      await api(`/api/v2/constitution/drafts/${id}/reject`, { method:"POST", body: { leagueId } });
+      toast.success("Rejected");
+      refresh();
+    } catch { toast.error("Failed to reject"); }
+  }
+
+  useEffect(() => { refresh(); }, [leagueId]);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold">Proposed Changes</h2>
+        <Button onClick={refresh} disabled={loading}>Refresh</Button>
+      </div>
+      {drafts.length === 0 && <p className="text-sm text-gray-400">No drafts yet.</p>}
+      {drafts.map(d => (
+        <div key={d.id} className="rounded border border-gray-700 p-4">
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-gray-300">
+              <span className="font-medium">{d.source}</span> • {new Date(d.created_at).toLocaleString()} • <span className="uppercase">{d.status}</span>
+            </div>
+            {d.status === "PENDING" && (
+              <div className="space-x-2">
+                <Button onClick={() => apply(d.id)}>Apply</Button>
+                <Button variant="secondary" onClick={() => reject(d.id)}>Reject</Button>
+              </div>
+            )}
+          </div>
+          <div className="mt-3">
+            <table className="w-full text-sm">
+              <thead><tr className="text-gray-400">
+                <th align="left">Label</th><th align="left">Path</th><th align="left">From</th><th align="left">To</th>
+              </tr></thead>
+              <tbody>
+              {d.proposed.map((c, i) => (
+                <tr key={i}><td>{c.label}</td><td className="text-gray-400">{c.path}</td><td className="text-gray-400">{JSON.stringify(c.from)}</td><td>{JSON.stringify(c.to)}</td></tr>
+              ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+Add a tab in your “Constitution” area to mount <ConstitutionDrafts leagueId={selectedLeagueId} />.
+
+3.2 Automation — Reactions
+
+Create: client/src/pages/AutomationReactions.tsx
+
+import { useState } from "react";
+import { Button } from "../components/ui/Button";
+import { toast } from "sonner";
+
+export default function AutomationReactions() {
+  const [enabled, setEnabled] = useState(true);
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold">Reactions Policy</h2>
+      <label className="flex items-center gap-2">
+        <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
+        Enable light-weight positive reactions (❤️, 👍)
+      </label>
+      <Button onClick={() => toast.success("Saved (front-end stub). Back your toggle with leagues.features if desired.")}>Save</Button>
+      <p className="text-sm text-gray-400">Initial heuristic: “gg/good game” → ❤️, positive words → 👍 (rate-limited).</p>
+    </div>
+  );
+}
+
+Wire saving to leagues.features.reactions.enabled if you want persistence; the backend code is already rate-limited even if you leave this as a stub.
+
+3.3 Automation — Announcements
+
+Create: client/src/pages/AutomationAnnouncements.tsx
+
+import { useState } from "react";
+import { api } from "../lib/apiApp";
+import { Button } from "../components/ui/Button";
+import { toast } from "sonner";
+
+export default function AutomationAnnouncements({ guildId, channelId, leagueId }:{ guildId: string; channelId: string; leagueId?: string }) {
+  const [text, setText] = useState("");
+  const [mention, setMention] = useState<"@everyone"|"@here"|"">("");
+
+  async function onPreview() {
+    try {
+      const r = await api<{ ok:boolean; preview:string }>(`/api/announce/preview`, { method:"POST", body: { text }});
+      toast.info(`Preview: ${r.preview}`);
+    } catch { toast.error("Preview failed"); }
+  }
+  async function onSend() {
+    try {
+      const r = await api(`/api/announce/send`, { method:"POST", body: { guildId, channelId, text, mention: mention || undefined, leagueId }});
+      if ("skipped" in r) toast

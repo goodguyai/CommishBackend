@@ -1,7 +1,18 @@
 # THE COMMISH - Fantasy Football Discord Bot
 
 ## Overview
-THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrated with the Sleeper platform. It serves as a commissioner assistant, handling rule inquiries, tracking deadlines, and generating automated digests. The system includes a React frontend for management and a Node.js backend for Discord interactions, leveraging RAG capabilities with DeepSeek LLM for intelligent responses to league constitution questions. Key capabilities include an advanced reminder system, enhanced rules indexing with versioning, improved RAG semantic search, quick polls, and an auto-meme feature for blowout games. The project aims to provide a comprehensive, intelligent assistant to streamline fantasy football league management.
+THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrated with the Sleeper platform. It serves as a commissioner assistant, handling rule inquiries, tracking deadlines, and generating automated digests. The system includes a React frontend for management and a Node.js backend for Discord interactions, leveraging RAG capabilities with DeepSeek LLM for intelligent responses to league constitution questions. Key capabilities include an advanced reminder system, enhanced rules indexing with versioning, improved RAG semantic search, quick polls, auto-meme feature, Sleeper↔Constitution sync with reversible drafts, controlled announcements with guardrails, and AI-powered Q&A and weekly recaps. The project provides a comprehensive, intelligent assistant to streamline fantasy football league management.
+
+## Recent Changes (Phase 13 - October 2025)
+**Constitution Sync & Safety Enhancements**: Added reversible Sleeper→Constitution sync, rate-limiting, retry logic, controlled announcements, and AI function-calling for Q&A and recaps.
+
+### Phase 13 Features
+- **Constitution Drafts**: Reversible proposal system for syncing Sleeper settings to league constitution with apply/reject workflow
+- **Safety Infrastructure**: Token-bucket rate limiter, exponential backoff retry logic, and enhanced idempotency guards
+- **Controlled Announcements**: Guardrailed @everyone announcements with cooldowns and role-based permissions
+- **AI Q&A**: DeepSeek function-calling with RAG for intelligent rule explanations and setting lookups
+- **AI Recaps**: Automated weekly recap generation using league matchup data and standings
+- **Frontend Pages**: ConstitutionDrafts, AutomationReactions, AutomationAnnouncements, AIAsk, AIRecaps
 
 ## User Preferences
 Preferred communication style: Simple, everyday language.
