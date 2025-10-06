@@ -33,6 +33,7 @@ import { reportsService } from "./services/reports";
 import { DiscordDoctorService } from "./services/discordDoctor";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
+import { verifySupabaseToken, requireSupabaseAuth } from "./middleware/auth";
 
 // Extend express-session types to include csrfToken and Discord OAuth
 declare module 'express-session' {
@@ -2853,11 +2854,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
+  // POST /api/auth/session - Exchange Supabase auth for app session
+  app.post("/api/auth/session", requireSupabaseAuth, async (req, res) => {
+    try {
+      const supabaseUser = req.supabaseUser;
+      
+      if (!supabaseUser) {
+        console.error("[Session Exchange] No Supabase user found after auth middleware");
+        return res.status(401).json({ 
+          ok: false, 
+          code: "UNAUTHORIZED", 
+          message: "No authenticated user found" 
+        });
+      }
+
+      const supabaseUserId = supabaseUser.id;
+      console.log(`[Session Exchange] Processing session exchange for Supabase user: ${supabaseUserId}`);
+
+      const account = await storage.getAccountBySupabaseUserId(supabaseUserId);
+      
+      if (!account) {
+        console.log(`[Session Exchange] No account found for Supabase user: ${supabaseUserId}`);
+        return res.status(404).json({ 
+          ok: false, 
+          code: "ACCOUNT_NOT_FOUND", 
+          message: "No account found for this Supabase user. Please complete signup first." 
+        });
+      }
+
+      req.session.accountId = account.id;
+      console.log(`[Session Exchange] Session established for account: ${account.id}`);
+
+      res.json({ 
+        ok: true, 
+        accountId: account.id 
+      });
+    } catch (error) {
+      console.error("[Session Exchange] Error:", error);
+      res.status(500).json({ 
+        ok: false, 
+        code: "SESSION_EXCHANGE_FAILED", 
+        message: "Failed to exchange session" 
+      });
+    }
+  });
+
   // POST /api/v2/setup/account - Create account during onboarding
   app.post("/api/v2/setup/account", async (req, res) => {
     const Body = z.object({
       email: z.string().email(),
       name: z.string().min(1),
+      supabaseUserId: z.string().optional(),
     });
     
     const body = Body.safeParse(req.body);
@@ -2866,14 +2913,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     try {
-      const { email, name } = body.data;
+      const { email, name, supabaseUserId } = body.data;
       
       // Check if account with this email already exists
       const existingAccount = await storage.getAccountByEmail(email);
       if (existingAccount) {
-        // Return existing account
+        // If supabaseUserId provided and account doesn't have one, update it
+        if (supabaseUserId && !existingAccount.supabaseUserId) {
+          await storage.updateAccount(existingAccount.id, { supabaseUserId });
+          existingAccount.supabaseUserId = supabaseUserId; // Update local object
+          console.log(`[Account Creation] Updated existing account ${existingAccount.id} with Supabase user: ${supabaseUserId}`);
+        }
+        
+        // Return existing account (now with supabaseUserId if it was missing)
         req.session.accountId = existingAccount.id;
+        console.log(`[Account Creation] Returning existing account: ${existingAccount.id}`);
         return res.json({ ok: true, accountId: existingAccount.id });
+      }
+      
+      // If supabaseUserId is provided, check if account already exists for this Supabase user
+      if (supabaseUserId) {
+        const existingSupabaseAccount = await storage.getAccountBySupabaseUserId(supabaseUserId);
+        if (existingSupabaseAccount) {
+          req.session.accountId = existingSupabaseAccount.id;
+          console.log(`[Account Creation] Returning existing Supabase account: ${existingSupabaseAccount.id}`);
+          return res.json({ ok: true, accountId: existingSupabaseAccount.id });
+        }
       }
       
       // Create new account
@@ -2881,11 +2946,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         email,
         name,
         plan: 'beta',
+        supabaseUserId: supabaseUserId || undefined,
       });
       
       // Store in session
       req.session.accountId = accountId;
       
+      console.log(`[Account Creation] Created new account: ${accountId}${supabaseUserId ? ` with Supabase user: ${supabaseUserId}` : ''}`);
       res.json({ ok: true, accountId });
     } catch (e) {
       console.error("[Account Creation]", e);
@@ -3568,8 +3635,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Get sync events to determine last sync time
-      const events = await storage.getEvents(leagueId, { type: "SLEEPER_SYNCED", limit: 1 });
-      const lastSync = events.length > 0 ? events[0].timestamp : null;
+      const events = await storage.getRecentEvents(leagueId, 1);
+      const syncEvents = events.filter(e => e.type === "SLEEPER_SYNCED");
+      const lastSync = syncEvents.length > 0 ? syncEvents[0].createdAt : null;
 
       // Calculate sync health
       let syncHealth = "unknown";
@@ -3584,8 +3652,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Get ETag cache status (if available in integration metadata)
-      const etags = (integration.metadata as any)?.etags || {};
+      // Get ETag cache status (if available in integration)
+      const etags = {};
 
       res.json({ 
         ok: true, 
@@ -4220,7 +4288,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }));
       
       const latestDoc = docs[0];
-      const uploadedMs = latestDoc ? Date.now() - new Date(latestDoc.uploadedAt).getTime() : 0;
+      const uploadedMs = latestDoc && latestDoc.createdAt ? Date.now() - new Date(latestDoc.createdAt).getTime() : 0;
       const uploadedAgo = uploadedMs > 0 
         ? uploadedMs < 60000 ? 'Just now'
         : uploadedMs < 3600000 ? `${Math.floor(uploadedMs / 60000)} min ago`
@@ -6981,8 +7049,8 @@ async function handleDigestCommand(interaction: any, league: any, requestId: str
 
 async function getCurrentWeek(sleeperLeagueId: string): Promise<number> {
   try {
-    const leagueData = await sleeperService.getLeague(sleeperLeagueId);
-    return leagueData?.settings?.leg || 1;
+    const week = await sleeperService.getCurrentWeek();
+    return week || 1;
   } catch (error) {
     console.error("Failed to get current week, defaulting to 1:", error);
     return 1;

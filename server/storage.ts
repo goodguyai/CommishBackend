@@ -33,6 +33,7 @@ export interface IStorage {
   getAccountByDiscordId(discordUserId: string): Promise<Account | undefined>;
   getAccountBySupabaseUserId(supabaseUserId: string): Promise<Account | undefined>;
   createAccount(account: InsertAccount): Promise<string>;
+  updateAccount(accountId: string, updates: Partial<Account>): Promise<void>;
   updateAccountDiscordId(accountId: string, discordUserId: string): Promise<void>;
 
   // League methods
@@ -288,6 +289,12 @@ export class DatabaseStorage implements IStorage {
   async createAccount(account: InsertAccount): Promise<string> {
     const accounts = await this.db.insert(schema.accounts).values(account).returning();
     return accounts[0].id;
+  }
+
+  async updateAccount(accountId: string, updates: Partial<Account>): Promise<void> {
+    await this.db.update(schema.accounts)
+      .set(updates)
+      .where(eq(schema.accounts.id, accountId));
   }
 
   async updateAccountDiscordId(accountId: string, discordUserId: string): Promise<void> {
@@ -1593,6 +1600,13 @@ export class MemStorage implements IStorage {
     this.accounts.set(id, newAccount);
     return id;
   }
+  async updateAccount(accountId: string, updates: Partial<Account>): Promise<void> {
+    const account = this.accounts.get(accountId);
+    if (account) {
+      Object.assign(account, updates);
+    }
+  }
+
   async updateAccountDiscordId(accountId: string, discordUserId: string): Promise<void> {
     const account = this.accounts.get(accountId);
     if (account) {
