@@ -228,6 +228,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   scheduler.on("highlights_due", (data) => eventBus.emit("highlights_due", data));
   scheduler.on("rivalry_due", (data) => eventBus.emit("rivalry_due", data));
   scheduler.on("content_poster_due", () => eventBus.emit("content_poster_due"));
+  scheduler.on("sleeper_sync_due", () => eventBus.emit("sleeper_sync_due"));
 
   // Setup event handlers
   eventBus.on("digest_due", async (data) => {
@@ -406,6 +407,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[Scheduler] Cleaned up ${deletedCount} expired wizard sessions`);
     } catch (error) {
       console.error("[Scheduler] Failed to cleanup expired sessions:", error);
+    }
+  });
+
+  // Sleeper Settings Sync: Automatic sync every 6 hours
+  eventBus.on("sleeper_sync_due", async () => {
+    const requestId = generateRequestId();
+    console.log(`[${requestId}] [Scheduler] Sleeper Settings Sync: Starting automatic sync`);
+    
+    try {
+      // Get all leagues
+      const allLeagues = await storage.getAllLeagues();
+      console.log(`[${requestId}] [Scheduler] Found ${allLeagues.length} total leagues`);
+      
+      let successCount = 0;
+      let failureCount = 0;
+      let skippedCount = 0;
+      
+      // Process each league
+      for (const league of allLeagues) {
+        try {
+          // Check if league has Sleeper integration
+          const sleeperIntegration = await storage.getSleeperIntegration(league.id);
+          
+          if (!sleeperIntegration) {
+            skippedCount++;
+            continue;
+          }
+          
+          // Idempotency check: prevent overlapping syncs for same league
+          const idempotencyKey = IdempotencyService.computeKey({
+            guildId: league.guildId || "",
+            channelId: league.channelId || "",
+            operation: "sleeper_sync",
+            payload: { leagueId: league.id, timestamp: new Date().toISOString().split('T')[0] }, // Daily idempotency
+          });
+          
+          const duplicateCheck = await IdempotencyService.checkDuplicate(idempotencyKey, requestId);
+          
+          if (duplicateCheck.isDuplicate) {
+            console.log(`[${requestId}] [Scheduler] Skipping league ${league.name}: sync already completed today`);
+            skippedCount++;
+            continue;
+          }
+          
+          // Run Sleeper sync
+          console.log(`[${requestId}] [Scheduler] Syncing league ${league.name} (${league.id})`);
+          const settings = await runSleeperSync(league.id);
+          
+          // Record success
+          await IdempotencyService.recordSuccess(idempotencyKey, {
+            requestId,
+            leagueId: league.id,
+            guildId: league.guildId || undefined,
+            channelId: league.channelId || undefined,
+            kind: "sleeper_sync",
+            response: { success: true, settingsUpdated: true },
+          });
+          
+          // Log sync event
+          await storage.createEvent({
+            type: "SLEEPER_SYNCED",
+            leagueId: league.id,
+            payload: { 
+              success: true,
+              source: "scheduled_sync",
+              settings: settings
+            },
+          });
+          
+          successCount++;
+          console.log(`[${requestId}] [Scheduler] Successfully synced league ${league.name}`);
+        } catch (leagueError: any) {
+          failureCount++;
+          console.error(`[${requestId}] [Scheduler] Failed to sync league ${league.name}:`, leagueError);
+          
+          // Log error event for this league
+          await storage.createEvent({
+            type: "ERROR_OCCURRED",
+            leagueId: league.id,
+            payload: { 
+              error: "sleeper_sync_failed",
+              message: String(leagueError),
+              source: "scheduled_sync"
+            },
+          });
+        }
+      }
+      
+      console.log(`[${requestId}] [Scheduler] Sleeper Settings Sync complete: ${successCount} succeeded, ${failureCount} failed, ${skippedCount} skipped`);
+    } catch (error) {
+      console.error(`[${requestId}] [Scheduler] Sleeper Settings Sync error:`, error);
+      await storage.createEvent({
+        type: "ERROR_OCCURRED",
+        leagueId: null,
+        payload: { 
+          error: "sleeper_sync_job_failed",
+          message: String(error)
+        },
+      });
     }
   });
 

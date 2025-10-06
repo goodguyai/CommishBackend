@@ -197,6 +197,9 @@ app.use((req, res, next) => {
   
   // Phase 3: Initialize global content poster (every 5 minutes)
   scheduler.scheduleContentPoster();
+  
+  // Sleeper Settings Sync: Initialize automatic sync every 6 hours
+  scheduler.scheduleSleeperSync();
 
   // Phase 5: Load all enabled reminders on startup
   (async () => {

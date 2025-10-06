@@ -289,6 +289,30 @@ export class Scheduler extends EventEmitter {
   unscheduleReminderJob(reminderId: string) {
     this.unschedule(`reminder_job_${reminderId}`);
   }
+
+  // Sleeper Settings Sync: Schedule automatic sync every 6 hours
+  scheduleSleeperSync() {
+    // Idempotent guard: stop existing task if already scheduled
+    if (this.tasks.has("sleeper_sync")) {
+      this.unschedule("sleeper_sync");
+    }
+
+    // Run every 6 hours at the top of the hour (0 */6 * * *)
+    const task = cron.createTask(
+      "0 */6 * * *",
+      () => {
+        this.emit("sleeper_sync_due");
+      },
+      {
+        timezone: "UTC"
+      }
+    );
+
+    this.tasks.set("sleeper_sync", task);
+    task.start();
+    
+    console.log("Scheduled Sleeper Settings Sync: every 6 hours (UTC)");
+  }
 }
 
 export const scheduler = new Scheduler();
