@@ -29,6 +29,7 @@ import { ContentService } from "./services/content";
 import { AuthService } from "./services/auth";
 import { DemoService } from "./services/demo";
 import { IdempotencyService } from "./services/idempotency";
+import { reportsService } from "./services/reports";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
 
@@ -186,6 +187,39 @@ const renderConstitutionSchema = z.object({
 });
 
 const getConstitutionSectionsSchema = z.object({
+  leagueId: z.string().uuid(),
+});
+
+// Zod schemas for Reports API endpoints
+const weeklyRecapSchema = z.object({
+  leagueId: z.string().uuid(),
+  week: z.string().regex(/^\d+$/).transform(Number),
+});
+
+const waiversReportSchema = z.object({
+  leagueId: z.string().uuid(),
+  week: z.string().regex(/^\d+$/).transform(Number),
+});
+
+const tradesDigestSchema = z.object({
+  leagueId: z.string().uuid(),
+});
+
+const tradesDigestQuerySchema = z.object({
+  week: z.string().regex(/^\d+$/).transform(Number).optional(),
+});
+
+const standingsReportSchema = z.object({
+  leagueId: z.string().uuid(),
+  season: z.string().min(4),
+});
+
+// Zod schemas for Sleeper Status API endpoints
+const sleeperStatusSchema = z.object({
+  leagueId: z.string().uuid(),
+});
+
+const sleeperSyncTriggerSchema = z.object({
   leagueId: z.string().uuid(),
 });
 
@@ -3243,6 +3277,266 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e) {
       console.error("[Get Constitution Sections]", e);
       res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get constitution sections" });
+    }
+  });
+
+  // ==================== Reports API Endpoints ====================
+
+  // GET /api/v2/reports/:leagueId/weekly/:week - Generate weekly recap report
+  app.get("/api/v2/reports/:leagueId/weekly/:week", async (req, res) => {
+    try {
+      const parsed = weeklyRecapSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid parameters",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId, week } = parsed.data;
+      
+      // Get league for validation
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      // Generate report
+      const markdown = await reportsService.generateWeeklyRecap(leagueId, week);
+      
+      res.json({ ok: true, markdown });
+    } catch (e) {
+      console.error("[Weekly Recap Report]", e);
+      res.status(500).json({ ok: false, code: "REPORT_FAILED", message: "Failed to generate weekly recap" });
+    }
+  });
+
+  // GET /api/v2/reports/:leagueId/waivers/:week - Generate waivers report
+  app.get("/api/v2/reports/:leagueId/waivers/:week", async (req, res) => {
+    try {
+      const parsed = waiversReportSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid parameters",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId, week } = parsed.data;
+      
+      // Get league for validation
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      // Generate report
+      const markdown = await reportsService.generateWaiversReport(leagueId, week);
+      
+      res.json({ ok: true, markdown });
+    } catch (e) {
+      console.error("[Waivers Report]", e);
+      res.status(500).json({ ok: false, code: "REPORT_FAILED", message: "Failed to generate waivers report" });
+    }
+  });
+
+  // GET /api/v2/reports/:leagueId/trades - Generate trades digest (optional ?week=X query param)
+  app.get("/api/v2/reports/:leagueId/trades", async (req, res) => {
+    try {
+      const parsedParams = tradesDigestSchema.safeParse(req.params);
+      if (!parsedParams.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid parameters",
+          errors: parsedParams.error.errors 
+        });
+      }
+
+      const parsedQuery = tradesDigestQuerySchema.safeParse(req.query);
+      if (!parsedQuery.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid query parameters",
+          errors: parsedQuery.error.errors 
+        });
+      }
+
+      const { leagueId } = parsedParams.data;
+      const { week } = parsedQuery.data;
+      
+      // Get league for validation
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      // Generate report
+      const markdown = await reportsService.generateTradesDigest(leagueId, week);
+      
+      res.json({ ok: true, markdown });
+    } catch (e) {
+      console.error("[Trades Digest]", e);
+      res.status(500).json({ ok: false, code: "REPORT_FAILED", message: "Failed to generate trades digest" });
+    }
+  });
+
+  // GET /api/v2/reports/:leagueId/standings/:season - Generate standings report
+  app.get("/api/v2/reports/:leagueId/standings/:season", async (req, res) => {
+    try {
+      const parsed = standingsReportSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid parameters",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId, season } = parsed.data;
+      
+      // Get league for validation
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      // Generate report
+      const markdown = await reportsService.generateStandingsReport(leagueId, season);
+      
+      res.json({ ok: true, markdown });
+    } catch (e) {
+      console.error("[Standings Report]", e);
+      res.status(500).json({ ok: false, code: "REPORT_FAILED", message: "Failed to generate standings report" });
+    }
+  });
+
+  // ==================== Sleeper Status API Endpoints ====================
+
+  // GET /api/v2/sleeper/:leagueId/status - Get Sleeper integration status
+  app.get("/api/v2/sleeper/:leagueId/status", async (req, res) => {
+    try {
+      const parsed = sleeperStatusSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid parameters",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId } = parsed.data;
+      
+      // Get league for validation
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      // Get Sleeper integration
+      const integration = await storage.getSleeperIntegration(leagueId);
+      if (!integration) {
+        return res.status(404).json({ ok: false, code: "NOT_LINKED", message: "Sleeper not linked to this league" });
+      }
+
+      // Get sync events to determine last sync time
+      const events = await storage.getEvents(leagueId, { type: "SLEEPER_SYNCED", limit: 1 });
+      const lastSync = events.length > 0 ? events[0].timestamp : null;
+
+      // Calculate sync health
+      let syncHealth = "unknown";
+      if (lastSync) {
+        const hoursSinceSync = (Date.now() - new Date(lastSync).getTime()) / (1000 * 60 * 60);
+        if (hoursSinceSync < 6) {
+          syncHealth = "healthy";
+        } else if (hoursSinceSync < 24) {
+          syncHealth = "stale";
+        } else {
+          syncHealth = "outdated";
+        }
+      }
+
+      // Get ETag cache status (if available in integration metadata)
+      const etags = (integration.metadata as any)?.etags || {};
+
+      res.json({ 
+        ok: true, 
+        lastSync,
+        etags,
+        syncHealth 
+      });
+    } catch (e) {
+      console.error("[Sleeper Status]", e);
+      res.status(500).json({ ok: false, code: "STATUS_FAILED", message: "Failed to get Sleeper status" });
+    }
+  });
+
+  // POST /api/v2/sleeper/:leagueId/sync - Trigger on-demand Sleeper sync
+  app.post("/api/v2/sleeper/:leagueId/sync", async (req, res) => {
+    try {
+      const parsed = sleeperSyncTriggerSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid parameters",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId } = parsed.data;
+      
+      // Get league for validation
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
+      }
+
+      // Check if Sleeper is linked
+      const integration = await storage.getSleeperIntegration(leagueId);
+      if (!integration) {
+        return res.status(404).json({ ok: false, code: "NOT_LINKED", message: "Sleeper not linked to this league" });
+      }
+
+      // Run sync
+      const settings = await runSleeperSync(leagueId);
+      
+      // Log sync event
+      await storage.createEvent({
+        type: "SLEEPER_SYNCED",
+        leagueId,
+        payload: { 
+          success: true,
+          source: "manual_trigger",
+          settings: settings
+        },
+      });
+      
+      res.json({ 
+        ok: true,
+        success: true,
+        synced: new Date().toISOString(),
+        changes: settings
+      });
+    } catch (e: any) {
+      console.error("[Sleeper Sync]", e);
+      
+      // Handle specific error cases
+      if (e.message === 'SLEEPER_NOT_LINKED') {
+        return res.status(404).json({ ok: false, code: "NOT_LINKED", message: "Sleeper not linked to this league" });
+      }
+      if (e.message === 'SLEEPER_LEAGUE_FETCH_FAILED') {
+        return res.status(502).json({ ok: false, code: "FETCH_FAILED", message: "Failed to fetch data from Sleeper API" });
+      }
+      
+      res.status(500).json({ ok: false, code: "SYNC_FAILED", message: "Failed to sync Sleeper data" });
     }
   });
 
