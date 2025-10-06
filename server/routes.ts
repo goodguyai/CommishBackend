@@ -3993,6 +3993,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           case "scoring":
             response = await handleScoringCommand(interaction, league!, requestId);
             break;
+          case "waivers":
+            response = await handleWaiversCommand(interaction, league!, requestId);
+            break;
+          case "playoffs":
+            response = await handlePlayoffsCommand(interaction, league!, requestId);
+            break;
+          case "roster":
+            response = await handleRosterCommand(interaction, league!, requestId);
+            break;
           case "help":
             response = await handleHelpCommand(interaction);
             break;
@@ -5643,6 +5652,31 @@ async function handleDeadlinesCommand(interaction: any, league: any, requestId: 
   }
 }
 
+// Helper function to merge base settings with overrides
+function mergeSettingsWithOverrides(
+  baseSettings: any,
+  overrides: any
+): { merged: any; overrideKeys: Set<string> } {
+  const overrideKeys = new Set<string>();
+  const merged: any = {};
+
+  // Deep merge each category
+  for (const category of ['scoring', 'roster', 'waivers', 'playoffs', 'trades', 'misc']) {
+    merged[category] = { ...(baseSettings?.[category] || {}) };
+    
+    if (overrides?.overrides?.[category]) {
+      for (const [key, value] of Object.entries(overrides.overrides[category])) {
+        if (value !== undefined && value !== merged[category][key]) {
+          merged[category][key] = value;
+          overrideKeys.add(`${category}.${key}`);
+        }
+      }
+    }
+  }
+
+  return { merged, overrideKeys };
+}
+
 async function handleScoringCommand(interaction: any, league: any, requestId: string) {
   const question = interaction.data?.options?.[0]?.value;
 
@@ -5657,20 +5691,40 @@ async function handleScoringCommand(interaction: any, league: any, requestId: st
       };
     }
 
-    const sleeperLeague = await sleeperService.getLeague(league.sleeperLeagueId);
-    const scoring = sleeperLeague.scoring_settings;
+    // Fetch base settings and overrides from storage
+    const baseSettings = await storage.getLeagueSettings(league.id);
+    const overrides = await storage.getLeagueSettingsOverrides(league.id);
+    
+    if (!baseSettings || !baseSettings.scoring) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "❌ No scoring settings found. Please sync your Sleeper league first.",
+          flags: 64,
+        },
+      };
+    }
+
+    const { merged, overrideKeys } = mergeSettingsWithOverrides(baseSettings, overrides);
+    const scoring = merged.scoring;
 
     // If no question, show summary
     if (!question) {
+      const scoringEntries = Object.entries(scoring)
+        .filter(([_, value]) => value !== 0)
+        .map(([key, value]) => {
+          const isOverridden = overrideKeys.has(`scoring.${key}`);
+          const label = key.replace(/_/g, ' ').toUpperCase();
+          return `${isOverridden ? '⚠️ ' : ''}**${label}**: ${value}${isOverridden ? ' (Override)' : ''}`;
+        })
+        .join('\n');
+
       const embed = {
         title: "🏈 Scoring Settings",
-        description: Object.entries(scoring)
-          .filter(([_, value]) => value !== 0)
-          .map(([key, value]) => `**${key.replace(/_/g, ' ').toUpperCase()}**: ${value}`)
-          .join('\n'),
+        description: scoringEntries || "No scoring settings configured",
         color: 0x10B981,
         footer: {
-          text: `${league.name} • Powered by Sleeper`,
+          text: `${league.name} • Last synced: ${baseSettings.updatedAt ? new Date(baseSettings.updatedAt).toLocaleString() : 'Unknown'}`,
         },
       };
 
@@ -5799,6 +5853,298 @@ async function handleScoringCommand(interaction: any, league: any, requestId: st
   }
 }
 
+async function handleWaiversCommand(interaction: any, league: any, requestId: string) {
+  try {
+    if (!league.sleeperLeagueId) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "❌ This league is not connected to Sleeper.",
+          flags: 64,
+        },
+      };
+    }
+
+    const baseSettings = await storage.getLeagueSettings(league.id);
+    const overrides = await storage.getLeagueSettingsOverrides(league.id);
+    
+    if (!baseSettings || !baseSettings.waivers) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "❌ No waiver settings found. Please sync your Sleeper league first.",
+          flags: 64,
+        },
+      };
+    }
+
+    const { merged, overrideKeys } = mergeSettingsWithOverrides(baseSettings, overrides);
+    const waivers = merged.waivers;
+
+    const fields = [];
+    
+    if (waivers.type) {
+      const isOverridden = overrideKeys.has('waivers.type');
+      fields.push({
+        name: `${isOverridden ? '⚠️ ' : ''}Type`,
+        value: `${waivers.type}${isOverridden ? ' (Override)' : ''}`,
+        inline: true,
+      });
+    }
+    
+    if (waivers.budget !== undefined) {
+      const isOverridden = overrideKeys.has('waivers.budget');
+      fields.push({
+        name: `${isOverridden ? '⚠️ ' : ''}Budget`,
+        value: `$${waivers.budget}${isOverridden ? ' (Override)' : ''}`,
+        inline: true,
+      });
+    }
+    
+    if (waivers.clear_day || waivers.clearDays) {
+      const isOverridden = overrideKeys.has('waivers.clear_day') || overrideKeys.has('waivers.clearDays');
+      const clearDay = waivers.clear_day || waivers.clearDays;
+      fields.push({
+        name: `${isOverridden ? '⚠️ ' : ''}Clear Days`,
+        value: `${clearDay}${isOverridden ? ' (Override)' : ''}`,
+        inline: true,
+      });
+    }
+    
+    if (waivers.run_day || waivers.runDay) {
+      const isOverridden = overrideKeys.has('waivers.run_day') || overrideKeys.has('waivers.runDay');
+      const runDay = waivers.run_day || waivers.runDay;
+      fields.push({
+        name: `${isOverridden ? '⚠️ ' : ''}Run Day`,
+        value: `${runDay}${isOverridden ? ' (Override)' : ''}`,
+        inline: true,
+      });
+    }
+
+    const embed = {
+      title: "💰 Waiver Settings",
+      description: fields.length > 0 ? undefined : "No waiver settings configured",
+      color: 0xF59E0B,
+      fields: fields.length > 0 ? fields : undefined,
+      footer: {
+        text: `${league.name} • Last synced: ${baseSettings.updatedAt ? new Date(baseSettings.updatedAt).toLocaleString() : 'Unknown'}`,
+      },
+    };
+
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        embeds: [embed],
+        flags: 64,
+      },
+    };
+  } catch (error) {
+    console.error("Waivers command failed:", error);
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Failed to fetch waiver settings. Please try again.",
+        flags: 64,
+      },
+    };
+  }
+}
+
+async function handlePlayoffsCommand(interaction: any, league: any, requestId: string) {
+  try {
+    if (!league.sleeperLeagueId) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "❌ This league is not connected to Sleeper.",
+          flags: 64,
+        },
+      };
+    }
+
+    const baseSettings = await storage.getLeagueSettings(league.id);
+    const overrides = await storage.getLeagueSettingsOverrides(league.id);
+    
+    if (!baseSettings || !baseSettings.playoffs) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "❌ No playoff settings found. Please sync your Sleeper league first.",
+          flags: 64,
+        },
+      };
+    }
+
+    const { merged, overrideKeys } = mergeSettingsWithOverrides(baseSettings, overrides);
+    const playoffs = merged.playoffs;
+
+    const fields = [];
+    
+    if (playoffs.teams !== undefined) {
+      const isOverridden = overrideKeys.has('playoffs.teams');
+      fields.push({
+        name: `${isOverridden ? '⚠️ ' : ''}Teams`,
+        value: `${playoffs.teams} teams${isOverridden ? ' (Override)' : ''}`,
+        inline: true,
+      });
+    }
+    
+    if (playoffs.start_week || playoffs.startWeek) {
+      const isOverridden = overrideKeys.has('playoffs.start_week') || overrideKeys.has('playoffs.startWeek');
+      const startWeek = playoffs.start_week || playoffs.startWeek;
+      fields.push({
+        name: `${isOverridden ? '⚠️ ' : ''}Start Week`,
+        value: `Week ${startWeek}${isOverridden ? ' (Override)' : ''}`,
+        inline: true,
+      });
+    }
+    
+    if (playoffs.bye_weeks !== undefined || playoffs.byeWeeks !== undefined) {
+      const isOverridden = overrideKeys.has('playoffs.bye_weeks') || overrideKeys.has('playoffs.byeWeeks');
+      const byeWeeks = playoffs.bye_weeks ?? playoffs.byeWeeks;
+      fields.push({
+        name: `${isOverridden ? '⚠️ ' : ''}Bye Weeks`,
+        value: `${byeWeeks}${isOverridden ? ' (Override)' : ''}`,
+        inline: true,
+      });
+    }
+
+    const embed = {
+      title: "🏆 Playoff Settings",
+      description: fields.length > 0 ? undefined : "No playoff settings configured",
+      color: 0xEF4444,
+      fields: fields.length > 0 ? fields : undefined,
+      footer: {
+        text: `${league.name} • Last synced: ${baseSettings.updatedAt ? new Date(baseSettings.updatedAt).toLocaleString() : 'Unknown'}`,
+      },
+    };
+
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        embeds: [embed],
+        flags: 64,
+      },
+    };
+  } catch (error) {
+    console.error("Playoffs command failed:", error);
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Failed to fetch playoff settings. Please try again.",
+        flags: 64,
+      },
+    };
+  }
+}
+
+async function handleRosterCommand(interaction: any, league: any, requestId: string) {
+  try {
+    if (!league.sleeperLeagueId) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "❌ This league is not connected to Sleeper.",
+          flags: 64,
+        },
+      };
+    }
+
+    const baseSettings = await storage.getLeagueSettings(league.id);
+    const overrides = await storage.getLeagueSettingsOverrides(league.id);
+    
+    if (!baseSettings || !baseSettings.roster) {
+      return {
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "❌ No roster settings found. Please sync your Sleeper league first.",
+          flags: 64,
+        },
+      };
+    }
+
+    const { merged, overrideKeys } = mergeSettingsWithOverrides(baseSettings, overrides);
+    const roster = merged.roster;
+
+    let description = '';
+    
+    // Build roster display
+    if (roster.positions && Array.isArray(roster.positions)) {
+      const positionCounts: Record<string, number> = {};
+      roster.positions.forEach((pos: string) => {
+        positionCounts[pos] = (positionCounts[pos] || 0) + 1;
+      });
+      
+      const positionLines = Object.entries(positionCounts).map(([pos, count]) => {
+        const isOverridden = overrideKeys.has(`roster.${pos.toLowerCase()}`);
+        return `${isOverridden ? '⚠️ ' : ''}**${pos}**: ${count}${isOverridden ? ' (Override)' : ''}`;
+      });
+      
+      description = positionLines.join('\n');
+    }
+    
+    const fields = [];
+    
+    if (roster.taxi !== undefined) {
+      const isOverridden = overrideKeys.has('roster.taxi');
+      fields.push({
+        name: `${isOverridden ? '⚠️ ' : ''}Taxi Squad`,
+        value: `${roster.taxi ? 'Enabled' : 'Disabled'}${isOverridden ? ' (Override)' : ''}`,
+        inline: true,
+      });
+    }
+    
+    if (roster.ir_slots !== undefined || roster.irSlots !== undefined) {
+      const isOverridden = overrideKeys.has('roster.ir_slots') || overrideKeys.has('roster.irSlots');
+      const irSlots = roster.ir_slots ?? roster.irSlots;
+      fields.push({
+        name: `${isOverridden ? '⚠️ ' : ''}IR Slots`,
+        value: `${irSlots}${isOverridden ? ' (Override)' : ''}`,
+        inline: true,
+      });
+    }
+    
+    if (roster.max_keep !== undefined || roster.maxKeep !== undefined) {
+      const isOverridden = overrideKeys.has('roster.max_keep') || overrideKeys.has('roster.maxKeep');
+      const maxKeep = roster.max_keep ?? roster.maxKeep;
+      if (maxKeep !== null) {
+        fields.push({
+          name: `${isOverridden ? '⚠️ ' : ''}Keeper Spots`,
+          value: `${maxKeep}${isOverridden ? ' (Override)' : ''}`,
+          inline: true,
+        });
+      }
+    }
+
+    const embed = {
+      title: "📋 Roster Settings",
+      description: description || "No roster settings configured",
+      color: 0x3B82F6,
+      fields: fields.length > 0 ? fields : undefined,
+      footer: {
+        text: `${league.name} • Last synced: ${baseSettings.updatedAt ? new Date(baseSettings.updatedAt).toLocaleString() : 'Unknown'}`,
+      },
+    };
+
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        embeds: [embed],
+        flags: 64,
+      },
+    };
+  } catch (error) {
+    console.error("Roster command failed:", error);
+    return {
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "❌ Failed to fetch roster settings. Please try again.",
+        flags: 64,
+      },
+    };
+  }
+}
+
 async function handleHelpCommand(interaction: any) {
   const embed = {
     title: "👑 THE COMMISH - Command Help",
@@ -5818,6 +6164,21 @@ async function handleHelpCommand(interaction: any) {
       {
         name: "🏈 /scoring [question]",
         value: "Display scoring settings or ask scoring questions with AI",
+        inline: false,
+      },
+      {
+        name: "💰 /waivers",
+        value: "Display waiver settings (type, budget, clear days)",
+        inline: false,
+      },
+      {
+        name: "🏆 /playoffs",
+        value: "Display playoff settings (teams, start week, bye weeks)",
+        inline: false,
+      },
+      {
+        name: "📋 /roster",
+        value: "Display roster settings (positions, IR slots, taxi squad)",
         inline: false,
       },
       {

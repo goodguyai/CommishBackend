@@ -440,6 +440,18 @@ export class DiscordService {
         ],
       },
       {
+        name: "waivers",
+        description: "Display waiver settings",
+      },
+      {
+        name: "playoffs",
+        description: "Display playoff settings",
+      },
+      {
+        name: "roster",
+        description: "Display roster settings",
+      },
+      {
         name: "help",
         description: "Show command help and usage examples",
       },
