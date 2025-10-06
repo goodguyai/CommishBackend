@@ -10,6 +10,7 @@ import { CheckCircle, Loader2, ExternalLink, AlertCircle, RefreshCw } from 'luci
 import { api } from '@/lib/apiApp';
 import { toast } from 'sonner';
 import confetti from 'canvas-confetti';
+import { supabase } from '@/lib/supabase';
 
 type Step = 'account' | 'discord' | 'sleeper' | 'rules' | 'complete';
 
@@ -66,7 +67,12 @@ export function OnboardingPage() {
   // Account creation state
   const [accountEmail, setAccountEmail] = useState('');
   const [accountName, setAccountName] = useState('');
+  const [accountPassword, setAccountPassword] = useState('');
+  const [accountPasswordConfirm, setAccountPasswordConfirm] = useState('');
   const [isCreatingAccount, setIsCreatingAccount] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [needsEmailConfirmation, setNeedsEmailConfirmation] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
 
   useEffect(() => {
     const checkResumeState = async () => {
@@ -405,14 +411,110 @@ export function OnboardingPage() {
     setCurrentStep('rules');
   };
 
+  const handleSignIn = async () => {
+    if (!accountEmail.trim() || !accountPassword) {
+      toast.error('Please enter your email and password');
+      return;
+    }
+
+    setIsSigningIn(true);
+    setPasswordError(null);
+    
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: accountEmail,
+        password: accountPassword,
+      });
+
+      if (error) {
+        toast.error(error.message || 'Failed to sign in');
+        setPasswordError(error.message || 'Failed to sign in');
+        return;
+      }
+
+      if (!data.user || !data.session?.access_token) {
+        toast.error('Sign in failed - no session returned');
+        setPasswordError('Sign in failed');
+        return;
+      }
+
+      try {
+        await api('/api/auth/session', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${data.session.access_token.trim()}`,
+          },
+        });
+
+        const user = await api<{ userId: string; accountId: string }>('/api/app/me');
+        if (user.accountId) {
+          setAccountId(user.accountId);
+          setNeedsEmailConfirmation(false);
+          toast.success('Signed in successfully!');
+          setCurrentStep('discord');
+        } else {
+          toast.error('Account not found. Please contact support.');
+        }
+      } catch (e: any) {
+        console.error('[Session Exchange]', e);
+        toast.error('Failed to establish session');
+        setPasswordError('Failed to establish session');
+      }
+    } catch (e: any) {
+      console.error('[Sign In]', e);
+      const errorMsg = e.message || 'Failed to sign in';
+      toast.error(errorMsg);
+      setPasswordError(errorMsg);
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
   const handleCreateAccount = async () => {
+    setPasswordError(null);
+
     if (!accountEmail.trim() || !accountName.trim()) {
       toast.error('Please provide your email and name');
       return;
     }
 
+    if (!accountPassword || !accountPasswordConfirm) {
+      setPasswordError('Please enter and confirm your password');
+      toast.error('Please enter and confirm your password');
+      return;
+    }
+
+    if (accountPassword.length < 8) {
+      setPasswordError('Password must be at least 8 characters');
+      toast.error('Password must be at least 8 characters');
+      return;
+    }
+
+    if (accountPassword !== accountPasswordConfirm) {
+      setPasswordError('Passwords do not match');
+      toast.error('Passwords do not match');
+      return;
+    }
+
     setIsCreatingAccount(true);
     try {
+      const { data, error } = await supabase.auth.signUp({
+        email: accountEmail,
+        password: accountPassword,
+      });
+
+      if (error) {
+        toast.error(error.message || 'Failed to create account');
+        setPasswordError(error.message || 'Failed to create account');
+        return;
+      }
+
+      if (!data.user) {
+        toast.error('Signup failed - no user returned');
+        setPasswordError('Signup failed');
+        return;
+      }
+
       const result = await api<{ ok: boolean; accountId: string }>(
         '/api/v2/setup/account',
         {
@@ -420,18 +522,40 @@ export function OnboardingPage() {
           body: JSON.stringify({
             email: accountEmail,
             name: accountName,
+            supabaseUserId: data.user.id,
           }),
         }
       );
 
       if (result.ok && result.accountId) {
         setAccountId(result.accountId);
-        toast.success('Account created!');
+
+        if (data.session?.access_token) {
+          try {
+            await api('/api/auth/session', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${data.session.access_token.trim()}`,
+              },
+            });
+            toast.success('Account created successfully!');
+          } catch (sessionError) {
+            console.error('[Session Exchange]', sessionError);
+            toast.info('Account created! You can sign in after confirming your email.');
+            setNeedsEmailConfirmation(true);
+          }
+        } else {
+          setNeedsEmailConfirmation(true);
+          toast.info('Please check your email to verify your account. You can continue setup anyway.');
+        }
+        
         setCurrentStep('discord');
       }
-    } catch (e) {
-      toast.error('Failed to create account');
-      console.error(e);
+    } catch (e: any) {
+      console.error('[Create Account]', e);
+      const errorMsg = e.message || 'Failed to create account';
+      toast.error(errorMsg);
+      setPasswordError(errorMsg);
     } finally {
       setIsCreatingAccount(false);
     }
@@ -583,9 +707,45 @@ export function OnboardingPage() {
                   />
                 </div>
 
+                <div>
+                  <Label className="text-[#F5F7FA]">Password</Label>
+                  <Input
+                    type="password"
+                    value={accountPassword}
+                    onChange={(e) => {
+                      setAccountPassword(e.target.value);
+                      setPasswordError(null);
+                    }}
+                    placeholder="At least 8 characters"
+                    className="bg-[#1f2937] border-[#374151] text-[#F5F7FA]"
+                    data-testid="input-account-password"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-[#F5F7FA]">Confirm Password</Label>
+                  <Input
+                    type="password"
+                    value={accountPasswordConfirm}
+                    onChange={(e) => {
+                      setAccountPasswordConfirm(e.target.value);
+                      setPasswordError(null);
+                    }}
+                    placeholder="Re-enter your password"
+                    className="bg-[#1f2937] border-[#374151] text-[#F5F7FA]"
+                    data-testid="input-account-password-confirm"
+                  />
+                </div>
+
+                {passwordError && (
+                  <div className="bg-red-900/20 border border-red-500 rounded p-3" data-testid="error-password">
+                    <p className="text-red-400 text-sm">{passwordError}</p>
+                  </div>
+                )}
+
                 <Button
                   onClick={handleCreateAccount}
-                  disabled={isCreatingAccount || !accountEmail.trim() || !accountName.trim()}
+                  disabled={isCreatingAccount || !accountEmail.trim() || !accountName.trim() || !accountPassword || !accountPasswordConfirm}
                   className="w-full"
                   data-testid="button-create-account"
                 >
@@ -596,6 +756,32 @@ export function OnboardingPage() {
                     </>
                   ) : (
                     'Continue'
+                  )}
+                </Button>
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-[#374151]" />
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-2 bg-[#111820] text-[#6B7280]">Already have an account?</span>
+                  </div>
+                </div>
+
+                <Button
+                  onClick={handleSignIn}
+                  disabled={isSigningIn || !accountEmail.trim() || !accountPassword}
+                  variant="outline"
+                  className="w-full"
+                  data-testid="button-sign-in"
+                >
+                  {isSigningIn ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Signing In...
+                    </>
+                  ) : (
+                    'Sign In'
                   )}
                 </Button>
               </div>
