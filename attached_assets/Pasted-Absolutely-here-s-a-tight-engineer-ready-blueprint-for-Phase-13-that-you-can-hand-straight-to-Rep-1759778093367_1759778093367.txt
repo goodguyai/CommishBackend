@@ -1,0 +1,288 @@
+Absolutely—here’s a tight, engineer-ready blueprint for “Phase 13” that you can hand straight to Replit Agent as the next pass. It’s organized into five workstreams with concrete deliverables, API contracts, schema, Discord commands, UX, and tests. Everything is additive and health-first (no breaking existing flows).
+
+⸻
+
+THE COMMISH — Phase 13 Work Order (Next Pass)
+
+Core Goals
+	1.	Mirror Sleeper league settings ↔ Constitution (safe, reversible).
+	2.	Add message-level behaviors (smart reactions policy).
+	3.	Controlled @everyone announcements with guardrails.
+	4.	DeepSeek function-calling for explain/recap Q&A with RAG.
+	5.	Background job safety: rate-limits, retries, idempotency, and visibility.
+
+Deliverables are grouped as: schema → backend services → API/contracts → Discord commands → UI/UX → tests/acceptance.
+
+⸻
+
+13.1 Sleeper → Constitution Sync (reversible “proposed changes”)
+
+Schema (idempotent)
+
+-- Tracks calculated diffs before applying to Constitution
+CREATE TABLE IF NOT EXISTS constitution_drafts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id uuid NOT NULL,
+  source text NOT NULL,                   -- 'sleeper-sync'
+  status text NOT NULL DEFAULT 'PENDING', -- PENDING | APPLIED | REJECTED | EXPIRED
+  proposed jsonb NOT NULL,                -- proposed changes object
+  created_at timestamptz DEFAULT now(),
+  applied_at timestamptz
+);
+
+-- Optional: store last applied mapping checksum for quick detect
+ALTER TABLE sleeper_integrations
+  ADD COLUMN IF NOT EXISTS last_settings_hash text;
+
+Mapping Table (server/services/sleeperMapping.ts)
+
+Define a deterministic map of Sleeper settings → Constitution clauses:
+
+export const sleeperToConstitutionMap = {
+  // settingKey: { pathInConstitution, transform, label }
+  playoff_teams: { path: "Playoffs.team_count", label: "Playoff Teams" },
+  playoff_round_type: { path: "Playoffs.round_type", label: "Playoff Round Type" },
+  trade_deadline: { path: "Trades.deadline_week", label: "Trade Deadline (week)" },
+  waiver_type: { path: "Waivers.type", label: "Waiver Type" },
+  keeper_count: { path: "Keepers.count", label: "Keeper Count" },
+  scoring_settings: { path: "Scoring", label: "Scoring Settings" },
+  roster_positions: { path: "Roster.positions", label: "Roster Positions" },
+  // add more as needed
+} as const;
+
+Backend Services
+	•	SleeperDiffService.buildDraft(leagueId)
+	•	Pull sleeper_integrations.settings + current Constitution JSON (or clauses DB).
+	•	Compute diff (additions/updates/removals) using map above.
+	•	Create constitution_drafts(PENDING) with proposed payload, and return a render-ready diff summary + checksum.
+	•	SleeperDiffService.applyDraft(draftId, actor)
+	•	Apply proposed changes into Constitution store (your current rules storage).
+	•	Set status=APPLIED, applied_at=now(), write audit bot_activity(kind='CONSTITUTION_APPLY').
+
+API (backend)
+
+// POST /api/constitution/drafts/sleeper/:leagueId (build)
+=> 200 { draftId, summary: { items:[{label, from, to, path}] }, checksum }
+
+// POST /api/constitution/drafts/:draftId/apply
+=> 200 { ok:true, appliedAt }
+
+// POST /api/constitution/drafts/:draftId/reject
+=> 200 { ok:true, status:'REJECTED' }
+
+// GET /api/constitution/drafts/:leagueId
+=> 200 { items: [ { id, status, created_at, summary } ] }
+
+Discord Commands
+	•	/constitution draft → generate Sleeper->Constitution proposed changes; respond with short summary + dashboard link.
+	•	/constitution apply <draft_id> → privileged (commissioner) apply.
+	•	/constitution reject <draft_id> → privileged reject.
+
+UI/UX (Dashboard)
+	•	League → Constitution → “Proposed Changes” tab
+	•	Table: Label | Before | After | Path | [Apply] [Reject] buttons.
+	•	Show source “Sleeper Sync”, draft timestamp, and checksum.
+	•	Toasts and optimistic updates; never auto-apply.
+
+Tests / Acceptance
+	•	Build draft: If Sleeper settings change, a PENDING draft is created with correct diff items.
+	•	Apply: Applying updates Constitution, persists APPLIED status, emits bot_activity.
+	•	Idempotence: Rebuilding with same hash yields 0 changes.
+
+⸻
+
+13.2 Message-Level Behaviors: Reactions Policy
+
+Schema
+
+ALTER TABLE leagues
+  ADD COLUMN IF NOT EXISTS reaction_policy jsonb
+  DEFAULT jsonb_build_object(
+    'enabled', false,
+    'filters', jsonb_build_array(
+      jsonb_build_object('kind','sentiment','gte',0.6,'react','👍'),
+      jsonb_build_object('kind','keyword','include',['gg','nice'],'react','❤️')
+    ),
+    'rate', jsonb_build_object('per_min', 8, 'burst', 5)
+  );
+
+Backend Service
+	•	ReactionPolicy.evaluate(message) → returns null or {emoji:'👍'}.
+	•	Rate-limit guard per guild/channel using token-bucket (Redis-less in-process bucket is OK to start; later: Upstash/Redis).
+
+Discord Gateway
+	•	On MESSAGE_CREATE (non-bot):
+	•	Load league’s reaction_policy.
+	•	Evaluate sentiment (basic: OpenAI “text-embedding-3-small” + tiny heuristic, or simpler regex to start).
+	•	If allowed & within rate, PUT /channels/{channel.id}/messages/{message.id}/reactions/{emoji}/@me.
+
+UI/UX (Dashboard)
+	•	Automation → Reactions Policy toggle + editor:
+	•	Enable, filters table (kind=sentiment/keyword/author), threshold/keywords, result emoji.
+	•	Rate limit configuration (per_min, burst).
+	•	“Test policy” action: paste sentence → preview emoji decision.
+
+Tests / Acceptance
+	•	When enabled and message matches filter, bot reacts once; otherwise not.
+	•	Respects rate limits (no spam).
+	•	Disabled flag fully suppresses reactions.
+
+⸻
+
+13.3 Controlled @everyone Announcements
+
+Schema
+
+ALTER TABLE leagues
+  ADD COLUMN IF NOT EXISTS announce_policy jsonb
+  DEFAULT jsonb_build_object(
+    'enabled', true,
+    'cooldown_sec', 86400,   -- 1/day
+    'allow_roles', ['Commissioner'],
+    'require_confirm', true
+  );
+
+Backend
+	•	AnnounceService.canAnnounce(leagueId, actor) → check cooldown & role.
+	•	AnnounceService.post(leagueId, channelId, content, mention='@everyone'|'@here'|roleId)
+	•	Logs bot_activity(kind='ANNOUNCE', status='SUCCEEDED/FAILED').
+	•	Schedules future (optional) with node-cron using idempotency keys announce:${leagueId}:${hash(content)}.
+
+Discord Commands
+	•	/announce preview text:<content> → returns preview and policy status.
+	•	/announce send text:<content> mention:<@everyone/@here/@role> → privileged; respects cooldown; if require_confirm, responds with a button (“Confirm send”) to proceed.
+
+UI/UX (Dashboard)
+	•	Automation → Announcements
+	•	Policy settings (cooldown, allowed roles, require confirmation).
+	•	“Send announcement” form with live preview, mentions selector, and a visible cooldown indicator.
+
+Tests / Acceptance
+	•	Cooldown enforced per league.
+	•	Only allowed roles can send.
+	•	Confirm flow works when required.
+	•	Activities visible in dashboard’s Activity feed.
+
+⸻
+
+13.4 DeepSeek Function-Calling for Explain/Recap (with RAG)
+
+Tooling & Contracts
+
+Define standardized tools for LLM to call:
+
+// server/ai/tools.ts
+export const tools = {
+  fetch_rule: {
+    description: "Get constitution rule/section by path or keyword",
+    parameters: { type: "object", properties: { query: { type: "string" }}, required:["query"] }
+  },
+  fetch_setting: {
+    description: "Get current league setting (from Sleeper sync)",
+    parameters: { type: "object", properties: { key: { type: "string" }}, required:["key"] }
+  },
+  summarize_thread: {
+    description: "Summarize latest N messages in a channel",
+    parameters: { type: "object", properties: { channelId: {type:"string"}, limit: {type:"integer"}}, required:["channelId"] }
+  },
+  generate_recap: {
+    description: "Create a league weekly recap using standings/sleeper data + top highlights",
+    parameters: { type: "object", properties: { week:{type:"integer"}}, required:["week"] }
+  }
+};
+
+Backend Endpoints
+
+// POST /api/ai/ask   { leagueId, question }
+=> streams an answer; under the hood: RAG retrieve(rag_docs), tool calls via DeepSeek function-calling.
+
+// POST /api/ai/recap { leagueId, week? }
+=> returns markdown + embeds; stored in bot_activity; can auto-post to Discord with /announce guard.
+
+RAG Integration
+	•	Use existing rag_docs as corpus.
+	•	Retriever: cosine on embeddings (1536D), top-k=8, windowed merges.
+	•	Prompt: system prompt with league persona + “Use tools when asked about precise rules or settings”.
+	•	Cache: 5–15 min result cache keyed by (leagueId, questionHash).
+
+Discord Commands
+	•	/ask question:<text> → tool-calling path; short answer + “show sources” button.
+	•	/explain-rule query:<text> → rule lookup + plain English explanation.
+	•	/recap week:<number> → generates recap; offers “Send to #channel” button (flows into announce policy).
+
+UI/UX
+	•	AI → Q&A: input with streaming answer + “Insert sources” toggle.
+	•	AI → Recaps: dropdown by week → preview markdown + “Post to Discord” button.
+
+Tests / Acceptance
+	•	Tools resolve properly (e.g., fetch_setting('waiver_type') returns current mapped value).
+	•	RAG retrieves relevant docs and cites sources.
+	•	Recap generation succeeds with league data present; announcement respects policy.
+
+⸻
+
+13.5 Background Job Safety: Rate-Limits, Retries, Idempotency, Visibility
+
+Rate-Limiters
+	•	Create a simple token bucket per leagueId:feature in memory:
+	•	ratelimit.acquire(key, cost=1) returns boolean.
+	•	Keys: react:${guildId}, announce:${leagueId}, ingest:${leagueId}, sleeper:${leagueId}.
+	•	Configurable via features JSON per league.
+
+Retries & Backoff
+	•	Wrap external calls (Discord, Sleeper, OpenAI/DeepSeek) with:
+	•	MAX_RETRIES=3, BASE_DELAY=500ms, jittered exponential (delay = base * 2^attempt * (1 + rand(0,0.3))).
+	•	Only retry on transient HTTP 429/5xx and network errors.
+
+Idempotency
+	•	All scheduled and command handlers compute an idempotency key (e.g., kind + leagueId + hash(payload)), stored in bot_activity.key.
+	•	Executors must check for status='SUCCEEDED' with same key before executing again.
+
+Visibility
+	•	Extend /api/dashboard/activity/:leagueId to include key and request_id.
+	•	Add simple Ops → Jobs page: filters by kind/status, retry buttons (admin only).
+
+Tests / Acceptance
+	•	Reaction flood prevented by limiter.
+	•	Retries occur on 429 until success or max attempts; logs show backoff.
+	•	Duplicate recap job with same key is skipped.
+
+⸻
+
+End-to-End Acceptance (Phase 13)
+	1.	Sleeper→Constitution
+	•	Change a Sleeper setting → “Proposed Changes” contains correct diff → Apply updates rules → Activity shows APPLY.
+	2.	Reactions
+	•	Enable policy; post “gg” → bot ❤️ once; exceeds per-minute → suppressed.
+	3.	Announcements
+	•	Non-commissioner blocked; commissioner passes; second send within cooldown blocked.
+	4.	AI Q&A & Recap
+	•	/explain-rule cites correct section (via RAG).
+	•	/recap week:5 produces markdown preview; posting honors announce policy.
+	5.	Safety
+	•	429 from Discord → retried with backoff; no duplicates thanks to idempotency; activity feed shows attempts.
+
+⸻
+
+Delivery Order (safe, incremental)
+	1.	13.5 Safety layer (limiters/retries/idempotency) – foundation.
+	2.	13.1 Sleeper→Constitution drafts (backend + UI).
+	3.	13.2 Reactions policy (minimal viable: keyword + rate-limit).
+	4.	13.3 Announce policy (cooldown + confirm).
+	5.	13.4 DeepSeek tools + RAG plumbing (then commands & UI).
+	6.	Polish & tests (Playwright + API tests).
+
+⸻
+
+Minimal Code Stubs To Create
+	•	server/services/sleeperMapping.ts (map + diff helpers)
+	•	server/services/constitutionDrafts.ts (build/apply/reject)
+	•	server/services/reactionPolicy.ts (evaluate + rate-limit)
+	•	server/services/announceService.ts (policy + post + schedule)
+	•	server/ai/tools.ts and server/ai/agent.ts (DeepSeek function-calling adapter)
+	•	client/src/pages/ConstitutionDrafts.tsx (UI)
+	•	Dashboard sections: Automation → Reactions, Automation → Announcements, AI → Q&A/Recaps
+
+⸻
+
+If you want, I can follow this with patch-ready snippets (file-level diffs) for each stub and the new endpoints. This plan keeps everything reversible and protects production health while leveling up the feature set you asked for.

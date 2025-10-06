@@ -1,0 +1,215 @@
+Perfect. Here’s the next-phase execution blueprint—this is Phase 13 Implementation + Patch Plan, written so Replit Agent (or your personal engineer) can execute it cleanly with zero regressions.
+Everything below is production-safe, idempotent, and designed for incremental PRs.
+
+⸻
+
+🧩 THE COMMISH Phase 13 Implementation Plan
+
+“Stabilize → Expand → Delight” — add Sleeper ↔ Constitution sync, reactions, announcements, AI Q&A/recaps, and bullet-proof background safety.
+
+⸻
+
+0️⃣ Foundations (Safety First)
+
+Objective: tighten guardrails before adding new behavior.
+
+Step	File	Action
+0.1	server/lib/rateLimiter.ts	Add generic token-bucket limiter → used by all jobs.
+0.2	server/lib/retry.ts	Utility withRetry(fn, opts) for exponential backoff on 429/5xx.
+0.3	server/services/idempotency.ts	Augment with hasSucceeded(key) and mark(key,status,detail).
+0.4	server/routes.ts	Wrap all background jobs (Sleeper sync, announce, reaction) with withRetry + idempotency.
+0.5	/api/_debug/health	Expose limiter stats & retry counts for observability.
+
+✅ After this commit: no duplicate posts, retries logged, rate-limit safe.
+
+⸻
+
+1️⃣ Sleeper → Constitution Drafts (Reversible Sync)
+
+Backend Files
+	•	server/services/sleeperMapping.ts
+	•	server/services/constitutionDrafts.ts
+	•	server/routes/constitutionDrafts.ts
+
+// constitutionDrafts.ts (core)
+export async function buildDraft(leagueId: string) {
+  const sleeper = await SleeperService.getSettings(leagueId);
+  const constitution = await ConstitutionStore.get(leagueId);
+  const diff = DiffEngine.compare(sleeper, constitution, sleeperToConstitutionMap);
+  const draft = await db.insert(constitutionDrafts).values({
+    league_id: leagueId, source: 'sleeper-sync', proposed: diff, status: 'PENDING'
+  }).returning();
+  return draft[0];
+}
+
+Frontend Files
+	•	client/src/pages/ConstitutionDrafts.tsx
+	•	client/src/components/DraftDiffTable.tsx
+
+✅ Adds “Proposed Changes” tab under Constitution with Apply/Reject buttons.
+
+⸻
+
+2️⃣ Reactions Policy (“League Mood” Automation)
+
+Files
+	•	server/services/reactionPolicy.ts → evaluates sentiment/keywords.
+	•	server/discord/events/messageCreate.ts → calls ReactionPolicy.evaluate() + rate check.
+	•	client/src/pages/AutomationReactions.tsx → dashboard editor UI.
+
+Minimal start:
+
+// evaluate(message)
+if (!policy.enabled) return null;
+if (message.content.match(/\b(gg|nice|good game)\b/i)) return '❤️';
+if (sentimentScore(message.content) > 0.6) return '👍';
+return null;
+
+✅ Bot adds ❤️/👍 sparingly per policy + rate limits.
+
+⸻
+
+3️⃣ Controlled Announcements (@everyone Guardrail)
+
+Backend
+	•	server/services/announceService.ts
+	•	canAnnounce() checks cooldown & role.
+	•	post() wraps Discord send → with withRetry.
+	•	Routes: /api/announce/preview & /api/announce/send.
+
+Discord Command
+
+/announce preview text:<string>
+/announce send text:<string> mention:<@everyone|@here|role>
+
+UI
+
+client/src/pages/AutomationAnnouncements.tsx → form with cooldown indicator + confirmation modal.
+
+✅ Safe mass mentions without spam.
+
+⸻
+
+4️⃣ DeepSeek AI Tools + Recaps (Q&A + LLM actions)
+
+Backend
+	•	server/ai/tools.ts – tool definitions (fetch_rule, fetch_setting, summarize_thread, generate_recap).
+	•	server/ai/agent.ts – DeepSeek function-calling adapter with RAG retrieval.
+	•	Routes:
+	•	POST /api/ai/ask  → streamed answer + citations.
+	•	POST /api/ai/recap → markdown recap + auto-announce.
+
+Discord Commands
+
+/ask question:<text>
+/explain-rule query:<text>
+/recap week:<int>
+
+UI
+
+client/src/pages/AIAsk.tsx and AIRecaps.tsx with streaming answers + “Post to Discord” button.
+
+✅ Users can query rules and generate weekly recaps instantly.
+
+⸻
+
+5️⃣ Dashboard Enhancements & Ops Visibility
+
+Area	Feature
+Activity Feed	Show key, request_id, and retry count.
+Automation Tab	Two new subpages (Reactions + Announcements).
+AI Tab	Q&A and Recaps sections.
+Constitution Tab	“Proposed Changes” review UI.
+Ops Tab	View background jobs, retries, status, force-retry (admin).
+
+✅ Gives commissioners transparency and control.
+
+⸻
+
+6️⃣ Tests & Acceptance Suite (Playwright + API)
+
+Scenario	Expectation
+Sleeper settings change → draft appears → apply updates rules	✅
+Message “gg” triggers ❤️ once then rate-limited	✅
+@everyone announce cooldown enforced & confirm required	✅
+/ask returns rule summary with citations	✅
+Duplicate recap job skipped by idempotency	✅
+
+
+⸻
+
+7️⃣ Rollout Order (Safe Merge Sequence)
+
+1️⃣ Merge Foundations (0).
+2️⃣ Merge Sleeper Drafts (1) → migrate DB.
+3️⃣ Merge Reactions Policy (2).
+4️⃣ Merge Announcements (3).
+5️⃣ Merge AI Tools + Recaps (4).
+6️⃣ Merge Dashboard Enhancements (5).
+7️⃣ Run Tests Suite (6) → tag v13.0.0.
+
+⸻
+
+8️⃣ Environment Checklist (Replit Secrets)
+
+Frontend	Backend	Notes
+VITE_SUPABASE_URL = https://igibosrsftdcxljkygjw.supabase.co ✅	SUPABASE_URL same ✅	Never use JWT here.
+VITE_SUPABASE_ANON_KEY = eyJhbGci... ✅	SUPABASE_SERVICE_ROLE_KEY ✅	Correct pair.
+DISCORD_BOT_TOKEN ✅	DISCORD_CLIENT_ID ✅	DISCORD_PUBLIC_KEY ✅
+DEEPSEEK_API_KEY ✅	OPENAI_API_KEY ✅	For RAG + LLM.
+APP_BASE_URL = https://thecommish.replit.app ✅	ADMIN_KEY ✅	Stable URL.
+
+After setting, click “Restart App”. Verify logs:
+
+✅ Environment validation passed
+🎮 Discord Client ready
+Scheduled Sleeper Settings Sync: every 6 hours (UTC)
+
+
+⸻
+
+9️⃣ Key Logs to Monitor
+
+Subsystem	Success Line	Error Line
+Discord	🎮 Client ready	DISCORD_ERROR (code 50035) → guild_id type fix in next commit (BigInt(snowflake)).
+Sleeper Sync	[SleeperSync] Applied 0/ N changes	API 429 → will retry.
+AI Agent	[DeepSeek] tool call: fetch_rule	LLM error → graceful fallback.
+
+
+⸻
+
+🔧 Deliverable Artifacts to Create
+
+File	Purpose
+/server/services/sleeperMapping.ts	Static mapping table for Sleeper settings.
+/server/services/constitutionDrafts.ts	CRUD for drafts + apply/reject.
+/server/services/reactionPolicy.ts	Evaluate and rate-limit reactions.
+/server/services/announceService.ts	Handle @everyone policy + cooldown.
+/server/ai/tools.ts	DeepSeek tool definitions.
+/server/ai/agent.ts	Function-calling RAG agent.
+/client/src/pages/ConstitutionDrafts.tsx	Draft UI.
+/client/src/pages/AutomationReactions.tsx	Reactions UI.
+/client/src/pages/AutomationAnnouncements.tsx	Announcements UI.
+/client/src/pages/AIAsk.tsx & AIRecaps.tsx	AI tools UI.
+
+
+⸻
+
+✅ Final Acceptance Criteria
+	•	No 500 errors in setup flow.
+	•	Sleeper settings round-trip visible as drafts.
+	•	Dashboard modules load real data (no mock calls).
+	•	Discord bot reacts, announces, answers, recaps appropriately.
+	•	All background tasks visible in Ops tab and idempotent.
+	•	All .env variables correct and validated.
+
+⸻
+
+🧠 Summary to Send Replit Agent
+
+“Please implement Phase 13 of THE COMMISH per attached blueprint. Follow the order (0→6), create listed files, migrate schema, and verify each feature without breaking existing flows. All changes must be idempotent, rate-limited, and RAG-compatible. Maintain current environment variables and use the provided Supabase project URL.”
+
+⸻
+
+Would you like me to now produce the actual file-by-file patch set (code snippets ready to drop into Replit files)?
+That would let you copy-paste or directly instruct Replit Agent line-by-line.
