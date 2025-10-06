@@ -1,0 +1,513 @@
+You’re right—the Sleeper side needs to be first-class: pull league settings reliably, keep them in Supabase, surface them on the dashboard, let commissioners override, auto-generate/refresh constitution clauses, and drive bot behavior in Discord based on the live config.
+
+Below is a complete, end-to-end Sleeper Sync Blueprint you can hand to Replit. It includes DB schema, server services, API contracts, Discord command behavior, constitution templating, jobs, and tests. I’ve written the contracts and code in a way that drops into your current stack (Express + Supabase + React + your existing request/observability patterns).
+
+⸻
+
+Sleeper Sync — Work Order
+
+Goals (what “done” looks like)
+	1.	Link Sleeper league to a Commish league (store sleeper_league_id, season, sport).
+	2.	Ingest settings from Sleeper (scoring, roster, waivers, playoffs, trades, IR, taxi, etc.).
+	3.	Normalize & version settings in Supabase (diffs, history, who/when).
+	4.	Constitution bridge: generate/update clauses from settings (templated variables → rendered sections), and re-index into RAG.
+	5.	Dashboard shows current Sleeper state, deltas, and “apply to constitution” with preview.
+	6.	Discord bot reflects settings (e.g., /scoring, /waivers, /playoffs, /roster) and posts alerts when settings change.
+	7.	Bidirectional constraints: user can flip a toggle in dashboard → it updates the constitution, but never pretends to push into Sleeper (Sleeper API is read-only for settings). We model commissioner overrides that the bot/constitution respects if they differ from Sleeper.
+	8.	Reliability: rate-limit discipline, idempotent syncs, retries, and full audit logs.
+
+⸻
+
+Data Model (Supabase)
+
+-- 1) Link a commish league to Sleeper league
+create table if not exists sleeper_integrations (
+  id uuid primary key default gen_random_uuid(),
+  league_id uuid not null references leagues(id) on delete cascade,
+  sleeper_league_id text not null,
+  season text not null,
+  sport text not null default 'nfl',
+  username text,             -- user handle used during discovery
+  created_at timestamp default now(),
+  unique (league_id),
+  unique (sleeper_league_id, season)
+);
+
+-- 2) Raw snapshots from Sleeper (for provenance & diffs)
+create table if not exists sleeper_settings_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  league_id uuid not null references leagues(id) on delete cascade,
+  fetched_at timestamp not null default now(),
+  source text not null default 'sleeper',
+  payload jsonb not null
+);
+
+-- 3) Canonical normalized settings we actually use
+create table if not exists league_settings (
+  league_id uuid primary key references leagues(id) on delete cascade,
+  scoring jsonb not null default '{}'::jsonb,
+  roster  jsonb not null default '{}'::jsonb,
+  waivers jsonb not null default '{}'::jsonb,
+  playoffs jsonb not null default '{}'::jsonb,
+  trades jsonb not null default '{}'::jsonb,
+  misc    jsonb not null default '{}'::jsonb,
+  updated_at timestamp default now()
+);
+
+-- 4) Commissioner overrides (dashboard-controlled)
+create table if not exists league_settings_overrides (
+  league_id uuid primary key references leagues(id) on delete cascade,
+  overrides jsonb not null default '{}'::jsonb,  -- same shape as league_settings
+  updated_by uuid references accounts(id),
+  updated_at timestamp default now()
+);
+
+-- 5) Change log for audit/Discord alerts
+create table if not exists settings_change_events (
+  id uuid primary key default gen_random_uuid(),
+  league_id uuid not null references leagues(id) on delete cascade,
+  source text not null,        -- 'sleeper' | 'override'
+  path text not null,          -- e.g., 'scoring.pass_td'
+  old_value jsonb,
+  new_value jsonb,
+  detected_at timestamp default now()
+);
+
+-- 6) Constitution templates & last render
+create table if not exists constitution_templates (
+  id uuid primary key default gen_random_uuid(),
+  league_id uuid not null references leagues(id) on delete cascade,
+  slug text not null,          -- 'scoring', 'waivers', 'roster', ...
+  template_md text not null,   -- markdown with handlebars-like vars
+  unique (league_id, slug)
+);
+
+create table if not exists constitution_render (
+  id uuid primary key default gen_random_uuid(),
+  league_id uuid not null references leagues(id) on delete cascade,
+  slug text not null,
+  content_md text not null,    -- rendered markdown used in rules_docs
+  rendered_at timestamp default now(),
+  unique (league_id, slug)
+);
+
+You already have rules_docs & bot_activity; we’ll reuse those.
+
+⸻
+
+Server: Sleeper Client & Mapping
+
+Sleeper endpoints we’ll use (read-only, public):
+	•	GET /v1/user/{username} → user_id
+	•	GET /v1/user/{user_id}/leagues/nfl/{season} → leagues
+	•	GET /v1/league/{league_id} → core league + settings
+	•	(Optional) GET /v1/league/{league_id}/rosters, /matchups/{week} for richer features
+
+Client with retries & ETag caching
+
+// server/services/sleeperClient.ts
+const SLEEPER_BASE = 'https://api.sleeper.app';
+
+export class SleeperClient {
+  constructor(private fetchImpl = fetch) {}
+
+  private async get<T>(path: string, etag?: string): Promise<{ status: number; data?: T; etag?: string; }> {
+    const res = await this.fetchImpl(`${SLEEPER_BASE}${path}`, {
+      headers: etag ? { 'If-None-Match': etag } : undefined,
+    });
+    if (res.status === 304) return { status: 304 };
+    const data = await res.json();
+    return { status: res.status, data, etag: res.headers.get('ETag') ?? undefined };
+  }
+
+  async userByUsername(username: string) {
+    return this.get<{ user_id: string }>(`/v1/user/${encodeURIComponent(username)}`);
+  }
+
+  async leaguesByUser(userId: string, season: string, sport='nfl') {
+    return this.get<any[]>(`/v1/user/${userId}/leagues/${sport}/${season}`);
+  }
+
+  async league(leagueId: string) {
+    return this.get<any>(`/v1/league/${leagueId}`);
+  }
+}
+
+Mapping Sleeper → normalized settings
+
+// server/services/sleeperMapping.ts
+type Normalized = {
+  scoring: Record<string, number|boolean|string>;
+  roster:  { positions: string[]; taxi: boolean; ir_slots: number; max_keep: number|null };
+  waivers: { type: 'FAAB'|'Rolling'|'None'; budget?: number; run_day?: string; clear_day?: string; tiebreaker?: string };
+  playoffs:{ teams: number; start_week: number; bye_weeks?: number };
+  trades:  { deadline_week?: number|null; veto?: 'None'|'League'|'Commissioner'; review_period_hours?: number };
+  misc:    { divisions?: number; schedule_weeks?: number };
+};
+
+export function mapSleeperLeagueToSettings(sleeperLeague: any): Normalized {
+  const s = sleeperLeague.settings || {};
+  // examples (adapt to fields present in your Sleeper payload)
+  const scoring: Record<string, number> = {
+    pass_td: s.pass_td ?? 4,
+    pass_yd: s.pass_yd ?? 0.04,
+    rec: s.rec ?? 0, // PPR
+    rush_yd: s.rush_yd ?? 0.1,
+    rush_td: s.rush_td ?? 6,
+    fum_lost: s.fum_lost ?? -2,
+    int: s.pass_int ?? -1,
+  };
+
+  const roster = {
+    positions: sleeperLeague.roster_positions ?? [],
+    taxi: Boolean(s.taxi_slots && s.taxi_slots > 0),
+    ir_slots: s.ir_slots ?? 0,
+    max_keep: s.keeper_count ?? null,
+  };
+
+  const waivers = {
+    type: s.waiver_type === 1 ? 'FAAB' : (s.waiver_type === 2 ? 'Rolling' : 'None'),
+    budget: s.waiver_budget ?? undefined,
+    run_day: s.waiver_day_of_week ?? undefined,
+    clear_day: s.waiver_clear_days ?? undefined,
+    tiebreaker: s.waiver_tie_breaker ?? undefined,
+  };
+
+  const playoffs = {
+    teams: s.playoff_teams ?? 6,
+    start_week: s.playoff_start_week ?? 15,
+    bye_weeks: s.playoff_seed_wins ?? undefined
+  };
+
+  const trades = {
+    deadline_week: s.trade_deadline ?? null,
+    veto: s.veto_votes && s.veto_votes > 0 ? 'League' : 'None',
+    review_period_hours: s.trade_review_days ? s.trade_review_days * 24 : undefined
+  };
+
+  const misc = {
+    divisions: s.divisions ?? 0,
+    schedule_weeks: s.league_average_match ?? undefined
+  };
+
+  return { scoring, roster, waivers, playoffs, trades, misc };
+}
+
+
+⸻
+
+Server: Sync Orchestrator
+
+// server/services/sleeperSync.ts
+import { SleeperClient } from './sleeperClient';
+import { mapSleeperLeagueToSettings } from './sleeperMapping';
+import { db } from '../db';
+
+export async function linkSleeperLeague({ leagueId, username, season }: { leagueId: string; username: string; season: string; }) {
+  const client = new SleeperClient();
+  const u = await client.userByUsername(username);
+  if (u.status !== 200 || !u.data?.user_id) throw new Error('SLEEPER_USER_NOT_FOUND');
+
+  const leagues = await client.leaguesByUser(u.data.user_id, season);
+  if (leagues.status !== 200 || !Array.isArray(leagues.data)) throw new Error('SLEEPER_LEAGUES_NOT_FOUND');
+
+  // return choices for UI
+  return leagues.data.map(l => ({ id: l.league_id, name: l.name, season }));
+}
+
+export async function saveSleeperLink({ leagueId, sleeperLeagueId, season, username }: { leagueId: string; sleeperLeagueId: string; season: string; username?: string; }) {
+  await db`
+    insert into sleeper_integrations (league_id, sleeper_league_id, season, username)
+    values (${leagueId}::uuid, ${sleeperLeagueId}, ${season}, ${username ?? null})
+    on conflict (league_id) do update set sleeper_league_id = excluded.sleeper_league_id, season = excluded.season, username = coalesce(excluded.username, sleeper_integrations.username)
+  `;
+}
+
+export async function runSleeperSync(leagueId: string) {
+  const [link] = await db`select * from sleeper_integrations where league_id = ${leagueId}::uuid limit 1`;
+  if (!link) throw new Error('SLEEPER_NOT_LINKED');
+
+  const client = new SleeperClient();
+  const leagueRes = await client.league(link.sleeper_league_id);
+  if (leagueRes.status !== 200 || !leagueRes.data) throw new Error('SLEEPER_LEAGUE_FETCH_FAILED');
+
+  // persist snapshot
+  await db`insert into sleeper_settings_snapshots (league_id, payload) values (${leagueId}::uuid, ${db.json(leagueRes.data)})`;
+
+  // map + upsert normalized
+  const normalized = mapSleeperLeagueToSettings(leagueRes.data);
+  await db`
+    insert into league_settings (league_id, scoring, roster, waivers, playoffs, trades, misc)
+    values (${leagueId}::uuid, ${db.json(normalized.scoring)}, ${db.json(normalized.roster)}, ${db.json(normalized.waivers)}, ${db.json(normalized.playoffs)}, ${db.json(normalized.trades)}, ${db.json(normalized.misc)})
+    on conflict (league_id) do update
+    set scoring = excluded.scoring,
+        roster  = excluded.roster,
+        waivers = excluded.waivers,
+        playoffs= excluded.playoffs,
+        trades  = excluded.trades,
+        misc    = excluded.misc,
+        updated_at = now()
+  `;
+
+  // compute & record diffs (vs previous normalized – read previous, compare deep)
+  // write to settings_change_events for each path where value changed
+  // (implementation detail: pull prior row before upsert; or store prior in temp var and compare)
+
+  return normalized;
+}
+
+
+⸻
+
+Constitution templating (render on demand)
+	•	Use a simple variable renderer (Handlebars-like) to inject league_settings ⊕ overrides into Markdown snippets you keep in constitution_templates.
+	•	After render, save to constitution_render, and upsert into your existing rules_docs and re-index RAG.
+
+// server/services/constitution.ts
+import Mustache from 'mustache';
+import { db } from '../db';
+
+function mergeSettings(base: any, overrides: any) {
+  // shallow merge by category; override values win
+  const out = { ...base };
+  for (const k of Object.keys(overrides || {})) {
+    out[k] = { ...(base?.[k] ?? {}), ...(overrides[k] ?? {}) };
+  }
+  return out;
+}
+
+export async function renderConstitutionSections(leagueId: string) {
+  const [base] = await db`select scoring, roster, waivers, playoffs, trades, misc from league_settings where league_id=${leagueId}::uuid limit 1`;
+  const [ovr]  = await db`select overrides from league_settings_overrides where league_id=${leagueId}::uuid limit 1`;
+  const merged = mergeSettings(base ?? {}, ovr?.overrides ?? {});
+
+  const templates = await db`select slug, template_md from constitution_templates where league_id=${leagueId}::uuid order by slug`;
+
+  const rendered = [];
+  for (const t of templates) {
+    const md = Mustache.render(t.template_md, { settings: merged });
+    rendered.push({ slug: t.slug, md });
+    await db`
+      insert into constitution_render (league_id, slug, content_md)
+      values (${leagueId}::uuid, ${t.slug}, ${md})
+      on conflict (league_id, slug) do update
+      set content_md = excluded.content_md, rendered_at = now()
+    `;
+    // also mirror into rules_docs for RAG
+    await db`
+      insert into rules_docs (league_id, title, content, metadata)
+      values (${leagueId}::uuid, ${'Constitution: '+t.slug}, ${md}, ${db.json({ embedded:false, section:t.slug })})
+      on conflict do nothing
+    `;
+  }
+  return rendered.length;
+}
+
+Example template (Markdown)
+
+### Scoring
+- Passing TD: **{{settings.scoring.pass_td}} points**
+- Passing Yard: **{{settings.scoring.pass_yd}} per yard**
+- Reception (PPR): **{{settings.scoring.rec}} per reception**
+- Rushing Yard: **{{settings.scoring.rush_yd}} per yard**
+- Rushing TD: **{{settings.scoring.rush_td}} points**
+
+### Waivers
+- Type: **{{settings.waivers.type}}**
+{{#settings.waivers.budget}}- Budget: **{{.}}**{{/settings.waivers.budget}}
+{{#settings.waivers.run_day}}- Runs: **{{.}}**{{/settings.waivers.run_day}}
+
+Commissioners can maintain templates; your overrides alter the rendered output without touching Sleeper.
+
+⸻
+
+API Contracts (new/updated)
+
+# Link flow
+GET  /api/v2/sleeper/leagues?username=USER&season=2025
+POST /api/v2/setup/sleeper { leagueId, sleeperLeagueId, season, username? }
+
+# Sync
+POST /api/v2/sleeper/sync { leagueId }             -> runs runSleeperSync, returns normalized settings
+
+# Overrides
+GET  /api/v2/settings/:leagueId                    -> { base, overrides, merged }
+PUT  /api/v2/settings/:leagueId/overrides          -> { overrides } (partial; merged server-side; audited)
+
+# Constitution
+POST /api/v2/constitution/:leagueId/render         -> renders all sections, returns counts
+GET  /api/v2/constitution/:leagueId/sections       -> list of rendered sections (from constitution_render)
+
+# Dashboard tiles (from your previous work)
+GET  /api/v2/dashboard/:leagueId/stats
+GET  /api/v2/dashboard/:leagueId/rag
+GET  /api/v2/dashboard/:leagueId/activity
+
+All POST/PUT: CSRF validated and Zod-checked.
+
+⸻
+
+Frontend (Dashboard)
+	•	Sleeper panel:
+	•	Connect phase (username → leagues); pick one; “Link”.
+	•	“Sync now” button.
+	•	“Last synced” timestamp, ETag/age.
+	•	Settings panel (read merged values):
+	•	Display by category with diff chips when overrides differ from base.
+	•	“Edit override” drawer → PUT overrides.
+	•	“Apply to Constitution” button: POST /constitution/:leagueId/render → then call your RAG re-index endpoint.
+	•	Activity panel: shows settings_change_events and bot_activity.
+
+⸻
+
+Discord bot: commands & behavior
+	•	/scoring → ephemeral card summarizing core scoring values (from merged settings).
+	•	/waivers → type, budget, run day, etc. (merged).
+	•	/playoffs → teams, start week (merged).
+	•	/roster → positions, IR, taxi (merged).
+	•	/settings → compact summary + link to dashboard.
+	•	/whoami → (existing) add Sleeper team mapping where possible.
+
+Change alerts
+When runSleeperSync detects changes vs last normalized:
+	•	Insert settings_change_events rows.
+	•	Post summary to the configured Discord channel using your reliable poster (idempotent key: settings-change-${hash(leaugeId+payload)}).
+
+⸻
+
+Jobs & reliability
+	•	Scheduler: sleeper.sync every 6 hours (season) + manual “Sync now”.
+	•	Honor simple rate limit (Sleeper is lenient, but still backoff).
+	•	Idempotency: bot_activity already in place; reuse for alerts.
+	•	Observability:
+	•	/api/_debug/health includes a sleeper section: last sync ts, league id, last snapshot row id.
+	•	/api/v2/doctor/sleeper (optional): fetch status only; no writes.
+
+⸻
+
+Tests (what Replit should run automatically)
+
+Integration (Jest or vitest):
+	1.	Mapping unit tests for mapSleeperLeagueToSettings with sample Sleeper payloads (standard, FAAB, rolling waivers, PPR/half/0).
+	2.	Render tests for templates: given base+overrides → expected Markdown snippets.
+	3.	Diff tests: prior vs new normalized → set of settings_change_events paths.
+
+E2E (Playwright):
+	1.	Link Sleeper league (username → select league → save).
+	2.	“Sync now” populates Settings panel (assert key values).
+	3.	Add override (e.g., PPR=0.5) → panel shows diff chip; /scoring in Discord matches override.
+	4.	“Apply to Constitution” → sections exist in Constitution tab; RAG shows indexed after reindex call.
+	5.	Trigger change (swap mocked payload) → sync → Activity shows “settings change” and Discord alert posted (use test channel).
+
+⸻
+
+Minimal server glue (routes)
+
+// server/routes.ts (additions)
+app.get('/api/v2/sleeper/leagues', async (req, res) => {
+  const Q = z.object({ username: z.string().min(1), season: z.string().min(4) });
+  const q = Q.safeParse(req.query);
+  if (!q.success) return res.status(400).json({ ok:false, code:'BAD_QUERY' });
+  const leagues = await linkSleeperLeague({ leagueId: 'IGNORED', username: q.data.username, season: q.data.season }); // returns choices
+  res.json({ ok:true, leagues });
+});
+
+app.post('/api/v2/setup/sleeper', async (req, res) => {
+  const B = z.object({
+    leagueId: z.string().uuid(),
+    sleeperLeagueId: z.string().min(1),
+    season: z.string().min(4),
+    username: z.string().optional()
+  });
+  const b = B.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ ok:false, code:'BAD_BODY' });
+  await saveSleeperLink(b.data);
+  res.json({ ok:true });
+});
+
+app.post('/api/v2/sleeper/sync', async (req, res) => {
+  const B = z.object({ leagueId: z.string().uuid() });
+  const b = B.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ ok:false, code:'BAD_BODY' });
+  const normalized = await runSleeperSync(b.data.leagueId);
+  res.json({ ok:true, settings: normalized });
+});
+
+app.get('/api/v2/settings/:leagueId', async (req, res) => {
+  const P = z.object({ leagueId: z.string().uuid() });
+  const p = P.safeParse(req.params);
+  if (!p.success) return res.status(400).json({ ok:false, code:'BAD_LEAGUE' });
+
+  const [base] = await db`select * from league_settings where league_id=${p.data.leagueId}::uuid`;
+  const [ovr]  = await db`select overrides from league_settings_overrides where league_id=${p.data.leagueId}::uuid`;
+  res.json({ ok:true, base: base ?? {}, overrides: ovr?.overrides ?? {}, merged: (base || ovr) ? /* merge the two */ {} : {} });
+});
+
+app.put('/api/v2/settings/:leagueId/overrides', async (req, res) => {
+  const P = z.object({ leagueId: z.string().uuid() });
+  const p = P.safeParse(req.params);
+  if (!p.success) return res.status(400).json({ ok:false, code:'BAD_LEAGUE' });
+
+  const B = z.object({ overrides: z.record(z.any()) });
+  const b = B.safeParse(req.body);
+  if (!b.success) return res.status(400).json({ ok:false, code:'BAD_BODY' });
+
+  await db`
+    insert into league_settings_overrides (league_id, overrides, updated_by)
+    values (${p.data.leagueId}::uuid, ${db.json(b.data.overrides)}, ${req.session.accountId ?? null})
+    on conflict (league_id) do update set overrides = excluded.overrides, updated_by = excluded.updated_by, updated_at = now()
+  `;
+  res.json({ ok:true });
+});
+
+app.post('/api/v2/constitution/:leagueId/render', async (req, res) => {
+  const P = z.object({ leagueId: z.string().uuid() });
+  const p = P.safeParse(req.params);
+  if (!p.success) return res.status(400).json({ ok:false, code:'BAD_LEAGUE' });
+
+  const count = await renderConstitutionSections(p.data.leagueId);
+  // kick off RAG re-index here if you expose a job endpoint
+  res.json({ ok:true, sections: count });
+});
+
+
+⸻
+
+Bot behaviors (using merged settings)
+
+Where you handle slash commands, fetch merged settings:
+
+async function getMergedSettings(leagueId: string) {
+  const [base] = await db`select scoring, roster, waivers, playoffs, trades, misc from league_settings where league_id=${leagueId}::uuid`;
+  const [ovr]  = await db`select overrides from league_settings_overrides where league_id=${leagueId}::uuid`;
+  return mergeSettings(base ?? {}, ovr?.overrides ?? {});
+}
+
+case '/scoring': {
+  const merged = await getMergedSettings(leagueId);
+  return replyEphemeral(interaction, formatScoringCard(merged.scoring));
+}
+
+And on runSleeperSync diffs, post a summarized message to the configured Discord channel.
+
+⸻
+
+Hardening checklist for Replit
+	•	Ensure /api/v2/sleeper/sync is on the scheduler (seasonal frequency) and manual button on Dashboard.
+	•	Wire idempotency keys for settings-change alerts (avoid duplicate posts).
+	•	Confirm CSRF on POST/PUT; SameSite=Lax cookies are already in place.
+	•	Add health: /api/_debug/health returns sleeper: { linked, lastSnapshotAt }.
+	•	Extend Playwright to run the 5 E2E steps listed above.
+
+⸻
+
+TL;DR next actions for the team
+	1.	Apply the SQL tables above.
+	2.	Add the Sleeper client/mapping and sync service.
+	3.	Expose the API routes (link, sync, settings read/override, constitution render).
+	4.	Update the Dashboard to use merged settings with diffs and “Apply to Constitution”.
+	5.	Add/extend slash commands to read merged settings.
+	6.	Post alerts when changes are detected.
+	7.	Add E2E + integration tests described.
+
+This turns Sleeper from “some data comes through” into a reliable source of truth → normalized config → constitution text → RAG → bot behavior pipeline, with commissioner overrides and full auditability.

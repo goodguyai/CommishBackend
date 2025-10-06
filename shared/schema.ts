@@ -361,6 +361,75 @@ export const contentQueue = pgTable("content_queue", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Sleeper sync tables
+export const sleeperIntegrations = pgTable("sleeper_integrations", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").notNull().references(() => leagues.id, { onDelete: "cascade" }),
+  sleeperLeagueId: text("sleeper_league_id").notNull(),
+  season: text("season").notNull(),
+  sport: text("sport").notNull().default("nfl"),
+  username: text("username"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  uniqLeague: unique("uq_sleeper_int_league").on(table.leagueId),
+  uniqSleeperSeason: unique("uq_sleeper_int_sleeper_season").on(table.sleeperLeagueId, table.season),
+}));
+
+export const sleeperSettingsSnapshots = pgTable("sleeper_settings_snapshots", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").notNull().references(() => leagues.id, { onDelete: "cascade" }),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  source: text("source").notNull().default("sleeper"),
+  payload: jsonb("payload").notNull(),
+});
+
+export const leagueSettings = pgTable("league_settings", {
+  leagueId: uuid("league_id").primaryKey().references(() => leagues.id, { onDelete: "cascade" }),
+  scoring: jsonb("scoring").notNull().default({}),
+  roster: jsonb("roster").notNull().default({}),
+  waivers: jsonb("waivers").notNull().default({}),
+  playoffs: jsonb("playoffs").notNull().default({}),
+  trades: jsonb("trades").notNull().default({}),
+  misc: jsonb("misc").notNull().default({}),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const leagueSettingsOverrides = pgTable("league_settings_overrides", {
+  leagueId: uuid("league_id").primaryKey().references(() => leagues.id, { onDelete: "cascade" }),
+  overrides: jsonb("overrides").notNull().default({}),
+  updatedBy: uuid("updated_by").references(() => accounts.id),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const settingsChangeEvents = pgTable("settings_change_events", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").notNull().references(() => leagues.id, { onDelete: "cascade" }),
+  source: text("source").notNull(),
+  path: text("path").notNull(),
+  oldValue: jsonb("old_value"),
+  newValue: jsonb("new_value"),
+  detectedAt: timestamp("detected_at").defaultNow(),
+});
+
+export const constitutionTemplates = pgTable("constitution_templates", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").notNull().references(() => leagues.id, { onDelete: "cascade" }),
+  slug: text("slug").notNull(),
+  templateMd: text("template_md").notNull(),
+}, (table) => ({
+  uniqLeagueSlug: unique("uq_const_tmpl_league_slug").on(table.leagueId, table.slug),
+}));
+
+export const constitutionRender = pgTable("constitution_render", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").notNull().references(() => leagues.id, { onDelete: "cascade" }),
+  slug: text("slug").notNull(),
+  contentMd: text("content_md").notNull(),
+  renderedAt: timestamp("rendered_at").defaultNow(),
+}, (table) => ({
+  uniqLeagueSlug: unique("uq_const_render_league_slug").on(table.leagueId, table.slug),
+}));
+
 export const botActivity = pgTable("bot_activity", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   leagueId: uuid("league_id").references(() => leagues.id),
@@ -600,6 +669,56 @@ export const insertBotActivitySchema = createInsertSchema(botActivity).pick({
   requestId: true,
 });
 
+export const insertSleeperIntegrationSchema = createInsertSchema(sleeperIntegrations).pick({
+  leagueId: true,
+  sleeperLeagueId: true,
+  season: true,
+  sport: true,
+  username: true,
+});
+
+export const insertSleeperSettingsSnapshotSchema = createInsertSchema(sleeperSettingsSnapshots).pick({
+  leagueId: true,
+  source: true,
+  payload: true,
+});
+
+export const insertLeagueSettingsSchema = createInsertSchema(leagueSettings).pick({
+  leagueId: true,
+  scoring: true,
+  roster: true,
+  waivers: true,
+  playoffs: true,
+  trades: true,
+  misc: true,
+});
+
+export const insertLeagueSettingsOverrideSchema = createInsertSchema(leagueSettingsOverrides).pick({
+  leagueId: true,
+  overrides: true,
+  updatedBy: true,
+});
+
+export const insertSettingsChangeEventSchema = createInsertSchema(settingsChangeEvents).pick({
+  leagueId: true,
+  source: true,
+  path: true,
+  oldValue: true,
+  newValue: true,
+});
+
+export const insertConstitutionTemplateSchema = createInsertSchema(constitutionTemplates).pick({
+  leagueId: true,
+  slug: true,
+  templateMd: true,
+});
+
+export const insertConstitutionRenderSchema = createInsertSchema(constitutionRender).pick({
+  leagueId: true,
+  slug: true,
+  contentMd: true,
+});
+
 // Types
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
@@ -652,6 +771,20 @@ export type ContentQueue = typeof contentQueue.$inferSelect;
 export type InsertContentQueue = z.infer<typeof insertContentQueueSchema>;
 export type BotActivity = typeof botActivity.$inferSelect;
 export type InsertBotActivity = z.infer<typeof insertBotActivitySchema>;
+export type SleeperIntegration = typeof sleeperIntegrations.$inferSelect;
+export type InsertSleeperIntegration = z.infer<typeof insertSleeperIntegrationSchema>;
+export type SleeperSettingsSnapshot = typeof sleeperSettingsSnapshots.$inferSelect;
+export type InsertSleeperSettingsSnapshot = z.infer<typeof insertSleeperSettingsSnapshotSchema>;
+export type LeagueSettings = typeof leagueSettings.$inferSelect;
+export type InsertLeagueSettings = z.infer<typeof insertLeagueSettingsSchema>;
+export type LeagueSettingsOverride = typeof leagueSettingsOverrides.$inferSelect;
+export type InsertLeagueSettingsOverride = z.infer<typeof insertLeagueSettingsOverrideSchema>;
+export type SettingsChangeEvent = typeof settingsChangeEvents.$inferSelect;
+export type InsertSettingsChangeEvent = z.infer<typeof insertSettingsChangeEventSchema>;
+export type ConstitutionTemplate = typeof constitutionTemplates.$inferSelect;
+export type InsertConstitutionTemplate = z.infer<typeof insertConstitutionTemplateSchema>;
+export type ConstitutionRender = typeof constitutionRender.$inferSelect;
+export type InsertConstitutionRender = z.infer<typeof insertConstitutionRenderSchema>;
 
 // Keep legacy user schema for compatibility
 export const users = pgTable("users", {
