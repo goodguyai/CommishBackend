@@ -1,0 +1,642 @@
+Got it. Here’s a single, copy-pasteable “Replit Work Order” you can drop into Replit’s Agent. It’s written to be health-first, non-destructive, and end-to-end: it fixes environment pitfalls, hardens sessions, repairs Discord install/permissions/channel fetch, unblocks the /api/v2/setup/discord UUID error, restores Sleeper sync with settings→Constitution mapping, swaps the dashboard off mocks, adds observability, and ships a deterministic E2E test pack.
+
+I tuned this to your logs (e.g., guild_id “YOUR_GUILD_ID”, 22P02 UUID, Vite Supabase URL/JWT mix-up, empty guilds due to session), your stated goals (Discord+DeepSeek+Sleeper fully working), and the current code organization you described. It assumes your backend is Node/Express+Drizzle, frontend is Vite/React, DB is Supabase Postgres.
+
+⸻
+
+THE COMMISH — Replit Work Order (Health-First Full Sweep)
+
+Purpose: Stabilize the project, fix Discord & Sleeper end-to-end, remove environment foot-guns, wire real dashboard data, add observability & tests.
+Principles: Idempotent, reversible, smallest-blast-radius patches, explicit checks, fail fast on misconfig.
+
+⸻
+
+0) Safety preflight (don’t skip)
+
+0.1 Make a safety branch and checkpoint
+
+git checkout -b chore/health-first-sweep
+git add -A && git commit -m "chore: pre-sweep snapshot"
+
+0.2 Verify critical secrets (fixes blank app + Discord session)
+
+Open Replit → Secrets and ensure:
+
+Variable	Must equal
+SUPABASE_URL	https://<your-project>.supabase.co
+VITE_SUPABASE_URL	https://<your-project>.supabase.co (URL, not a JWT)
+VITE_SUPABASE_ANON_KEY	Your Supabase anon key (JWT starting with eyJhbGci...)
+SUPABASE_SERVICE_ROLE_KEY	Supabase service role key (server-side only)
+SESSION_SECRET	long random string
+APP_BASE_URL	https://thecommish.replit.app (lowercase)
+DISCORD_CLIENT_ID	1228872586725818439 (from your screenshots)
+DISCORD_CLIENT_SECRET	value from Dev Portal
+DISCORD_PUBLIC_KEY	value from Dev Portal
+DISCORD_BOT_TOKEN	value from Dev Portal
+DISCORD_BOT_PERMISSIONS	the permissions integer from Dev Portal → Bot tab
+OPENAI_API_KEY	(present)
+DEEPSEEK_API_KEY	(present)
+PGSSLMODE	require
+DATABASE_URL	your Supabase pooler URL
+SUPABASE_DATABASE_URL	ok to mirror DATABASE_URL
+ADMIN_KEY	long random string (for admin debug endpoints)
+
+You already fixed the VITE_SUPABASE_URL mix-up — this Work Order includes guards so this can’t silently break the UI again.
+
+⸻
+
+1) Environment & session hardening (fast, critical)
+
+1.1 Add environment preflight guard
+
+Create server/services/envGuard.ts
+
+import "dotenv/config";
+
+const asrt = (cond: any, msg: string) => { if (!cond) { console.error(`❌ ${msg}`); process.exit(1); } };
+
+const must = (k: string, v?: string) => {
+  asrt(v && v.trim().length > 0, `Missing env var: ${k}`);
+  if (k.includes("URL")) asrt(v!.startsWith("http"), `Invalid ${k}: expected URL, got "${v!.slice(0,20)}..."`);
+};
+
+[
+  "SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY",
+  "VITE_SUPABASE_URL","VITE_SUPABASE_ANON_KEY",
+  "DISCORD_BOT_TOKEN","DISCORD_CLIENT_ID","DISCORD_CLIENT_SECRET","DISCORD_PUBLIC_KEY",
+  "OPENAI_API_KEY","DEEPSEEK_API_KEY","APP_BASE_URL",
+  "SESSION_SECRET","DATABASE_URL","ADMIN_KEY"
+].forEach(k => must(k, process.env[k]));
+
+console.log("✅ Environment validation passed");
+
+Wire it at the top of server/index.ts:
+
+import "./services/envGuard"; // must run before anything else
+
+1.2 Fix Express session behind Replit proxy (prevents “empty guilds”)
+
+In server/index.ts (before app.use(session(...))), add:
+
+app.set("trust proxy", 1);
+
+Then change session middleware to:
+
+app.use(session({
+  store: new PgSession({ pool: sessionPool, tableName: "user_sessions", createTableIfMissing: false }),
+  name: "commish.sid",
+  secret: getEnv().SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  proxy: true,
+  cookie: {
+    secure: true,       // always; we're behind HTTPS proxy
+    httpOnly: true,
+    sameSite: "lax",    // allow OAuth redirect
+    path: "/",
+    maxAge: 30 * 24 * 60 * 60 * 1000
+  }
+}));
+
+1.3 Normalize session key & secure debug
+
+In all code, use req.session.discord (not discordOauth).
+Add admin-only debug endpoints (guarded with X-Admin-Key):
+
+// in server/routes.ts
+const requireAdminKey = (req, res, next) => {
+  if (req.headers["x-admin-key"] !== process.env.ADMIN_KEY) return res.status(401).json({ ok:false, code:"ADMIN_ONLY" });
+  next();
+};
+
+app.get("/api/_debug/session", requireAdminKey, (req, res) => {
+  res.json({ id: req.sessionID, hasDiscord: !!req.session.discord, keys: Object.keys(req.session ?? {}) });
+});
+
+app.get("/api/_debug/discord", requireAdminKey, (req, res) => {
+  const d = req.session.discord;
+  res.json({ has: !!d, username: d?.username, scopes: d?.scopes, guildCount: d?.guilds?.length ?? 0, sample: d?.guilds?.slice(0,3) ?? [] });
+});
+
+// optional but helpful
+app.get("/api/_debug/routes", requireAdminKey, (req, res) => {
+  // @ts-ignore
+  const routes = req.app._router.stack
+    .filter((r:any)=>r.route).map((r:any)=>({method:Object.keys(r.route.methods)[0]?.toUpperCase(), path:r.route.path}));
+  res.json(routes);
+});
+
+
+⸻
+
+2) Database safety & migrations (idempotent, minimal)
+
+Create migrations.sql (run via psql or drizzle execute; all are idempotent):
+
+-- leagues addons (safe if already exist)
+ALTER TABLE leagues ADD COLUMN IF NOT EXISTS channels     jsonb DEFAULT '[]'::jsonb;   -- can store discord mapping array
+ALTER TABLE leagues ADD COLUMN IF NOT EXISTS personality  jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE leagues ADD COLUMN IF NOT EXISTS features     jsonb DEFAULT '{}'::jsonb;
+
+-- sleeper integration (per league)
+CREATE TABLE IF NOT EXISTS sleeper_integrations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id uuid REFERENCES leagues(id) ON DELETE CASCADE,
+  sleeper_user_id text,
+  sleeper_league_id text,
+  settings jsonb DEFAULT '{}'::jsonb,
+  last_sync timestamptz DEFAULT now(),
+  created_at timestamptz DEFAULT now(),
+  UNIQUE (league_id)
+);
+
+-- discord integration snapshot (optional; we also store in leagues.channels)
+CREATE TABLE IF NOT EXISTS discord_integrations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id uuid REFERENCES leagues(id) ON DELETE CASCADE,
+  guild_id text NOT NULL,
+  channel_id text,
+  permissions bigint,
+  bot_installed boolean DEFAULT false,
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (league_id)
+);
+
+-- bot activity for idempotency/telemetry
+CREATE TABLE IF NOT EXISTS bot_activity (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id uuid,
+  guild_id text,
+  channel_id text,
+  kind text NOT NULL,
+  key text,
+  status text NOT NULL,
+  detail jsonb DEFAULT '{}'::jsonb,
+  request_id text,
+  created_at timestamptz DEFAULT now()
+);
+
+-- vector table placeholder for RAG if not present (adjust name if you already have)
+CREATE TABLE IF NOT EXISTS rag_docs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id uuid,
+  source text,
+  url text,
+  title text,
+  content text,
+  embedding vector(1536),
+  created_at timestamptz DEFAULT now()
+);
+
+Apply it:
+
+psql "$DATABASE_URL" -f migrations.sql || true
+
+
+⸻
+
+3) Discord install, channels, and setup fixes
+
+3.1 Bot install URL (removes redirect_uri error)
+
+Server (server/routes.ts):
+
+app.get("/api/v2/discord/bot-install-url", (req, res) => {
+  const client_id = process.env.DISCORD_CLIENT_ID!;
+  const permissions = process.env.DISCORD_BOT_PERMISSIONS!; // integer
+  const guild_id = req.query.guildId as string | undefined;
+
+  const u = new URL("https://discord.com/api/oauth2/authorize");
+  u.searchParams.set("client_id", client_id);
+  u.searchParams.set("scope", "bot applications.commands");
+  u.searchParams.set("permissions", permissions);
+  if (guild_id) {
+    u.searchParams.set("guild_id", guild_id);
+    u.searchParams.set("disable_guild_select", "true");
+  }
+  // NO redirect_uri/response_type for bot install
+  res.json({ url: u.toString() });
+});
+
+3.2 Fetch channels API with strict validation & structured errors
+
+Fixes your log: guild_id “YOUR_GUILD_ID” / 50035 “NUMBER_TYPE_COERCE”
+
+// GET /api/v2/discord/channels?guildId=...
+app.get("/api/v2/discord/channels", async (req, res) => {
+  try {
+    const guildId = String(req.query.guildId || "").trim();
+    if (!/^\d{10,20}$/.test(guildId)) {
+      return res.status(400).json({ error: "BAD_GUILD_ID", message: "guildId must be a Discord snowflake" });
+    }
+
+    const token = process.env.DISCORD_BOT_TOKEN!;
+    const r = await fetch(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
+      headers: { Authorization: `Bot ${token}` }
+    });
+
+    if (r.status === 403 || r.status === 404) {
+      return res.status(409).json({ error: "BOT_NOT_IN_GUILD", message: "Bot not installed in this guild" });
+    }
+    if (!r.ok) {
+      const body = await r.text();
+      return res.status(502).json({ error: "DISCORD_ERROR", status: r.status, body });
+    }
+
+    const channels = (await r.json())
+      .filter((c:any)=>["GUILD_TEXT","0","GUILD_ANNOUNCEMENT","5"].includes(String(c.type)))  // be flexible on type
+      .map((c:any)=>({ id: c.id, name: c.name, type: c.type }));
+
+    if (channels.length === 0) {
+      return res.status(200).json({ channels: [] });
+    }
+    res.json({ channels });
+  } catch (e:any) {
+    res.status(500).json({ error: "CHANNELS_FAILED", message: e?.message || "Unknown error" });
+  }
+});
+
+3.3 Discord setup endpoint — fix UUID crash and persist mapping
+
+Fixes /api/v2/setup/discord 22P02 invalid input syntax for type uuid: “” by generating a league id server-side if missing.
+
+import { randomUUID } from "crypto";
+
+app.post("/api/v2/setup/discord", async (req, res) => {
+  try {
+    const { guildId, channelId, leagueId: maybeLeagueId } = req.body || {};
+    if (!/^\d{10,20}$/.test(guildId || "")) return res.status(400).json({ ok:false, code:"BAD_GUILD_ID" });
+    if (!/^\d{10,20}$/.test(channelId || "")) return res.status(400).json({ ok:false, code:"BAD_CHANNEL_ID" });
+
+    const leagueId = (typeof maybeLeagueId === "string" && /^[0-9a-f-]{36}$/i.test(maybeLeagueId)) ? maybeLeagueId : randomUUID();
+
+    // upsert league + discord mapping
+    await db.transaction(async (tx) => {
+      // ensure league exists
+      await tx.execute(/* sql */`
+        INSERT INTO leagues (id) VALUES ($1)
+        ON CONFLICT (id) DO NOTHING;
+      `, [leagueId]);
+
+      // snapshot in discord_integrations (optional), and leagues.channels for quick access
+      await tx.execute(/* sql */`
+        INSERT INTO discord_integrations (league_id, guild_id, channel_id, permissions, bot_installed, updated_at)
+        VALUES ($1,$2,$3, NULL, TRUE, now())
+        ON CONFLICT (league_id) DO UPDATE
+        SET guild_id=$2, channel_id=$3, bot_installed=TRUE, updated_at=now();
+      `, [leagueId, guildId, channelId]);
+
+      await tx.execute(/* sql */`
+        UPDATE leagues
+        SET channels = jsonb_set(coalesce(channels,'[]'::jsonb), '{0}',
+          jsonb_build_object('provider','discord','guildId',$2,'channelId',$3,'installed',true), true),
+            features = jsonb_set(coalesce(features,'{}'::jsonb), '{activated}', 'true'::jsonb, true)
+        WHERE id=$1;
+      `, [leagueId, guildId, channelId]);
+    });
+
+    // persist in session too (for onboarding resume)
+    req.session.discord = Object.assign({}, req.session.discord, { lastLeagueId: leagueId, lastGuildId: guildId, lastChannelId: channelId });
+    await new Promise(r => req.session.save(r));
+
+    res.json({ ok:true, leagueId });
+  } catch (e:any) {
+    console.error("[Discord Setup]", e);
+    res.status(500).json({ ok:false, code:"DISCORD_SETUP_FAILED", message: "Failed to configure Discord" });
+  }
+});
+
+
+⸻
+
+4) Frontend fixes (onboarding, channels, cookies)
+
+4.1 Always send cookies to API
+
+client/src/lib/apiApp.ts
+
+const response = await fetch(url, {
+  credentials: 'include',   // was same-origin; include is safer
+  ...options,
+  headers: { 'Content-Type': 'application/json', ...(options?.headers||{}) },
+});
+
+4.2 Onboarding: persist guild across bot install & validate guildId
+
+client/src/pages/Onboarding.tsx — key points:
+	•	When user picks a guild, persist to sessionStorage.setItem('pending-guild-id', guildId).
+	•	On load (or after ?bot-installed=true), rehydrate the guild and re-fetch channels.
+	•	On “Install THE COMMISH” button, open bot install URL in new tab and listen for visibilitychange to retry fetching.
+	•	Handle server error shapes (BOT_NOT_IN_GUILD, BAD_GUILD_ID, DISCORD_ERROR).
+
+Sketch (you already had most of this; ensure these specifics exist):
+
+const [selectedGuildId, setSelectedGuildId] = useState<string>('');
+useEffect(() => {
+  const url = new URL(window.location.href);
+  const botInstalled = url.searchParams.get('bot-installed') === 'true';
+  const pending = sessionStorage.getItem('pending-guild-id');
+  if (botInstalled && pending) {
+    setSelectedGuildId(pending);
+    fetchChannels(pending);
+    url.searchParams.delete('bot-installed');
+    window.history.replaceState({}, "", url.toString());
+  }
+}, []);
+
+async function onGuildPick(gid: string) {
+  setSelectedGuildId(gid);
+  sessionStorage.setItem('pending-guild-id', gid);
+  await fetchChannels(gid);
+}
+
+async function fetchChannels(gid: string) {
+  if (!/^\d{10,20}$/.test(gid)) {
+    toast.error("Invalid guild id");
+    return;
+  }
+  const r = await api(`/api/v2/discord/channels?guildId=${gid}`);
+  if (r.error === "BOT_NOT_IN_GUILD") {
+    setNeedsBotInstall(true);
+    return;
+  }
+  setChannels(r.channels || []);
+}
+
+
+⸻
+
+5) Sleeper: link, sync, and push settings → Constitution
+
+5.1 Sleeper endpoints (server)
+
+Add:
+
+// Link Sleeper account to league
+app.post("/api/v2/sleeper/link", async (req, res) => {
+  try {
+    const { leagueId, sleeperUserId } = req.body || {};
+    if (!/^[0-9a-z_]+$/i.test(sleeperUserId || "")) return res.status(400).json({ ok:false, code:"BAD_SLP_USER" });
+    const lid = (typeof leagueId === "string" && /^[0-9a-f-]{36}$/i.test(leagueId)) ? leagueId : randomUUID();
+
+    await db.execute(/*sql*/`
+      INSERT INTO sleeper_integrations (league_id, sleeper_user_id)
+      VALUES ($1,$2)
+      ON CONFLICT (league_id) DO UPDATE SET sleeper_user_id=$2;
+    `, [lid, sleeperUserId]);
+
+    res.json({ ok:true, leagueId: lid });
+  } catch (e:any) { res.status(500).json({ ok:false, code:"SLEEPER_LINK_FAILED" }); }
+});
+
+// Manual sync (cron also calls this)
+app.post("/api/v2/sleeper/sync/:leagueId", async (req, res) => {
+  try {
+    const leagueId = req.params.leagueId;
+    const row = await db.oneOrNone(/*sql*/`SELECT sleeper_user_id FROM sleeper_integrations WHERE league_id=$1`, [leagueId]);
+    if (!row?.sleeper_user_id) return res.status(400).json({ ok:false, code:"NO_SLP_USER" });
+
+    // Fetch leagues for user (2018→now); pick currently active (simple heuristic)
+    const leagues = await (await fetch(`https://api.sleeper.app/v1/user/${row.sleeper_user_id}/leagues/nfl/${new Date().getFullYear()}`)).json();
+
+    // Pick first for now; upgrade selection UI later
+    const sl = leagues?.[0];
+    if (!sl?.league_id) return res.status(404).json({ ok:false, code:"NO_LEAGUES_FOUND" });
+
+    // Pull settings
+    const settings = sl?.settings ?? {};
+    await db.execute(/*sql*/`
+      UPDATE sleeper_integrations
+      SET sleeper_league_id=$2, settings=$3::jsonb, last_sync=now()
+      WHERE league_id=$1
+    `, [leagueId, sl.league_id, settings]);
+
+    // OPTIONAL: push selected settings into your Constitution/rules engine
+    -- You likely have an existing pipeline that indexes the constitution.
+    -- Add a mapping step here to mirror core Sleeper options into rules/features JSON:
+    await db.execute(/*sql*/`
+      UPDATE leagues
+      SET features = coalesce(features,'{}'::jsonb) || jsonb_build_object('sleeper', $2::jsonb)
+      WHERE id=$1
+    `, [leagueId, JSON.stringify({
+      roster_positions: sl.roster_positions,
+      scoring_settings: sl.scoring_settings,
+      trade_deadline: settings.trade_deadline,
+      waiver_type: settings.waiver_type,
+      playoff_teams: settings.playoff_teams,
+      playoff_round_type: settings.playoff_round_type,
+      keeper_count: settings.keeper_count,
+      ...settings
+    })]);
+
+    res.json({ ok:true, sleeperLeagueId: sl.league_id, settings: settings });
+  } catch (e:any) {
+    console.error("[Sleeper Sync]", e);
+    res.status(500).json({ ok:false, code:"SLEEPER_SYNC_FAILED" });
+  }
+});
+
+5.2 Frontend Sleeper step (Onboarding/Dashboard)
+	•	Ensure link form collects sleeperUserId and calls POST /api/v2/sleeper/link.
+	•	Add Sync button to call POST /api/v2/sleeper/sync/:leagueId.
+	•	On success, update UI state and reflect key options (roster, scoring, waivers) and display them under “League Settings (Sleeper)”.
+	•	When your Constitution editor is present, merge mapped sleepers settings → draft a delta & commit.
+
+⸻
+
+6) Dashboard: stop using mocks; add real endpoints
+
+6.1 Backend adapters (shape data for UI)
+
+app.get("/api/dashboard/stats/:leagueId", async (req, res) => {
+  const lid = req.params.leagueId;
+  // Example: compute doc counts, last syncs, recent bot activity
+  const docCount = (await db.one(/*sql*/`SELECT count(*)::int c FROM rag_docs WHERE league_id=$1`, [lid])).c ?? 0;
+  const lastBot = await db.oneOrNone(/*sql*/`SELECT created_at, kind, status FROM bot_activity WHERE league_id=$1 ORDER BY created_at DESC LIMIT 1`, [lid]);
+  const sleeper = await db.oneOrNone(/*sql*/`SELECT sleeper_league_id, last_sync FROM sleeper_integrations WHERE league_id=$1`, [lid]);
+
+  res.json({
+    leagueId: lid,
+    rag: { docCount, lastIngest: lastBot?.created_at ?? null },
+    sleeper: { leagueId: sleeper?.sleeper_league_id ?? null, lastSync: sleeper?.last_sync ?? null },
+    bot: { lastKind: lastBot?.kind ?? null, lastStatus: lastBot?.status ?? null },
+  });
+});
+
+app.get("/api/dashboard/integrations/:leagueId", async (req, res) => {
+  const lid = req.params.leagueId;
+  const disc = await db.oneOrNone(/*sql*/`SELECT guild_id, channel_id, bot_installed FROM discord_integrations WHERE league_id=$1`, [lid]);
+  const sleep = await db.oneOrNone(/*sql*/`SELECT sleeper_user_id, sleeper_league_id, last_sync FROM sleeper_integrations WHERE league_id=$1`, [lid]);
+  res.json({ discord: disc || null, sleeper: sleep || null });
+});
+
+app.get("/api/dashboard/activity/:leagueId", async (req, res) => {
+  const lid = req.params.leagueId;
+  const rows = await db.manyOrNone(/*sql*/`
+    SELECT created_at, kind, status, detail
+    FROM bot_activity WHERE league_id=$1
+    ORDER BY created_at DESC LIMIT 100
+  `, [lid]);
+  res.json({ items: rows });
+});
+
+6.2 Frontend: switch queries from /api/mock/* to the above
+
+In client/src/pages/Dashboard.tsx:
+	•	Replace mock query keys with:
+	•	/api/dashboard/stats/${leagueId}
+	•	/api/dashboard/integrations/${leagueId}
+	•	/api/dashboard/activity/${leagueId}
+	•	Keep the “Demo vs Beta” mode indicator (Demo if featureFlags.demo === true, else Beta).
+	•	If endpoints are missing data, show hydrated skeletons rather than errors.
+
+⸻
+
+7) Observability & reliability
+
+7.1 Request ID & bot activity
+	•	Ensure a per-request requestId header is generated/logged at entry (you already have the pattern).
+	•	For Discord interactions & scheduled jobs, write to bot_activity:
+	•	status: STARTED → SUCCEEDED/FAILED
+	•	kind: e.g., SLASH_HELP, SLEEPER_SYNC, RAG_INGEST
+	•	key: idempotency key if applicable
+
+7.2 Production guardrails
+
+// Block mock APIs in prod
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV === "production" && req.path.startsWith("/api/mock/")) {
+    return res.status(410).json({ ok:false, code:"MOCK_DISABLED" });
+  }
+  next();
+});
+
+
+⸻
+
+8) E2E tests (Playwright) — agent-runnable
+
+Create qa/e2e.spec.ts (minimal but covers you):
+
+import { test, expect } from '@playwright/test';
+
+const BASE = process.env.DEV_SERVER_URL || 'https://thecommish.replit.app';
+
+test('01 Health & session', async ({ page }) => {
+  await page.goto(BASE + '/ping'); // or '/'
+  const res = await page.request.get(BASE + '/api/_debug/session', { headers: { 'X-Admin-Key': process.env.ADMIN_KEY! }});
+  expect(res.status()).toBe(200);
+});
+
+test('02 Discord auth & guild list', async ({ page }) => {
+  await page.goto(BASE + '/setup');
+  await page.getByRole('button', { name: /connect discord/i }).click();
+  // user completes OAuth manually on first run
+  // After callback, verify guilds appear:
+  await expect(page.getByTestId('discord-guilds')).toBeVisible({ timeout: 15000 });
+});
+
+test('03 Channels fetch or Bot install path', async ({ page }) => {
+  // select guild -> channels fetch
+  await page.getByTestId('guild-select').selectOption({ index: 0 });
+  // Either channels appear OR "Install bot" panel appears:
+  const channels = page.getByTestId('channel-select');
+  const install = page.getByRole('button', { name: /install the commish/i });
+  await expect(channels.or(install)).toBeVisible({ timeout: 15000 });
+});
+
+test('04 Sleeper linking', async ({ page }) => {
+  // assumes a test sleeper user id in env
+  const slUser = process.env.TEST_SLEEPER_UID || 'commish_test';
+  await page.fill('[name="sleeperUserId"]', slUser);
+  await page.getByRole('button', { name: /link sleeper/i }).click();
+  await page.getByRole('button', { name: /sync sleeper/i }).click();
+  await expect(page.getByText(/last sync/i)).toBeVisible({ timeout: 15000 });
+});
+
+test('05 Dashboard real data', async ({ page }) => {
+  await page.goto(BASE + '/app');
+  await expect(page.getByTestId('dashboard-root')).toBeVisible();
+  await expect(page.getByText(/Mode:\s+(Demo|Beta)/i)).toBeVisible();
+  // stats/integrations/activity should not error
+});
+
+Run:
+
+DEV_SERVER_URL="https://thecommish.replit.app" ADMIN_KEY="<<admin_key>>" npx playwright test qa/e2e.spec.ts
+
+
+⸻
+
+9) Quick manual QA (10 minutes)
+	1.	Cookie check (DevTools → Application → Cookies): commish.sid present, Secure, Lax.
+	2.	Discord flow: Connect → see 3 manageable guilds → pick guild → either channels appear or “Install THE COMMISH” button. Install opens new tab; when returning, channels auto-load (thanks to sessionStorage).
+	3.	Channels: Select channel → Save → /api/v2/setup/discord returns 200 and logs no UUID error.
+	4.	Sleeper: Enter Sleeper user → Link → Sync; check last sync timestamp on dashboard.
+	5.	Dashboard: Mode badge shows Beta (not Demo) for real league; Stats/Integrations/Activity populated (no mock URLs).
+	6.	Admin debug: curl -H "X-Admin-Key: $ADMIN_KEY" https://thecommish.replit.app/api/_debug/session returns {hasDiscord:true} post-OAuth.
+
+⸻
+
+10) Rollback plan
+
+If anything goes sideways:
+
+git reset --hard HEAD~1   # back to snapshot
+replit restart
+
+All DB changes were idempotent; you can re-run migrations.sql safely.
+
+⸻
+
+11) Known-good curl probes (paste into Replit shell)
+
+# Health
+curl -sS https://thecommish.replit.app/ping
+
+# Admin session
+curl -sS -H "X-Admin-Key: $ADMIN_KEY" https://thecommish.replit.app/api/_debug/session
+
+# Admin discord
+curl -sS -H "X-Admin-Key: $ADMIN_KEY" https://thecommish.replit.app/api/_debug/discord
+
+# Bot install URL (replace GUILD)
+curl -sS "https://thecommish.replit.app/api/v2/discord/bot-install-url?guildId=GUILD_SNOWFLAKE"
+
+# Channels (replace GUILD)
+curl -sS "https://thecommish.replit.app/api/v2/discord/channels?guildId=GUILD_SNOWFLAKE"
+
+# Sleeper link + sync (replace ids)
+curl -sS -XPOST -H "Content-Type: application/json" \
+  -d '{"leagueId":"REALL-LEAG-UEID-0000-000000000000","sleeperUserId":"your_sleeper"}' \
+  https://thecommish.replit.app/api/v2/sleeper/link
+
+curl -sS -XPOST https://thecommish.replit.app/api/v2/sleeper/sync/REALL-LEAG-UEID-0000-000000000000
+
+
+⸻
+
+12) Why this heals the current failures
+	•	Invalid redirect_uri on bot install → Gone (install URL has only client_id, scope, permissions, optional guild_id).
+	•	“YOUR_GUILD_ID” / 50035 NUMBER_TYPE_COERCE → We validate snowflakes server-side and the client now guards the param.
+	•	Empty guilds after OAuth → Session cookies fixed (trust proxy, proxy:true, secure:true, sameSite:lax); frontend uses credentials:'include'.
+	•	/api/v2/setup/discord UUID 22P02 → LeagueId auto-generated if missing; robust upserts.
+	•	Dashboard not showing real data → New /api/dashboard/* endpoints, mocks disabled in prod.
+	•	Sleeper not syncing → Deterministic link + sync endpoints; settings persisted & surfaced; pathway to Constitution mapping.
+	•	Blank UI from Supabase mix-up → Preflight env guard fails fast; we already fixed the mistaken Vite variable.
+
+⸻
+
+13) Optional next passes (after green)
+	•	Map Sleeper settings → Constitution rules with a reversible “proposed changes” UI (user can accept/decline).
+	•	Add message-level behaviors: reactions policy (👍 ❤️ by sentiment/criteria), throttled @everyone with commissioner override.
+	•	Add DeepSeek function-calling schema for “explain this rule” and “generate recap” with RAG context windows.
+	•	Background job safety: per-league rate-limit buckets, retry w/ backoff and jitter, and idempotency keys per message.
+
+⸻
+
+Final note
+
+This plan is careful about not breaking your current 80% working state while fixing the brittle 20%. Everything is idempotent, guarded, reversible, and comes with verifiable probes + an E2E smoke suite.
+
+If you want, I can also generate the exact file diffs as git apply patches once the Agent confirms the project layout on disk (paths can vary slightly).
