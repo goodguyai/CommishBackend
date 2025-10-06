@@ -1040,19 +1040,19 @@ export function DashboardPage() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-text-primary mb-1">Dashboard</h1>
-            {isDemoMode && <ModeBadge mode="demo" />}
+            {isDemoMode ? <ModeBadge mode="demo" /> : null}
           </div>
           <p className="text-text-secondary">League management and bot system status</p>
         </div>
       </div>
 
-      {isDemoMode && (
+      {isDemoMode ? (
         <FinishSetupBanner 
           message="You're in demo mode. Activate beta to connect your real Discord and Sleeper league."
           actionLabel="Activate Beta"
           actionPath="/"
         />
-      )}
+      ) : null}
 
       {/* Top Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1344,7 +1344,7 @@ export function DashboardPage() {
                 </Select>
               </div>
 
-              {isDemoMode && (
+              {isDemoMode ? (
                 <div className="space-y-3">
                   <div className="text-xs text-text-muted">
                     <p>🔧 Dev Mode: Run digest manually</p>
@@ -1359,12 +1359,12 @@ export function DashboardPage() {
                     disabled={runDigestMutation.isPending}
                     className="w-full bg-brand-teal hover:bg-brand-teal/90 text-white"
                   >
-                    {runDigestMutation.isPending && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
-                    {!runDigestMutation.isPending && <Zap className="w-4 h-4 mr-2" />}
+                    {runDigestMutation.isPending ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : null}
+                    {!runDigestMutation.isPending ? <Zap className="w-4 h-4 mr-2" /> : null}
                     {runDigestMutation.isPending ? 'Posting...' : 'Run Now'}
                   </Button>
                 </div>
-              )}
+              ) : null}
             </CardContent>
           </Card>
         </div>

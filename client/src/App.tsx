@@ -22,6 +22,7 @@ import PreviewDashboard from './pages/PreviewDashboard';
 import { SleeperLinkPage } from './pages/SleeperLinkPage';
 import { LeagueSettingsPage } from './pages/LeagueSettingsPage';
 import { ConstitutionTemplatesPage } from './pages/ConstitutionTemplatesPage';
+import { CommissionerDashboard } from './pages/CommissionerDashboard';
 
 function AppRouter() {
   const [location] = useLocation();
@@ -32,6 +33,7 @@ function AppRouter() {
       <AppShell>
         <Switch>
           <Route path="/app" component={DashboardPage} />
+          <Route path="/app/commissioner" component={CommissionerDashboard} />
           <Route path="/app/waivers" component={WaiversPage} />
           <Route path="/app/trades" component={TradesPage} />
           <Route path="/app/matchups" component={MatchupsPage} />
