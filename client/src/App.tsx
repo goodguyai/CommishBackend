@@ -19,6 +19,9 @@ import { LandingPage } from './pages/Landing';
 import { HomePage } from './pages/Home';
 import StyleGuide from './pages/StyleGuide';
 import PreviewDashboard from './pages/PreviewDashboard';
+import { SleeperLinkPage } from './pages/SleeperLinkPage';
+import { LeagueSettingsPage } from './pages/LeagueSettingsPage';
+import { ConstitutionTemplatesPage } from './pages/ConstitutionTemplatesPage';
 
 function AppRouter() {
   const [location] = useLocation();
@@ -37,6 +40,9 @@ function AppRouter() {
           <Route path="/app/chat" component={ChatPage} />
           <Route path="/app/settings" component={SettingsPage} />
           <Route path="/app/terminal" component={TerminalPage} />
+          <Route path="/sleeper/link" component={SleeperLinkPage} />
+          <Route path="/settings/:leagueId" component={LeagueSettingsPage} />
+          <Route path="/constitution/:leagueId" component={ConstitutionTemplatesPage} />
           <Route>
             <div className="text-center py-12">
               <h1 className="text-2xl font-bold text-text-primary mb-2">404</h1>
