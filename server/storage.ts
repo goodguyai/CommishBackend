@@ -13,7 +13,10 @@ import type {
   ModAction, InsertModAction, Dispute, InsertDispute,
   TradeEvaluation, InsertTradeEvaluation,
   Highlight, InsertHighlight, Rivalry, InsertRivalry,
-  ContentQueue, InsertContentQueue
+  ContentQueue, InsertContentQueue,
+  SleeperRoster, InsertSleeperRoster,
+  SleeperTransaction, InsertSleeperTransaction,
+  SleeperMatchup, InsertSleeperMatchup
 } from "@shared/schema";
 import { EmbeddingResult } from "./services/rag";
 import { env } from "./services/env";
@@ -202,6 +205,14 @@ export interface IStorage {
   getConstitutionRenders(leagueId: string): Promise<any[]>;
   getLeagueSettingsOverrides(leagueId: string): Promise<any | null>;
   saveLeagueSettingsOverrides(params: { leagueId: string; overrides: any; updatedBy?: string }): Promise<void>;
+
+  // Sleeper data methods (rosters, transactions, matchups)
+  upsertSleeperRosters(leagueId: string, rosters: any[]): Promise<void>;
+  upsertSleeperTransactions(leagueId: string, transactions: any[]): Promise<void>;
+  upsertSleeperMatchups(leagueId: string, week: number, matchups: any[]): Promise<void>;
+  getSleeperRosters(leagueId: string): Promise<any[]>;
+  getSleeperTransactions(leagueId: string, filters?: { week?: number; type?: string }): Promise<any[]>;
+  getSleeperMatchups(leagueId: string, week?: number): Promise<any[]>;
 
   // Migration methods
   runRawSQL(query: string): Promise<any>;
@@ -1295,6 +1306,162 @@ export class DatabaseStorage implements IStorage {
       });
   }
 
+  // Sleeper data methods implementation
+  async upsertSleeperRosters(leagueId: string, rosters: any[]): Promise<void> {
+    if (!rosters || rosters.length === 0) {
+      return;
+    }
+
+    console.log(`[Storage] Upserting ${rosters.length} rosters for league ${leagueId}`);
+
+    for (const roster of rosters) {
+      await this.db.insert(schema.sleeperRosters)
+        .values({
+          leagueId,
+          sleeperRosterId: roster.sleeperRosterId,
+          ownerId: roster.ownerId,
+          players: roster.players,
+          bench: roster.bench,
+          ir: roster.ir,
+          metadata: roster.metadata,
+        })
+        .onConflictDoUpdate({
+          target: [schema.sleeperRosters.leagueId, schema.sleeperRosters.sleeperRosterId],
+          set: {
+            ownerId: roster.ownerId,
+            players: roster.players,
+            bench: roster.bench,
+            ir: roster.ir,
+            metadata: roster.metadata,
+            updatedAt: new Date(),
+          },
+        });
+    }
+
+    console.log(`[Storage] Successfully upserted ${rosters.length} rosters`);
+  }
+
+  async upsertSleeperTransactions(leagueId: string, transactions: any[]): Promise<void> {
+    if (!transactions || transactions.length === 0) {
+      return;
+    }
+
+    console.log(`[Storage] Upserting ${transactions.length} transactions for league ${leagueId}`);
+
+    for (const tx of transactions) {
+      await this.db.insert(schema.sleeperTransactions)
+        .values({
+          leagueId,
+          txId: tx.txId,
+          type: tx.type,
+          status: tx.status,
+          faabSpent: tx.faabSpent,
+          adds: tx.adds,
+          drops: tx.drops,
+          parties: tx.parties,
+          processedAt: tx.processedAt,
+          raw: tx.raw,
+        })
+        .onConflictDoUpdate({
+          target: [schema.sleeperTransactions.leagueId, schema.sleeperTransactions.txId],
+          set: {
+            type: tx.type,
+            status: tx.status,
+            faabSpent: tx.faabSpent,
+            adds: tx.adds,
+            drops: tx.drops,
+            parties: tx.parties,
+            processedAt: tx.processedAt,
+            raw: tx.raw,
+          },
+        });
+    }
+
+    console.log(`[Storage] Successfully upserted ${transactions.length} transactions`);
+  }
+
+  async upsertSleeperMatchups(leagueId: string, week: number, matchups: any[]): Promise<void> {
+    if (!matchups || matchups.length === 0) {
+      return;
+    }
+
+    console.log(`[Storage] Upserting ${matchups.length} matchups for league ${leagueId} week ${week}`);
+
+    for (const matchup of matchups) {
+      await this.db.insert(schema.sleeperMatchups)
+        .values({
+          leagueId,
+          week,
+          matchupId: matchup.matchupId,
+          rosterIdHome: matchup.rosterIdHome,
+          rosterIdAway: matchup.rosterIdAway,
+          scoreHome: matchup.scoreHome,
+          scoreAway: matchup.scoreAway,
+          status: matchup.status,
+          raw: matchup.raw,
+        })
+        .onConflictDoUpdate({
+          target: [schema.sleeperMatchups.leagueId, schema.sleeperMatchups.week, schema.sleeperMatchups.matchupId],
+          set: {
+            rosterIdHome: matchup.rosterIdHome,
+            rosterIdAway: matchup.rosterIdAway,
+            scoreHome: matchup.scoreHome,
+            scoreAway: matchup.scoreAway,
+            status: matchup.status,
+            raw: matchup.raw,
+          },
+        });
+    }
+
+    console.log(`[Storage] Successfully upserted ${matchups.length} matchups`);
+  }
+
+  async getSleeperRosters(leagueId: string): Promise<SleeperRoster[]> {
+    console.log(`[Storage] Fetching rosters for league ${leagueId}`);
+
+    const rosters = await this.db.select()
+      .from(schema.sleeperRosters)
+      .where(eq(schema.sleeperRosters.leagueId, leagueId));
+
+    console.log(`[Storage] Found ${rosters.length} rosters`);
+    return rosters;
+  }
+
+  async getSleeperTransactions(leagueId: string, filters?: { week?: number; type?: string }): Promise<SleeperTransaction[]> {
+    console.log(`[Storage] Fetching transactions for league ${leagueId}`, filters);
+
+    let query = this.db.select().from(schema.sleeperTransactions);
+
+    const conditions = [eq(schema.sleeperTransactions.leagueId, leagueId)];
+
+    if (filters?.type) {
+      conditions.push(eq(schema.sleeperTransactions.type, filters.type));
+    }
+
+    const transactions = await query.where(and(...conditions)).orderBy(desc(schema.sleeperTransactions.processedAt));
+
+    console.log(`[Storage] Found ${transactions.length} transactions`);
+    return transactions;
+  }
+
+  async getSleeperMatchups(leagueId: string, week?: number): Promise<SleeperMatchup[]> {
+    console.log(`[Storage] Fetching matchups for league ${leagueId}`, week ? `week ${week}` : 'all weeks');
+
+    const conditions = [eq(schema.sleeperMatchups.leagueId, leagueId)];
+
+    if (week !== undefined) {
+      conditions.push(eq(schema.sleeperMatchups.week, week));
+    }
+
+    const matchups = await this.db.select()
+      .from(schema.sleeperMatchups)
+      .where(and(...conditions))
+      .orderBy(desc(schema.sleeperMatchups.week));
+
+    console.log(`[Storage] Found ${matchups.length} matchups`);
+    return matchups;
+  }
+
   // Migration methods implementation
   async runRawSQL(query: string): Promise<any> {
     return this.db.execute(sql.raw(query));
@@ -1407,7 +1574,7 @@ export class MemStorage implements IStorage {
       channelId: league.channelId ?? null,
       timezone: league.timezone ?? null,
       tone: league.tone ?? null,
-      digestFrequency: league.digestFrequency ?? null,
+      digestFrequency: "off",
       featureFlags: league.featureFlags ?? { qa: true, deadlines: true, digest: true, trade_helper: false, autoMeme: false, reminders: { lineupLock: true, waiver: true, tradeDeadline: true } },
       modelPrefs: league.modelPrefs ?? { maxTokens: 1000, provider: "deepseek" },
       channels: league.channels ?? { digests: null, reminders: null, polls: null, highlights: null },
@@ -1489,7 +1656,7 @@ export class MemStorage implements IStorage {
       id, 
       createdAt: new Date(),
       updatedAt: new Date(),
-      title: document.title || 'League Constitution',
+      title: 'League Constitution',
       url: document.url ?? null,
       content: document.content ?? null
     };
@@ -2211,6 +2378,31 @@ export class MemStorage implements IStorage {
 
   async saveLeagueSettingsOverrides(params: { leagueId: string; overrides: any; updatedBy?: string }): Promise<void> {
     console.log("MemStorage: saveLeagueSettingsOverrides not implemented");
+  }
+
+  // Sleeper data methods (stub implementations for in-memory storage)
+  async upsertSleeperRosters(leagueId: string, rosters: any[]): Promise<void> {
+    console.log("MemStorage: upsertSleeperRosters not implemented");
+  }
+
+  async upsertSleeperTransactions(leagueId: string, transactions: any[]): Promise<void> {
+    console.log("MemStorage: upsertSleeperTransactions not implemented");
+  }
+
+  async upsertSleeperMatchups(leagueId: string, week: number, matchups: any[]): Promise<void> {
+    console.log("MemStorage: upsertSleeperMatchups not implemented");
+  }
+
+  async getSleeperRosters(leagueId: string): Promise<any[]> {
+    return [];
+  }
+
+  async getSleeperTransactions(leagueId: string, filters?: { week?: number; type?: string }): Promise<any[]> {
+    return [];
+  }
+
+  async getSleeperMatchups(leagueId: string, week?: number): Promise<any[]> {
+    return [];
   }
 
   // Migration methods implementation (no-op for in-memory storage)
