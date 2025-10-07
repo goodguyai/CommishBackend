@@ -1,4 +1,4 @@
-import { ReactNode, useState } from 'react';
+import { ReactNode, useState, useEffect } from 'react';
 import { Link, useLocation } from 'wouter';
 import { 
   LayoutDashboard, 
@@ -59,6 +59,21 @@ export function AppShell({ children }: { children: ReactNode }) {
     queryKey: ['/api/leagues', selectedLeagueId],
     enabled: !!selectedLeagueId,
   });
+
+  // Auto-select valid league when user data loads
+  useEffect(() => {
+    if (userData?.leagues && userData.leagues.length > 0) {
+      // Check if current selectedLeagueId is valid for this user
+      const isValidLeague = userData.leagues.some(l => l.id === selectedLeagueId);
+      
+      if (!isValidLeague) {
+        // Auto-select first league (most recent is first in array)
+        const firstLeague = userData.leagues[0];
+        console.log('[AppShell] Invalid league selected, auto-selecting:', firstLeague.id);
+        setSelectedLeague(firstLeague.id);
+      }
+    }
+  }, [userData?.leagues, selectedLeagueId, setSelectedLeague]);
 
   const isDemoMode = leagueData?.league?.featureFlags && (leagueData.league.featureFlags as any)?.demo === true;
   const mode = isDemoMode ? 'Demo' : 'Beta';
