@@ -3253,6 +3253,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         payload: { action: "sleeper_league_linked", sleeperLeagueId, season },
       });
       
+      // Automatically run initial sync to populate rosters
+      try {
+        console.log(`[Sleeper Setup] Running initial sync for league ${leagueId}`);
+        await runSleeperSync(leagueId);
+        console.log(`[Sleeper Setup] Initial sync completed successfully`);
+      } catch (syncError) {
+        console.error(`[Sleeper Setup] Initial sync failed (non-fatal):`, syncError);
+        // Don't fail the setup if sync fails - user can manually sync later
+      }
+      
       res.json({ ok: true, leagueId });
     } catch (e) {
       console.error("[Sleeper Setup]", e);

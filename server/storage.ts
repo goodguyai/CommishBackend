@@ -149,6 +149,12 @@ export interface IStorage {
     discordUsername?: string;
     role?: 'COMMISH' | 'MANAGER';
   }): Promise<Member>;
+  upsertMemberFromSleeper(data: {
+    leagueId: string;
+    sleeperOwnerId: string;
+    sleeperTeamName: string;
+    role?: 'COMMISH' | 'MANAGER';
+  }): Promise<string>;
 
   // Reminder methods (Phase 1)
   getReminders(leagueId: string): Promise<Reminder[]>;
@@ -924,6 +930,24 @@ export class DatabaseStorage implements IStorage {
         .returning();
       return inserted;
     }
+  }
+
+  async upsertMemberFromSleeper(data: {
+    leagueId: string;
+    sleeperOwnerId: string;
+    sleeperTeamName: string;
+    role?: 'COMMISH' | 'MANAGER';
+  }): Promise<string> {
+    const result = await this.db.execute(sql`
+      INSERT INTO ${schema.members} (league_id, sleeper_owner_id, sleeper_team_name, discord_user_id, role)
+      VALUES (${data.leagueId}, ${data.sleeperOwnerId}, ${data.sleeperTeamName}, NULL, ${data.role || 'MANAGER'}::member_role)
+      ON CONFLICT (league_id, sleeper_owner_id) 
+      DO UPDATE SET
+        sleeper_team_name = EXCLUDED.sleeper_team_name,
+        role = COALESCE(${schema.members.role}, EXCLUDED.role)
+      RETURNING id
+    `);
+    return (result as unknown as any[])[0]?.id;
   }
 
   // Reminder methods (Phase 1)
@@ -2140,6 +2164,39 @@ export class MemStorage implements IStorage {
       };
       this.members.set(id, newMember);
       return newMember;
+    }
+  }
+
+  async upsertMemberFromSleeper(data: {
+    leagueId: string;
+    sleeperOwnerId: string;
+    sleeperTeamName: string;
+    role?: 'COMMISH' | 'MANAGER';
+  }): Promise<string> {
+    const existing = Array.from(this.members.values()).find(
+      m => m.leagueId === data.leagueId && m.sleeperOwnerId === data.sleeperOwnerId
+    );
+    
+    if (existing) {
+      existing.sleeperTeamName = data.sleeperTeamName;
+      if (data.role) {
+        existing.role = data.role;
+      }
+      return existing.id;
+    } else {
+      const id = this.generateId();
+      const newMember: Member = {
+        id,
+        leagueId: data.leagueId,
+        discordUserId: `placeholder-${data.sleeperOwnerId}`,
+        role: data.role || 'MANAGER',
+        sleeperOwnerId: data.sleeperOwnerId,
+        sleeperTeamName: data.sleeperTeamName,
+        discordUsername: null,
+        createdAt: new Date(),
+      };
+      this.members.set(id, newMember);
+      return id;
     }
   }
 

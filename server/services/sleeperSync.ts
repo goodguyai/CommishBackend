@@ -140,6 +140,38 @@ export async function runSleeperSync(leagueId: string): Promise<NormalizedSettin
 
   console.log(`[SleeperSync] Synced league ${leagueId}: ${diffs.length} changes detected`);
 
+  // Fetch and sync rosters to populate members table
+  try {
+    console.log(`[SleeperSync] Fetching rosters for league ${leagueId}`);
+    const rostersRes = await client.rosters(link.sleeperLeagueId);
+    
+    if (rostersRes.status === 200 && rostersRes.data && Array.isArray(rostersRes.data)) {
+      console.log(`[SleeperSync] Found ${rostersRes.data.length} rosters, creating/updating members`);
+      
+      for (const roster of rostersRes.data) {
+        if (!roster.owner_id) {
+          console.log(`[SleeperSync] Skipping roster ${roster.roster_id} - no owner_id`);
+          continue;
+        }
+
+        const teamName = `Team ${roster.roster_id}`;
+        
+        await storage.upsertMemberFromSleeper({
+          leagueId,
+          sleeperOwnerId: roster.owner_id,
+          sleeperTeamName: teamName,
+          role: 'MANAGER',
+        });
+      }
+      
+      console.log(`[SleeperSync] Successfully synced ${rostersRes.data.length} rosters to members table`);
+    } else {
+      console.log(`[SleeperSync] No rosters found or failed to fetch (status: ${rostersRes.status})`);
+    }
+  } catch (error) {
+    console.error(`[SleeperSync] Failed to sync rosters:`, error);
+  }
+
   // Trigger constitution rendering pipeline if settings changed
   if (diffs.length > 0) {
     try {
