@@ -181,11 +181,6 @@ const TONE_OPTIONS = [
 export function DashboardPage() {
   // Get selectedLeagueId from app store
   const { selectedLeagueId } = useAppStore();
-  
-  // Get leagueId from localStorage or use first available league
-  const [leagueId, setLeagueId] = useState<string>(() => {
-    return localStorage.getItem('selectedLeagueId') || '';
-  });
 
   // Owner Mapping Dialog State
   const [isOwnerDialogOpen, setIsOwnerDialogOpen] = useState(false);
@@ -258,25 +253,10 @@ export function DashboardPage() {
   const [documentVersion, setDocumentVersion] = useState('v1.0');
   const [documentContent, setDocumentContent] = useState('');
 
-  // Fetch leagues to get the first one if not set (using demo endpoint for testing)
-  const { data: leagues } = useQuery<{ leagues: League[] }>({
-    queryKey: ['/api/demo/leagues'],
-    enabled: !leagueId,
-  });
-
-  // Set leagueId from first league if available
-  useEffect(() => {
-    if (!leagueId && leagues?.leagues && leagues.leagues.length > 0) {
-      const firstLeagueId = leagues.leagues[0].id;
-      setLeagueId(firstLeagueId);
-      localStorage.setItem('selectedLeagueId', firstLeagueId);
-    }
-  }, [leagues, leagueId]);
-
   // Fetch current league data
   const { data: leagueData } = useQuery<{ league: League }>({
-    queryKey: ['/api/leagues', leagueId],
-    enabled: !!leagueId,
+    queryKey: ['/api/leagues', selectedLeagueId],
+    enabled: !!selectedLeagueId,
   });
 
   // Check if current league is in demo mode
@@ -304,8 +284,8 @@ export function DashboardPage() {
 
   // Dashboard data queries - using real league-specific endpoints
   const { data: statsResp, isLoading: statsLoading } = useQuery<{ ok: boolean; stats: { rulesDocs: number; activityLast24h: number; ownersCount: number } }>({
-    queryKey: ['/api/v2/dashboard', leagueId, 'stats'],
-    enabled: !!leagueId,
+    queryKey: ['/api/v2/dashboard', selectedLeagueId, 'stats'],
+    enabled: !!selectedLeagueId,
   });
 
   const { data: discord, isLoading: discordLoading } = useQuery<DiscordIntegration>({
@@ -332,8 +312,8 @@ export function DashboardPage() {
   });
 
   const { data: ragResp, isLoading: ragLoading } = useQuery<{ ok: boolean; rag: { indexed: boolean; embeddedCount: number; recentDocs: any[] } }>({
-    queryKey: ['/api/v2/dashboard', leagueId, 'rag'],
-    enabled: !!leagueId,
+    queryKey: ['/api/v2/dashboard', selectedLeagueId, 'rag'],
+    enabled: !!selectedLeagueId,
   });
 
   const { data: ai, isLoading: aiLoading } = useQuery<AiAssistantStatus>({
@@ -341,30 +321,30 @@ export function DashboardPage() {
   });
 
   const { data: activityResp, isLoading: activityLoading } = useQuery<{ ok: boolean; activity: any[] }>({
-    queryKey: ['/api/v2/dashboard', leagueId, 'activity'],
-    enabled: !!leagueId,
+    queryKey: ['/api/v2/dashboard', selectedLeagueId, 'activity'],
+    enabled: !!selectedLeagueId,
   });
 
   // Owner Mappings (Members) Query
   const { data: membersData, isLoading: membersLoading } = useQuery<{ members: Member[] }>({
-    queryKey: ['/api/leagues', leagueId, 'members'],
-    enabled: !!leagueId,
+    queryKey: ['/api/leagues', selectedLeagueId, 'members'],
+    enabled: !!selectedLeagueId,
   });
 
   // Reminders Query
   const { data: remindersData, isLoading: remindersLoading } = useQuery<{ reminders: Reminder[] }>({
-    queryKey: ['/api/leagues', leagueId, 'reminders'],
-    enabled: !!leagueId,
+    queryKey: ['/api/leagues', selectedLeagueId, 'reminders'],
+    enabled: !!selectedLeagueId,
   });
 
   // Create Member Mutation
   const createMemberMutation = useMutation({
     mutationFn: async (memberData: any) => {
-      const response = await apiRequest('POST', `/api/leagues/${leagueId}/members`, memberData);
+      const response = await apiRequest('POST', `/api/leagues/${selectedLeagueId}/members`, memberData);
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/demo/leagues', leagueId, 'members'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/leagues', selectedLeagueId, 'members'] });
       toast.success('Owner mapped successfully', {
         description: `Mapped ${discordUsername} to team`,
       });
@@ -381,11 +361,11 @@ export function DashboardPage() {
   // Create Reminder Mutation
   const createReminderMutation = useMutation({
     mutationFn: async (reminderData: any) => {
-      const response = await apiRequest('POST', `/api/leagues/${leagueId}/reminders`, reminderData);
+      const response = await apiRequest('POST', `/api/leagues/${selectedLeagueId}/reminders`, reminderData);
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/demo/leagues', leagueId, 'reminders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/leagues', selectedLeagueId, 'reminders'] });
       toast.success('Reminder created', {
         description: 'New reminder has been added',
       });
@@ -406,7 +386,7 @@ export function DashboardPage() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/demo/leagues', leagueId, 'reminders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/leagues', selectedLeagueId, 'reminders'] });
       toast.success('Reminder updated', {
         description: 'Reminder has been updated successfully',
       });
@@ -424,7 +404,7 @@ export function DashboardPage() {
       await apiRequest('DELETE', `/api/reminders/${id}`, undefined);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/demo/leagues', leagueId, 'reminders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/leagues', selectedLeagueId, 'reminders'] });
       toast.success('Reminder deleted', {
         description: 'Reminder has been removed',
       });
@@ -439,11 +419,11 @@ export function DashboardPage() {
   // Update League Settings Mutation
   const updateSettingsMutation = useMutation({
     mutationFn: async (settingsData: any) => {
-      const response = await apiRequest('PATCH', `/api/leagues/${leagueId}/settings`, settingsData);
+      const response = await apiRequest('PATCH', `/api/leagues/${selectedLeagueId}/settings`, settingsData);
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/demo/leagues', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/leagues', selectedLeagueId] });
       toast.success('Settings updated', {
         description: 'League settings have been saved',
       });
@@ -457,13 +437,13 @@ export function DashboardPage() {
 
   // Phase 2: Disputes Query
   const { data: disputesData, isLoading: disputesLoading } = useQuery<{ disputes: Dispute[] }>({
-    queryKey: ['/api/v2/disputes', leagueId, disputeStatusFilter],
+    queryKey: ['/api/v2/disputes', selectedLeagueId, disputeStatusFilter],
     queryFn: async () => {
-      const res = await fetch(`/api/v2/disputes?leagueId=${leagueId}&status=${disputeStatusFilter}`);
+      const res = await fetch(`/api/v2/disputes?leagueId=${selectedLeagueId}&status=${disputeStatusFilter}`);
       if (!res.ok) throw new Error('Failed to fetch disputes');
       return res.json();
     },
-    enabled: !!leagueId,
+    enabled: !!selectedLeagueId,
   });
 
   // Phase 2: Update Dispute Mutation
@@ -473,7 +453,7 @@ export function DashboardPage() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/v2/disputes', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/disputes', selectedLeagueId, disputeStatusFilter] });
       toast.success('Dispute updated', {
         description: 'Dispute status has been updated',
       });
@@ -531,26 +511,26 @@ export function DashboardPage() {
 
   // Phase 3: Highlights Query
   const { data: highlightsData, isLoading: highlightsLoading, refetch: refetchHighlights } = useQuery<{ highlights: Highlight[] }>({
-    queryKey: ['/api/v2/highlights', leagueId, highlightsWeek],
+    queryKey: ['/api/v2/highlights', selectedLeagueId, highlightsWeek],
     queryFn: async () => {
-      const res = await fetch(`/api/v2/highlights?leagueId=${leagueId}&week=${highlightsWeek}`);
+      const res = await fetch(`/api/v2/highlights?leagueId=${selectedLeagueId}&week=${highlightsWeek}`);
       if (!res.ok) throw new Error('Failed to fetch highlights');
       return res.json();
     },
-    enabled: !!leagueId && highlightsWeek > 0,
+    enabled: !!selectedLeagueId && highlightsWeek > 0,
   });
 
   // Phase 3: Compute Highlights Mutation
   const computeHighlightsMutation = useMutation({
     mutationFn: async () => {
       const response = await apiRequest('POST', '/api/v2/highlights/compute', {
-        leagueId,
+        leagueId: selectedLeagueId,
         week: highlightsWeek,
       });
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/v2/highlights', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/highlights', selectedLeagueId, highlightsWeek] });
       refetchHighlights();
       toast.success('Highlights computed', {
         description: `Highlights for week ${highlightsWeek} have been generated`,
@@ -565,25 +545,25 @@ export function DashboardPage() {
 
   // Phase 3: Rivalries Query
   const { data: rivalriesData, isLoading: rivalriesLoading } = useQuery<{ rivalries: Rivalry[] }>({
-    queryKey: ['/api/v2/rivalries', leagueId],
+    queryKey: ['/api/v2/rivalries', selectedLeagueId],
     queryFn: async () => {
-      const res = await fetch(`/api/v2/rivalries?leagueId=${leagueId}`);
+      const res = await fetch(`/api/v2/rivalries?leagueId=${selectedLeagueId}`);
       if (!res.ok) throw new Error('Failed to fetch rivalries');
       return res.json();
     },
-    enabled: !!leagueId,
+    enabled: !!selectedLeagueId,
   });
 
   // Phase 3: Update Rivalries Mutation
   const updateRivalriesMutation = useMutation({
     mutationFn: async () => {
       const response = await apiRequest('POST', '/api/v2/rivalries/update', {
-        leagueId,
+        leagueId: selectedLeagueId,
       });
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/v2/rivalries', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/rivalries', selectedLeagueId] });
       toast.success('Rivalries updated', {
         description: 'Rivalry records have been refreshed',
       });
@@ -597,14 +577,14 @@ export function DashboardPage() {
 
   // Phase 3: Content Queue Query
   const { data: contentQueueData, isLoading: contentQueueLoading } = useQuery<{ queue: ContentQueueItem[] }>({
-    queryKey: ['/api/v2/content/queue', leagueId, contentQueueStatusFilter],
+    queryKey: ['/api/v2/content/queue', selectedLeagueId, contentQueueStatusFilter],
     queryFn: async () => {
       const statusParam = contentQueueStatusFilter !== 'all' ? `&status=${contentQueueStatusFilter}` : '';
-      const res = await fetch(`/api/v2/content/queue?leagueId=${leagueId}${statusParam}`);
+      const res = await fetch(`/api/v2/content/queue?leagueId=${selectedLeagueId}${statusParam}`);
       if (!res.ok) throw new Error('Failed to fetch content queue');
       return res.json();
     },
-    enabled: !!leagueId,
+    enabled: !!selectedLeagueId,
   });
 
   // Phase 3: Re-enqueue Content Mutation
@@ -620,7 +600,7 @@ export function DashboardPage() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/v2/content/queue', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/content/queue', selectedLeagueId, contentQueueStatusFilter] });
       toast.success('Content re-enqueued', {
         description: 'Content has been added back to the queue',
       });
@@ -634,13 +614,13 @@ export function DashboardPage() {
 
   // Commissioner v2: Fetch league config from v2 API
   const { data: v2LeagueData, isLoading: v2LeagueLoading } = useQuery<{ ok: boolean; data: League }>({
-    queryKey: ['/api/v2/leagues', leagueId],
+    queryKey: ['/api/v2/leagues', selectedLeagueId],
     queryFn: async () => {
-      const res = await fetch(`/api/v2/leagues/${leagueId}`);
+      const res = await fetch(`/api/v2/leagues/${selectedLeagueId}`);
       if (!res.ok) throw new Error('Failed to fetch league');
       return res.json();
     },
-    enabled: !!leagueId,
+    enabled: !!selectedLeagueId,
   });
 
   const v2League = v2LeagueData?.data;
@@ -679,11 +659,11 @@ export function DashboardPage() {
   // Commissioner v2: Update league config
   const updateV2LeagueMutation = useMutation({
     mutationFn: async (updates: any) => {
-      const response = await apiRequest('PATCH', `/api/v2/leagues/${leagueId}`, updates);
+      const response = await apiRequest('PATCH', `/api/v2/leagues/${selectedLeagueId}`, updates);
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/v2/leagues', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/leagues', selectedLeagueId] });
       toast.success('League updated', {
         description: 'Settings have been saved successfully',
       });
@@ -698,7 +678,7 @@ export function DashboardPage() {
   // Commissioner v2: Preview digest
   const previewDigestMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest('POST', `/api/v2/digest/preview?leagueId=${leagueId}`, {});
+      const response = await apiRequest('POST', `/api/v2/digest/preview?leagueId=${selectedLeagueId}`, {});
       return response.json();
     },
     onSuccess: (data: any) => {
@@ -719,7 +699,7 @@ export function DashboardPage() {
   const runDigestMutation = useMutation({
     mutationFn: async () => {
       const adminKey = import.meta.env.VITE_ADMIN_KEY || 'dev-key';
-      const response = await fetch(`/api/digest/run-now?leagueId=${leagueId}`, {
+      const response = await fetch(`/api/digest/run-now?leagueId=${selectedLeagueId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -746,13 +726,13 @@ export function DashboardPage() {
 
   // Phase 6: Rules Library Query
   const { data: documentsData, isLoading: documentsLoading } = useQuery<{ documents: Array<{ id: string; title: string; version: string; contentType: string; chunksCount: number; lastIndexed: string; }> }>({
-    queryKey: ['/api/v2/rag/docs', leagueId],
+    queryKey: ['/api/v2/rag/docs', selectedLeagueId],
     queryFn: async () => {
-      const res = await fetch(`/api/v2/rag/docs?leagueId=${leagueId}`);
+      const res = await fetch(`/api/v2/rag/docs?leagueId=${selectedLeagueId}`);
       if (!res.ok) throw new Error('Failed to fetch documents');
       return res.json();
     },
-    enabled: !!leagueId,
+    enabled: !!selectedLeagueId,
   });
 
   // Phase 6: Reindex Document Mutation
@@ -762,7 +742,7 @@ export function DashboardPage() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/v2/rag/docs', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/rag/docs', selectedLeagueId] });
       toast.success('Document reindexed', {
         description: 'Document has been reindexed successfully',
       });
@@ -777,7 +757,7 @@ export function DashboardPage() {
   // Phase 6: Add Document Mutation
   const addDocumentMutation = useMutation({
     mutationFn: async ({ title, version, content }: { title: string; version: string; content: string }) => {
-      const response = await apiRequest('POST', `/api/rag/index/${leagueId}`, {
+      const response = await apiRequest('POST', `/api/rag/index/${selectedLeagueId}`, {
         title,
         version,
         content,
@@ -786,7 +766,7 @@ export function DashboardPage() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/v2/rag/docs', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/rag/docs', selectedLeagueId] });
       toast.success('Document added', {
         description: 'Document has been indexed successfully',
       });
@@ -983,7 +963,7 @@ export function DashboardPage() {
   };
 
   const handleSearchTrade = async () => {
-    if (!tradeId.trim() || !leagueId) {
+    if (!tradeId.trim() || !selectedLeagueId) {
       toast.error('Validation error', {
         description: 'Trade ID is required',
       });
@@ -994,7 +974,7 @@ export function DashboardPage() {
     setTradeEvaluation(null);
 
     try {
-      const response = await fetch(`/api/v2/trades/evaluate/${leagueId}/${tradeId}`);
+      const response = await fetch(`/api/v2/trades/evaluate/${selectedLeagueId}/${tradeId}`);
       
       if (!response.ok) {
         throw new Error('Trade evaluation not found');
@@ -1012,7 +992,7 @@ export function DashboardPage() {
   };
 
   const handleFreezeThread = () => {
-    if (!freezeChannelId.trim() || !leagueId) {
+    if (!freezeChannelId.trim() || !selectedLeagueId) {
       toast.error('Validation error', {
         description: 'Channel ID is required',
       });
@@ -1020,7 +1000,7 @@ export function DashboardPage() {
     }
 
     freezeThreadMutation.mutate({
-      leagueId,
+      leagueId: selectedLeagueId,
       channelId: freezeChannelId,
       minutes: freezeMinutes,
       reason: freezeReason,
@@ -1028,7 +1008,7 @@ export function DashboardPage() {
   };
 
   const handleClarifyRule = () => {
-    if (!clarifyChannelId.trim() || !clarifyQuestion.trim() || !leagueId) {
+    if (!clarifyChannelId.trim() || !clarifyQuestion.trim() || !selectedLeagueId) {
       toast.error('Validation error', {
         description: 'Channel ID and question are required',
       });
@@ -1036,7 +1016,7 @@ export function DashboardPage() {
     }
 
     clarifyRuleMutation.mutate({
-      leagueId,
+      leagueId: selectedLeagueId,
       channelId: clarifyChannelId,
       question: clarifyQuestion,
     });
@@ -1098,7 +1078,7 @@ export function DashboardPage() {
       </div>
 
       {/* Commissioner Control Cards */}
-      {leagueId && !v2LeagueLoading && v2League && (
+      {selectedLeagueId && !v2LeagueLoading && v2League && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Feature Toggles Card */}
           <Card className="bg-surface-card border-border-subtle shadow-depth2" data-testid="card-feature-toggles">
@@ -1273,10 +1253,10 @@ export function DashboardPage() {
       )}
 
       {/* Owner Mapping Section */}
-      {leagueId && <OwnerMapping leagueId={leagueId} />}
+      {selectedLeagueId && <OwnerMapping leagueId={selectedLeagueId} />}
 
       {/* Bot Personality & Digest Controls */}
-      {leagueId && !v2LeagueLoading && v2League && (
+      {selectedLeagueId && !v2LeagueLoading && v2League && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Bot Personality Card */}
           <Card className="bg-surface-card border-border-subtle shadow-depth2" data-testid="card-bot-personality">
@@ -1393,7 +1373,7 @@ export function DashboardPage() {
       )}
 
       {/* Phase 6: Rules Library Card */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2" data-testid="card-rules-library">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -1480,7 +1460,7 @@ export function DashboardPage() {
       )}
 
       {/* League Settings Card */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -1749,7 +1729,7 @@ export function DashboardPage() {
       </div>
 
       {/* Owner Mapping Section */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -1823,7 +1803,7 @@ export function DashboardPage() {
       )}
 
       {/* Reminder Management Section */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -2156,7 +2136,7 @@ export function DashboardPage() {
       {/* PHASE 2 SECTIONS */}
 
       {/* Phase 2: Vibes Monitor */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <CardTitle className="text-text-primary flex items-center gap-2">
@@ -2219,7 +2199,7 @@ export function DashboardPage() {
       )}
 
       {/* Phase 2: Disputes List */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <CardTitle className="text-text-primary flex items-center gap-2">
@@ -2309,7 +2289,7 @@ export function DashboardPage() {
       )}
 
       {/* Phase 2: Trade Fairness Snapshot */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <CardTitle className="text-text-primary flex items-center gap-2">
@@ -2377,7 +2357,7 @@ export function DashboardPage() {
       )}
 
       {/* Phase 2: Moderation Tools */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <CardTitle className="text-text-primary flex items-center gap-2">
@@ -2485,7 +2465,7 @@ export function DashboardPage() {
       )}
 
       {/* Phase 3: Highlights Section */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <CardTitle className="text-text-primary flex items-center gap-2">
@@ -2575,7 +2555,7 @@ export function DashboardPage() {
       )}
 
       {/* Phase 3: Rivalries Section */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -2648,7 +2628,7 @@ export function DashboardPage() {
       )}
 
       {/* Phase 3: Content Queue Section */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <CardTitle className="text-text-primary flex items-center gap-2">
@@ -2739,7 +2719,7 @@ export function DashboardPage() {
       )}
 
       {/* Phase 5: Reminders Section */}
-      {leagueId && (
+      {selectedLeagueId && (
         <Card className="bg-surface-card border-border-subtle shadow-depth2">
           <CardHeader>
             <CardTitle className="text-text-primary flex items-center gap-2">
