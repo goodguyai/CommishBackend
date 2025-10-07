@@ -6,6 +6,7 @@ import { Textarea } from '@/components/ui/Textarea';
 import { toast } from 'sonner';
 import { api } from '@/lib/apiApp';
 import { MessageCircle, ExternalLink } from 'lucide-react';
+import { useAppStore } from '@/store/useAppStore';
 
 interface Source {
   title: string;
@@ -18,11 +19,8 @@ interface AIResponse {
   sources: Source[];
 }
 
-interface AIAskProps {
-  leagueId: string;
-}
-
-export function AIAsk({ leagueId }: AIAskProps) {
+export function AIAsk() {
+  const { selectedLeagueId } = useAppStore();
   const [question, setQuestion] = useState('');
   const [response, setResponse] = useState<AIResponse | null>(null);
 
@@ -30,7 +28,7 @@ export function AIAsk({ leagueId }: AIAskProps) {
     mutationFn: async () => {
       return await api('/api/ai/ask', {
         method: 'POST',
-        body: JSON.stringify({ question, leagueId }),
+        body: JSON.stringify({ question, leagueId: selectedLeagueId }),
       });
     },
     onSuccess: (data) => {

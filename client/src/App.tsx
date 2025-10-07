@@ -24,6 +24,11 @@ import { SleeperLinkPage } from './pages/SleeperLinkPage';
 import { LeagueSettingsPage } from './pages/LeagueSettingsPage';
 import { ConstitutionTemplatesPage } from './pages/ConstitutionTemplatesPage';
 import { CommissionerDashboard } from './pages/CommissionerDashboard';
+import { AIAsk } from './pages/AIAsk';
+import { AIRecaps } from './pages/AIRecaps';
+import { AutomationAnnouncements } from './pages/AutomationAnnouncements';
+import { AutomationReactions } from './pages/AutomationReactions';
+import { ConstitutionDrafts } from './pages/ConstitutionDrafts';
 
 function AppRouter() {
   const [location] = useLocation();
@@ -46,6 +51,11 @@ function AppRouter() {
           <Route path="/app/sleeper/link" component={SleeperLinkPage} />
           <Route path="/app/settings/:leagueId" component={LeagueSettingsPage} />
           <Route path="/app/constitution/:leagueId" component={ConstitutionTemplatesPage} />
+          <Route path="/app/ai/ask" component={AIAsk} />
+          <Route path="/app/ai/recaps" component={AIRecaps} />
+          <Route path="/app/automation/announcements" component={AutomationAnnouncements} />
+          <Route path="/app/automation/reactions" component={AutomationReactions} />
+          <Route path="/app/constitution/drafts" component={ConstitutionDrafts} />
           <Route>
             <div className="text-center py-12">
               <h1 className="text-2xl font-bold text-text-primary mb-2">404</h1>

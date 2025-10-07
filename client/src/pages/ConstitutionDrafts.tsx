@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { api } from '@/lib/apiApp';
 import { queryClient } from '@/lib/queryClient';
 import { CheckCircle, XCircle, Clock } from 'lucide-react';
+import { useAppStore } from '@/store/useAppStore';
 
 interface ConstitutionChange {
   label: string;
@@ -21,15 +22,12 @@ interface ConstitutionDraft {
   changes: ConstitutionChange[];
 }
 
-interface ConstitutionDraftsProps {
-  leagueId: string;
-}
-
-export function ConstitutionDrafts({ leagueId }: ConstitutionDraftsProps) {
+export function ConstitutionDrafts() {
+  const { selectedLeagueId } = useAppStore();
   const { data: drafts = [], isLoading } = useQuery<ConstitutionDraft[]>({
-    queryKey: ['/api/v2/constitution/drafts', leagueId],
+    queryKey: ['/api/v2/constitution/drafts', selectedLeagueId],
     queryFn: async () => {
-      return await api(`/api/v2/constitution/drafts/${leagueId}`);
+      return await api(`/api/v2/constitution/drafts/${selectedLeagueId}`);
     },
   });
 
@@ -40,7 +38,7 @@ export function ConstitutionDrafts({ leagueId }: ConstitutionDraftsProps) {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/v2/constitution/drafts', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/constitution/drafts', selectedLeagueId] });
       toast.success('Draft applied', {
         description: 'Constitution has been updated with the proposed changes',
       });
@@ -59,7 +57,7 @@ export function ConstitutionDrafts({ leagueId }: ConstitutionDraftsProps) {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/v2/constitution/drafts', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/constitution/drafts', selectedLeagueId] });
       toast.success('Draft rejected', {
         description: 'The proposed changes have been rejected',
       });

@@ -6,6 +6,7 @@ import { Textarea } from '@/components/ui/Textarea';
 import { toast } from 'sonner';
 import { api } from '@/lib/apiApp';
 import { AlertCircle, Send, Eye } from 'lucide-react';
+import { useAppStore } from '@/store/useAppStore';
 
 interface CooldownStatus {
   canPost: boolean;
@@ -19,19 +20,16 @@ interface AnnouncementPreview {
   estimatedReach: number;
 }
 
-interface AutomationAnnouncementsProps {
-  leagueId: string;
-}
-
-export function AutomationAnnouncements({ leagueId }: AutomationAnnouncementsProps) {
+export function AutomationAnnouncements() {
+  const { selectedLeagueId } = useAppStore();
   const [text, setText] = useState('');
   const [mention, setMention] = useState<'none' | '@everyone' | '@here'>('none');
   const [preview, setPreview] = useState<AnnouncementPreview | null>(null);
 
   const { data: cooldown, isLoading } = useQuery<CooldownStatus>({
-    queryKey: ['/api/announce/cooldown', leagueId],
+    queryKey: ['/api/announce/cooldown', selectedLeagueId],
     queryFn: async () => {
-      return await api(`/api/announce/cooldown/${leagueId}`);
+      return await api(`/api/announce/cooldown/${selectedLeagueId}`);
     },
     refetchInterval: 10000,
   });
@@ -40,7 +38,7 @@ export function AutomationAnnouncements({ leagueId }: AutomationAnnouncementsPro
     mutationFn: async () => {
       return await api('/api/announce/preview', {
         method: 'POST',
-        body: JSON.stringify({ text, mention, leagueId }),
+        body: JSON.stringify({ text, mention, leagueId: selectedLeagueId }),
       });
     },
     onSuccess: (data) => {
@@ -60,7 +58,7 @@ export function AutomationAnnouncements({ leagueId }: AutomationAnnouncementsPro
     mutationFn: async () => {
       return await api('/api/announce/send', {
         method: 'POST',
-        body: JSON.stringify({ text, mention, leagueId }),
+        body: JSON.stringify({ text, mention, leagueId: selectedLeagueId }),
       });
     },
     onSuccess: () => {

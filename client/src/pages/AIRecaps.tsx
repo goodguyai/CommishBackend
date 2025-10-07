@@ -6,17 +6,15 @@ import { Input } from '@/components/ui/Input';
 import { toast } from 'sonner';
 import { api } from '@/lib/apiApp';
 import { FileText, Sparkles } from 'lucide-react';
+import { useAppStore } from '@/store/useAppStore';
 
 interface RecapResponse {
   markdown: string;
   week: number;
 }
 
-interface AIRecapsProps {
-  leagueId: string;
-}
-
-export function AIRecaps({ leagueId }: AIRecapsProps) {
+export function AIRecaps() {
+  const { selectedLeagueId } = useAppStore();
   const [weekNumber, setWeekNumber] = useState<string>('');
   const [recap, setRecap] = useState<RecapResponse | null>(null);
 
@@ -28,7 +26,7 @@ export function AIRecaps({ leagueId }: AIRecapsProps) {
       }
       return await api('/api/ai/recap', {
         method: 'POST',
-        body: JSON.stringify({ week, leagueId }),
+        body: JSON.stringify({ week, leagueId: selectedLeagueId }),
       });
     },
     onSuccess: (data) => {

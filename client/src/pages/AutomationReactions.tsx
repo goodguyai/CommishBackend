@@ -7,35 +7,33 @@ import { toast } from 'sonner';
 import { api } from '@/lib/apiApp';
 import { queryClient } from '@/lib/queryClient';
 import { ToggleLeft, ToggleRight } from 'lucide-react';
+import { useAppStore } from '@/store/useAppStore';
 
 interface ReactionPolicy {
   enabled: boolean;
   description: string;
 }
 
-interface AutomationReactionsProps {
-  leagueId: string;
-}
-
-export function AutomationReactions({ leagueId }: AutomationReactionsProps) {
+export function AutomationReactions() {
+  const { selectedLeagueId } = useAppStore();
   const [description, setDescription] = useState('');
 
   const { data: policy, isLoading } = useQuery<ReactionPolicy>({
-    queryKey: ['/api/v2/automation/reactions', leagueId],
+    queryKey: ['/api/v2/automation/reactions', selectedLeagueId],
     queryFn: async () => {
-      return await api(`/api/v2/automation/reactions/${leagueId}`);
+      return await api(`/api/v2/automation/reactions/${selectedLeagueId}`);
     },
   });
 
   const updateMutation = useMutation({
     mutationFn: async (updates: Partial<ReactionPolicy>) => {
-      return await api(`/api/v2/automation/reactions/${leagueId}`, {
+      return await api(`/api/v2/automation/reactions/${selectedLeagueId}`, {
         method: 'POST',
         body: JSON.stringify(updates),
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/v2/automation/reactions', leagueId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/automation/reactions', selectedLeagueId] });
       toast.success('Reaction automation updated', {
         description: 'Your settings have been saved',
       });
