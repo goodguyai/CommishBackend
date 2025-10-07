@@ -944,7 +944,9 @@ export class DatabaseStorage implements IStorage {
       ON CONFLICT (league_id, sleeper_owner_id) 
       DO UPDATE SET
         sleeper_team_name = EXCLUDED.sleeper_team_name,
-        role = COALESCE(${schema.members.role}, EXCLUDED.role)
+        role = COALESCE(members.role, EXCLUDED.role),
+        discord_user_id = COALESCE(members.discord_user_id, EXCLUDED.discord_user_id),
+        discord_username = COALESCE(members.discord_username, EXCLUDED.discord_username)
       RETURNING id
     `);
     return (result as unknown as any[])[0]?.id;

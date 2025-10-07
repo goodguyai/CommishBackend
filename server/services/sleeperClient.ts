@@ -35,6 +35,11 @@ export interface SleeperRoster {
   players: string[];
   reserve?: string[];
   taxi?: string[];
+  metadata?: {
+    team_name?: string;
+    nickname?: string;
+    [key: string]: any;
+  };
   settings: {
     wins: number;
     losses: number;
@@ -117,6 +122,10 @@ export class SleeperClient {
       console.error(`Sleeper API request failed for ${path}:`, error);
       return { status: 500 };
     }
+  }
+
+  async user(userId: string): Promise<SleeperResponse<SleeperUser>> {
+    return this.get<SleeperUser>(`/v1/user/${userId}`);
   }
 
   async userByUsername(username: string): Promise<SleeperResponse<SleeperUser>> {

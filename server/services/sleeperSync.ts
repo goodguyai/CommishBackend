@@ -154,7 +154,22 @@ export async function runSleeperSync(leagueId: string): Promise<NormalizedSettin
           continue;
         }
 
-        const teamName = `Team ${roster.roster_id}`;
+        let teamName = roster.metadata?.team_name || roster.metadata?.nickname;
+
+        if (!teamName && roster.owner_id) {
+          try {
+            const userRes = await client.user(roster.owner_id);
+            if (userRes.status === 200 && userRes.data?.display_name) {
+              teamName = userRes.data.display_name;
+            }
+          } catch (e) {
+            console.log(`[SleeperSync] Could not fetch user for owner ${roster.owner_id}`);
+          }
+        }
+
+        if (!teamName) {
+          teamName = `Team ${roster.roster_id}`;
+        }
         
         await storage.upsertMemberFromSleeper({
           leagueId,
