@@ -3891,7 +3891,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const result = await announceService.post({
-        client: discordService.getClient(),
         guildId,
         channelId,
         text,
