@@ -227,7 +227,7 @@ export function SleeperLinkPage() {
               </Button>
               <Button
                 variant="outline"
-                onClick={() => setSearchTriggered(false)}
+                onClick={() => setSearchTriggered(true)}
                 data-testid="button-change-league"
               >
                 Change League
