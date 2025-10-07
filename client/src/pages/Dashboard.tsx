@@ -50,6 +50,7 @@ import type { Member, Reminder, League } from '@shared/schema';
 import { ModeBadge } from '@/components/ModeBadge';
 import { FinishSetupBanner } from '@/components/FinishSetupBanner';
 import { OwnerMapping } from '@/components/owner-mapping';
+import { useAppStore } from '@/store/useAppStore';
 
 interface DashboardStats {
   activeLeagues: number;
@@ -67,15 +68,6 @@ interface DiscordIntegration {
   webhookVerification: string;
 }
 
-interface SleeperIntegration {
-  leagueName: string;
-  leagueId: string;
-  season: number;
-  week: number;
-  lastSync: string;
-  cacheStatus: string;
-  apiCalls: string;
-}
 
 interface SlashCommand {
   command: string;
@@ -187,6 +179,9 @@ const TONE_OPTIONS = [
 ];
 
 export function DashboardPage() {
+  // Get selectedLeagueId from app store
+  const { selectedLeagueId } = useAppStore();
+  
   // Get leagueId from localStorage or use first available league
   const [leagueId, setLeagueId] = useState<string>(() => {
     return localStorage.getItem('selectedLeagueId') || '';
@@ -317,8 +312,19 @@ export function DashboardPage() {
     queryKey: ['/api/integrations/discord'],
   });
 
-  const { data: sleeper, isLoading: sleeperLoading } = useQuery<SleeperIntegration>({
-    queryKey: ['/api/integrations/sleeper'],
+  const { data: sleeperData, isLoading: sleeperLoading } = useQuery<{
+    ok: boolean;
+    integration: {
+      leagueId: string;
+      sleeperLeagueId: string;
+      season: string;
+      sport: string;
+      username?: string;
+      createdAt?: string;
+    } | null;
+  }>({
+    queryKey: ['/api/v2/sleeper/integration', selectedLeagueId],
+    enabled: !!selectedLeagueId,
   });
 
   const { data: commands, isLoading: commandsLoading } = useQuery<SlashCommand[]>({
@@ -802,10 +808,26 @@ export function DashboardPage() {
     });
   };
 
-  const handleForceSyncSleeper = () => {
-    toast.success('Syncing with Sleeper...', {
-      description: 'Fetching latest league data, rosters, and matchups.',
-    });
+  const handleForceSyncSleeper = async () => {
+    if (!selectedLeagueId) {
+      toast.error('No league selected');
+      return;
+    }
+    
+    try {
+      const response = await apiRequest('POST', `/api/v2/sleeper/sync/${selectedLeagueId}`, {});
+      const data = await response.json();
+      
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/sleeper/integration', selectedLeagueId] });
+      
+      toast.success('Sleeper sync complete', {
+        description: 'Latest league data has been fetched',
+      });
+    } catch (error: any) {
+      toast.error('Sync failed', {
+        description: error?.message || 'Failed to sync with Sleeper',
+      });
+    }
   };
 
   const handleReindexConstitution = () => {
@@ -1673,35 +1695,30 @@ export function DashboardPage() {
                   <Skeleton key={i} className="h-8 w-full bg-surface-hover" />
                 ))}
               </div>
-            ) : (
+            ) : sleeperData?.integration ? (
               <div className="space-y-4">
                 <div>
-                  <div className="font-medium text-text-primary">{sleeper?.leagueName}</div>
-                  <div className="text-sm text-text-secondary">ID: {sleeper?.leagueId}</div>
+                  <div className="font-medium text-text-primary">
+                    {sleeperData.integration.username}'s League
+                  </div>
+                  <div className="text-sm text-text-secondary">
+                    ID: {sleeperData.integration.sleeperLeagueId}
+                  </div>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <div className="text-xs text-text-muted">Season</div>
-                    <div className="text-sm font-medium text-text-primary">{sleeper?.season}</div>
+                    <div className="text-sm font-medium text-text-primary">
+                      {sleeperData.integration.season}
+                    </div>
                   </div>
                   <div>
-                    <div className="text-xs text-text-muted">Week</div>
-                    <div className="text-sm font-medium text-text-primary">{sleeper?.week}</div>
+                    <div className="text-xs text-text-muted">Sport</div>
+                    <div className="text-sm font-medium text-text-primary">
+                      {sleeperData.integration.sport.toUpperCase()}
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-xs text-text-muted">Last sync</div>
-                    <div className="text-sm font-medium text-text-primary">{sleeper?.lastSync}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-text-muted">Cache status</div>
-                    <div className="text-sm font-medium text-brand-teal">{sleeper?.cacheStatus}</div>
-                  </div>
-                </div>
-                
-                <div>
-                  <div className="text-xs text-text-muted mb-1">API calls today</div>
-                  <div className="text-sm font-medium text-text-primary">{sleeper?.apiCalls}</div>
                 </div>
 
                 <Button 
@@ -1713,6 +1730,17 @@ export function DashboardPage() {
                 >
                   <RefreshCw className="w-4 h-4 mr-2" />
                   Force Sync Now
+                </Button>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-text-secondary mb-3">No Sleeper league linked</p>
+                <Button 
+                  onClick={() => window.location.href = '/app/sleeper/link'}
+                  variant="outline"
+                  size="sm"
+                >
+                  Link Sleeper League
                 </Button>
               </div>
             )}

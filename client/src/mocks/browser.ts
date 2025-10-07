@@ -1,7 +1,7 @@
 import { setupWorker } from 'msw/browser';
 import { handlers } from './handlers';
 
-export const worker = setupWorker(...handlers);
+let worker: ReturnType<typeof setupWorker> | null = null;
 
 export async function startMockServiceWorker() {
   if (typeof window === 'undefined') {
@@ -14,6 +14,10 @@ export async function startMockServiceWorker() {
   }
 
   try {
+    // Lazy initialization - only create worker when actually starting
+    if (!worker) {
+      worker = setupWorker(...handlers);
+    }
     return await worker.start({
       onUnhandledRequest: 'bypass',
       quiet: false,
