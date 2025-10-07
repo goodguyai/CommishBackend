@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { ExternalLink, RefreshCw, CheckCircle, Link as LinkIcon, Search } from 'lucide-react';
+import { useAppStore } from '@/store/useAppStore';
 
 interface SleeperLeague {
   id: string;
@@ -29,9 +30,7 @@ export function SleeperLinkPage() {
   const [username, setUsername] = useState('');
   const [season, setSeason] = useState('2025');
   const [searchTriggered, setSearchTriggered] = useState(false);
-  const [selectedLeagueId] = useState<string>(() => {
-    return localStorage.getItem('selectedLeagueId') || '';
-  });
+  const { selectedLeagueId } = useAppStore();
 
   // Fetch existing Sleeper integration for current league
   const { data: integrationData, isLoading: integrationLoading } = useQuery<{ ok: boolean; integration: SleeperIntegration | null }>({

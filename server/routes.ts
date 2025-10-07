@@ -3171,6 +3171,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // POST /api/v2/setup/sleeper - Link a Sleeper league to internal league
   app.post("/api/v2/setup/sleeper", async (req, res) => {
+    // Declare variables outside try block for logging in catch
+    let leagueId = '';
+    let sleeperLeagueId = '';
+    let season = '';
+    let username = '';
+    
     try {
       const parsed = setupSleeperSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -3182,7 +3188,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      let { leagueId, sleeperLeagueId, season, username, guildId, accountId } = parsed.data;
+      leagueId = parsed.data.leagueId || '';
+      sleeperLeagueId = parsed.data.sleeperLeagueId || '';
+      season = parsed.data.season || '';
+      username = parsed.data.username || '';
+      const { guildId, accountId } = parsed.data;
       
       // Server-side fallback: If leagueId is missing or empty, try to resolve it
       if (!leagueId || leagueId.trim() === '') {
@@ -3235,23 +3245,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Save the Sleeper integration link
+      console.log(`[Sleeper Setup] Saving Sleeper link for league ${leagueId}`);
       await saveSleeperLink({
         leagueId,
         sleeperLeagueId,
         season,
         username,
       });
+      console.log(`[Sleeper Setup] Sleeper link saved successfully`);
       
       // Also update the league record for backward compatibility
+      console.log(`[Sleeper Setup] Updating league record`);
       await storage.updateLeague(leagueId, {
         sleeperLeagueId,
       });
+      console.log(`[Sleeper Setup] League record updated successfully`);
       
-      await storage.createEvent({
-        type: "COMMAND_EXECUTED",
-        leagueId,
-        payload: { action: "sleeper_league_linked", sleeperLeagueId, season },
-      });
+      // Create event (non-fatal - log error but don't fail)
+      try {
+        await storage.createEvent({
+          type: "COMMAND_EXECUTED",
+          leagueId,
+          payload: { action: "sleeper_league_linked", sleeperLeagueId, season },
+        });
+      } catch (eventError) {
+        console.error(`[Sleeper Setup] Failed to create event (non-fatal):`, eventError);
+      }
       
       // Automatically run initial sync to populate rosters
       try {
@@ -3265,8 +3284,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.json({ ok: true, leagueId });
     } catch (e) {
-      console.error("[Sleeper Setup]", e);
-      res.status(500).json({ ok: false, code: "SLEEPER_SETUP_FAILED", message: "Failed to link Sleeper league" });
+      // Log detailed error for debugging
+      console.error("[Sleeper Setup] Error details:", {
+        error: e,
+        message: e instanceof Error ? e.message : 'Unknown error',
+        stack: e instanceof Error ? e.stack : undefined,
+        leagueId,
+        sleeperLeagueId,
+        season,
+        username
+      });
+      
+      // Return original error response structure
+      res.status(500).json({ 
+        ok: false, 
+        code: "SLEEPER_SETUP_FAILED", 
+        message: "Failed to link Sleeper league" 
+      });
     }
   });
 
