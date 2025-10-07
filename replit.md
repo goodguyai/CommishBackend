@@ -20,6 +20,8 @@ THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrate
 - **Sleeper Sync**: Migrated SleeperLinkPage from localStorage to useAppStore() for consistent league ID management across pages
 - **Error Handling**: Enhanced backend diagnostic logging in Sleeper setup endpoint while maintaining backward-compatible error responses
 - **Non-blocking Operations**: Event logging and initial roster sync now properly wrapped in try-catch to prevent blocking setup flow
+- **Announcement Service Refactor**: Migrated announceService from discord.js Client to DiscordService REST API while preserving all guardrails (idempotency checks, rate limiting, retry logic, operation marking)
+- **Forgot Password Feature**: Created /forgot-password page with Supabase resetPasswordForEmail integration, proper error/success handling, and seamless navigation with login page
 
 ## User Preferences
 Preferred communication style: Simple, everyday language.
