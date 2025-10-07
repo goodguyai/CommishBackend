@@ -12,12 +12,19 @@ import {
   Menu,
   ChevronDown,
   Bell,
+  Check,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { useAppStore } from '@/store/useAppStore';
 import { Button } from '@/components/ui/Button';
 import { Drawer } from '@/components/ui/Drawer';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 const navigation = [
   { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
@@ -34,9 +41,18 @@ const navigation = [
 export function AppShell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { selectedLeagueId, notifications } = useAppStore();
+  const { selectedLeagueId, notifications, setSelectedLeague } = useAppStore();
   
   const unreadCount = notifications.filter(n => !n.read).length;
+
+  // Fetch user data
+  const { data: userData } = useQuery<{ 
+    email: string; 
+    accountId: string;
+    leagues: Array<{ id: string; name: string; isDemo: boolean; isBeta: boolean; }>;
+  }>({
+    queryKey: ['/api/app/me'],
+  });
 
   // Fetch league to determine if demo or beta mode
   const { data: leagueData } = useQuery<{ league: any }>({
@@ -46,6 +62,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const isDemoMode = leagueData?.league?.featureFlags && (leagueData.league.featureFlags as any)?.demo === true;
   const mode = isDemoMode ? 'Demo' : 'Beta';
+
+  // Derive user display values
+  const userInitials = userData?.email ? userData.email.substring(0, 2).toUpperCase() : 'DU';
+  const userName = userData?.email?.split('@')[0] || 'Demo User';
+
+  // Derive league display value
+  const leagueName = leagueData?.league?.name || 'Select League';
 
   const SidebarContent = ({ onNavigate }: { onNavigate?: () => void }) => (
     <div className="flex h-full flex-col bg-surface-elevated">
@@ -122,10 +145,43 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <div className="flex flex-1 gap-x-4 self-stretch items-center">
             <div className="flex items-center gap-2 min-w-0 flex-1">
-              <button className="flex items-center gap-2 rounded-md border border-border-default bg-surface-card px-3 py-1.5 text-sm hover:bg-surface-hover transition-colors max-w-xs shadow-depth1">
-                <span className="truncate font-medium text-text-primary">Demo League One</span>
-                <ChevronDown className="h-4 w-4 text-text-muted" />
-              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button 
+                    className="flex items-center gap-2 rounded-md border border-border-default bg-surface-card px-3 py-1.5 text-sm hover:bg-surface-hover transition-colors max-w-xs shadow-depth1"
+                    data-testid="league-selector"
+                  >
+                    <span className="truncate font-medium text-text-primary">{leagueName}</span>
+                    <ChevronDown className="h-4 w-4 text-text-muted" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-64">
+                  {userData?.leagues && userData.leagues.length > 0 ? (
+                    userData.leagues.map((league) => (
+                      <DropdownMenuItem
+                        key={league.id}
+                        onClick={() => setSelectedLeague(league.id)}
+                        className="flex items-center justify-between"
+                        data-testid={`league-option-${league.id}`}
+                      >
+                        <div className="flex flex-col">
+                          <span className="font-medium">{league.name}</span>
+                          <span className="text-xs text-text-muted">
+                            {league.isDemo ? 'Demo' : 'Beta'}
+                          </span>
+                        </div>
+                        {selectedLeagueId === league.id && (
+                          <Check className="h-4 w-4 text-brand-teal" />
+                        )}
+                      </DropdownMenuItem>
+                    ))
+                  ) : (
+                    <DropdownMenuItem disabled>
+                      No leagues available
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
 
             <div className="flex items-center gap-x-4">
@@ -140,9 +196,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-brand-teal rounded-full flex items-center justify-center shadow-glow">
-                  <span className="text-sm font-semibold text-white">DU</span>
+                  <span className="text-sm font-semibold text-white" data-testid="user-initials">{userInitials}</span>
                 </div>
-                <span className="text-sm font-medium text-text-primary hidden sm:block">Demo User</span>
+                <span className="text-sm font-medium text-text-primary hidden sm:block" data-testid="user-name">{userName}</span>
               </div>
             </div>
           </div>
