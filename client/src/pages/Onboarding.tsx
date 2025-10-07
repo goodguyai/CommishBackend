@@ -34,6 +34,16 @@ interface SleeperLeague {
   status: string;
 }
 
+interface League {
+  id: string;
+  name?: string;
+  guildId?: string;
+  channelId?: string;
+  sleeperLeagueId?: string;
+  activatedAt?: string;
+  rulesIndexed?: boolean;
+}
+
 export function OnboardingPage() {
   const [location, setLocation] = useLocation();
   const [currentStep, setCurrentStep] = useState<Step>('account');
@@ -77,7 +87,11 @@ export function OnboardingPage() {
   useEffect(() => {
     const checkResumeState = async () => {
       try {
-        const user = await api<{ userId: string; accountId: string; leagueId?: string }>('/api/app/me');
+        const user = await api<{ 
+          userId: string; 
+          accountId: string; 
+          leagues?: Array<{ id: string; name?: string; isDemo?: boolean; isBeta?: boolean }> 
+        }>('/api/app/me');
         
         if (user.accountId) {
           setAccountId(user.accountId);
@@ -85,16 +99,54 @@ export function OnboardingPage() {
           setCurrentStep('discord');
         }
         
-        if (user.leagueId) {
-          const league = await api<any>(`/api/leagues/${user.leagueId}`);
-          if (league.activatedAt) {
-            toast.success('Your league is already set up!');
-            setLocation('/app');
-            return;
+        // Check if user has leagues
+        if (user.leagues && user.leagues.length > 0) {
+          // Find first incomplete league
+          for (const leagueInfo of user.leagues) {
+            const league = await api<League>(`/api/leagues/${leagueInfo.id}`);
+            if (!league.activatedAt) {
+              // Resume this league's setup
+              setLeagueId(leagueInfo.id);
+              
+              // Restore Discord state if already configured
+              if (league.guildId) {
+                setSelectedGuildId(league.guildId);
+                
+                // Fetch guilds to populate dropdown
+                try {
+                  const sessionData = await api<{ guilds: DiscordGuild[] }>('/api/v2/setup/discord-session');
+                  if (sessionData.guilds) {
+                    setGuilds(sessionData.guilds);
+                  }
+                } catch (e) {
+                  console.error('Failed to fetch guilds on resume', e);
+                }
+              }
+              
+              if (league.channelId) {
+                setSelectedChannelId(league.channelId);
+                
+                // Fetch channels for the guild to populate dropdown
+                if (league.guildId) {
+                  await handleGuildSelect(league.guildId);
+                }
+              }
+              
+              // Check what step to resume at based on league data
+              if (!league.sleeperLeagueId) {
+                setCurrentStep('sleeper');  
+              } else if (!league.rulesIndexed) {
+                setCurrentStep('rules');
+              } else {
+                // Has Sleeper and rules but not activated yet - go to rules to complete
+                setCurrentStep('rules');
+              }
+              return;
+            }
           }
-          
-          setCurrentStep('rules');
-          setLeagueId(user.leagueId);
+          // All leagues activated
+          toast.success('Your league is already set up!');
+          setLocation('/app');
           return;
         }
         
@@ -589,6 +641,12 @@ export function OnboardingPage() {
   };
 
   const handleActivate = async () => {
+    // Defensive validation: ensure Discord is properly configured
+    if (!selectedGuildId || !selectedChannelId) {
+      toast.error('Discord configuration incomplete. Please complete Discord setup.');
+      return;
+    }
+    
     setIsActivating(true);
     try {
       const result = await api<{ ok: boolean }>(
@@ -1000,6 +1058,14 @@ export function OnboardingPage() {
 
                 <div className="flex gap-3">
                   <Button
+                    onClick={() => setCurrentStep('discord')}
+                    variant="outline"
+                    className="w-24"
+                    data-testid="button-back-to-discord"
+                  >
+                    Back
+                  </Button>
+                  <Button
                     onClick={handleSkipSleeper}
                     variant="secondary"
                     className="flex-1"
@@ -1055,21 +1121,31 @@ export function OnboardingPage() {
                   />
                 </div>
 
-                <Button
-                  onClick={handleIndexRules}
-                  disabled={isIndexing || isActivating || !rulesContent.trim()}
-                  className="w-full"
-                  data-testid="button-index-activate"
-                >
-                  {isIndexing || isActivating ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      {isIndexing ? 'Indexing...' : 'Activating...'}
-                    </>
-                  ) : (
-                    'Index & Activate League'
-                  )}
-                </Button>
+                <div className="flex gap-3">
+                  <Button
+                    onClick={() => setCurrentStep('sleeper')}
+                    variant="outline"
+                    className="w-24"
+                    data-testid="button-back-to-sleeper"
+                  >
+                    Back
+                  </Button>
+                  <Button
+                    onClick={handleIndexRules}
+                    disabled={isIndexing || isActivating || !rulesContent.trim()}
+                    className="flex-1"
+                    data-testid="button-index-activate"
+                  >
+                    {isIndexing || isActivating ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        {isIndexing ? 'Indexing...' : 'Activating...'}
+                      </>
+                    ) : (
+                      'Index & Activate League'
+                    )}
+                  </Button>
+                </div>
               </div>
             )}
 
