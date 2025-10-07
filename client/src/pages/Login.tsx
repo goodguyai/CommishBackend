@@ -55,7 +55,7 @@ export function LoginPage() {
         });
 
         toast.success('Signed in successfully!');
-        setLocation('/app/dashboard');
+        setLocation('/app');
       } catch (sessionError: any) {
         console.error('[Session Exchange]', sessionError);
         setLoginError('Failed to establish session');

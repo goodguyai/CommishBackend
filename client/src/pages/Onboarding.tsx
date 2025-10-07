@@ -498,12 +498,44 @@ export function OnboardingPage() {
           },
         });
 
-        const user = await api<{ userId: string; accountId: string }>('/api/app/me');
+        const user = await api<{ 
+          userId: string; 
+          accountId: string; 
+          leagues?: Array<{ id: string; name?: string; isDemo?: boolean; isBeta?: boolean }> 
+        }>('/api/app/me');
+        
         if (user.accountId) {
           setAccountId(user.accountId);
           setNeedsEmailConfirmation(false);
           toast.success('Signed in successfully!');
-          setCurrentStep('discord');
+          
+          // Check if user has incomplete leagues
+          if (user.leagues && user.leagues.length > 0) {
+            // Find first incomplete league and resume setup
+            for (const leagueInfo of user.leagues) {
+              const league = await api<League>(`/api/leagues/${leagueInfo.id}`);
+              if (!league.activatedAt) {
+                setLeagueId(leagueInfo.id);
+                
+                // Route to appropriate step based on league state
+                if (!league.guildId) {
+                  setCurrentStep('discord');
+                } else if (!league.sleeperLeagueId) {
+                  setCurrentStep('sleeper');
+                } else if (!league.rulesIndexed) {
+                  setCurrentStep('rules');
+                } else {
+                  setCurrentStep('rules'); // Complete activation
+                }
+                return;
+              }
+            }
+            // All leagues complete - go to app
+            setLocation('/app');
+          } else {
+            // No leagues - start fresh setup
+            setCurrentStep('discord');
+          }
         } else {
           toast.error('Account not found. Please contact support.');
         }

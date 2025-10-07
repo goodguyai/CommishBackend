@@ -38,7 +38,26 @@ export function HomeCTAs() {
   const handleBetaActivation = async () => {
     setIsActivatingBeta(true);
     try {
-      // Get Discord OAuth URL
+      // Check if user is already logged in
+      try {
+        const user = await api<{ accountId: string; leagues?: any[] }>('/api/app/me');
+        
+        if (user.accountId) {
+          // User is logged in - send them to complete setup
+          if (user.leagues && user.leagues.length > 0) {
+            // Has incomplete leagues - go to onboarding
+            setLocation('/onboarding');
+          } else {
+            // No leagues - start fresh onboarding
+            setLocation('/onboarding');
+          }
+          return;
+        }
+      } catch (e) {
+        // Not logged in, continue with OAuth
+      }
+      
+      // Get Discord OAuth URL for new users
       const result = await api<{ url: string }>('/api/v2/discord/auth-url', {
         method: 'GET',
       });
