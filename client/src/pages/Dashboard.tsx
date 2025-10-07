@@ -634,7 +634,7 @@ export function DashboardPage() {
   }, [v2League]);
 
   // Commissioner v2: Fetch Discord channels
-  const { data: v2DiscordChannels, isLoading: v2ChannelsLoading } = useQuery<{ ok: boolean; data: any[] }>({
+  const { data: v2DiscordChannels, isLoading: v2ChannelsLoading } = useQuery<{ channels: any[] }>({
     queryKey: ['/api/v2/discord/channels', v2League?.guildId],
     queryFn: async () => {
       const res = await fetch(`/api/v2/discord/channels?guildId=${v2League?.guildId}`);
@@ -1188,7 +1188,7 @@ export function DashboardPage() {
                         <SelectValue placeholder="Select channel" />
                       </SelectTrigger>
                       <SelectContent className="bg-surface-card border-border-default">
-                        {v2DiscordChannels?.data?.map((ch: any) => (
+                        {v2DiscordChannels?.channels?.map((ch: any) => (
                           <SelectItem key={ch.id} value={ch.id} className="text-text-primary hover:bg-surface-hover">#{ch.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -1205,7 +1205,7 @@ export function DashboardPage() {
                         <SelectValue placeholder="Select channel" />
                       </SelectTrigger>
                       <SelectContent className="bg-surface-card border-border-default">
-                        {v2DiscordChannels?.data?.map((ch: any) => (
+                        {v2DiscordChannels?.channels?.map((ch: any) => (
                           <SelectItem key={ch.id} value={ch.id} className="text-text-primary hover:bg-surface-hover">#{ch.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -1222,7 +1222,7 @@ export function DashboardPage() {
                         <SelectValue placeholder="Select channel" />
                       </SelectTrigger>
                       <SelectContent className="bg-surface-card border-border-default">
-                        {v2DiscordChannels?.data?.map((ch: any) => (
+                        {v2DiscordChannels?.channels?.map((ch: any) => (
                           <SelectItem key={ch.id} value={ch.id} className="text-text-primary hover:bg-surface-hover">#{ch.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -1239,7 +1239,7 @@ export function DashboardPage() {
                         <SelectValue placeholder="Select channel" />
                       </SelectTrigger>
                       <SelectContent className="bg-surface-card border-border-default">
-                        {v2DiscordChannels?.data?.map((ch: any) => (
+                        {v2DiscordChannels?.channels?.map((ch: any) => (
                           <SelectItem key={ch.id} value={ch.id} className="text-text-primary hover:bg-surface-hover">#{ch.name}</SelectItem>
                         ))}
                       </SelectContent>
