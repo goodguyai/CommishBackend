@@ -14,6 +14,13 @@ THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrate
 - **AI Recaps**: Automated weekly recap generation using league matchup data and standings
 - **Frontend Pages**: ConstitutionDrafts, AutomationReactions, AutomationAnnouncements, AIAsk, AIRecaps
 
+### Bug Fixes (October 7, 2025)
+- **Phase 13 Routing**: Added all 5 Phase 13 pages (AI Ask, AI Recaps, Automation Announcements/Reactions, Constitution Drafts) to App.tsx routing system for proper accessibility
+- **Discord Channel Dropdowns**: Fixed API response property mismatch in Dashboard - changed from `.data` to `.channels` to match actual API contract
+- **Sleeper Sync**: Migrated SleeperLinkPage from localStorage to useAppStore() for consistent league ID management across pages
+- **Error Handling**: Enhanced backend diagnostic logging in Sleeper setup endpoint while maintaining backward-compatible error responses
+- **Non-blocking Operations**: Event logging and initial roster sync now properly wrapped in try-catch to prevent blocking setup flow
+
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
