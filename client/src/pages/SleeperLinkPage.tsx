@@ -6,9 +6,10 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Label } from '@/components/ui/label';
+import { Alert } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import { apiRequest, queryClient } from '@/lib/queryClient';
-import { ExternalLink, RefreshCw, CheckCircle, Link as LinkIcon, Search } from 'lucide-react';
+import { ExternalLink, RefreshCw, CheckCircle, Link as LinkIcon, Search, AlertTriangle } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 
 interface SleeperLeague {
@@ -31,6 +32,20 @@ export function SleeperLinkPage() {
   const [season, setSeason] = useState('2025');
   const [searchTriggered, setSearchTriggered] = useState(false);
   const { selectedLeagueId } = useAppStore();
+
+  // Fetch user data to validate league selection
+  const { data: userData, isLoading: userDataLoading } = useQuery<{ 
+    email: string; 
+    accountId: string;
+    leagues: Array<{ id: string; name: string; isDemo: boolean; isBeta: boolean; }>;
+  }>({
+    queryKey: ['/api/app/me'],
+  });
+
+  // Check if selected league is valid
+  const isValidLeague = userData?.leagues?.some(league => league.id === selectedLeagueId) ?? false;
+  const isDemoLeague = selectedLeagueId.startsWith('lg_demo_') || !selectedLeagueId;
+  const hasInvalidLeague = !userDataLoading && (!isValidLeague || isDemoLeague);
 
   // Fetch existing Sleeper integration for current league
   const { data: integrationData, isLoading: integrationLoading } = useQuery<{ ok: boolean; integration: SleeperIntegration | null }>({
@@ -103,6 +118,12 @@ export function SleeperLinkPage() {
   });
 
   const handleSearch = () => {
+    if (hasInvalidLeague) {
+      toast.error('Invalid league selected', {
+        description: 'Please select a valid league from the dropdown above',
+      });
+      return;
+    }
     if (!username.trim()) {
       toast.error('Username required', {
         description: 'Please enter a Sleeper username',
@@ -113,6 +134,12 @@ export function SleeperLinkPage() {
   };
 
   const handleLink = (league: SleeperLeague) => {
+    if (hasInvalidLeague) {
+      toast.error('Invalid league selected', {
+        description: 'Please select a valid league from the dropdown above',
+      });
+      return;
+    }
     linkMutation.mutate({
       sleeperLeagueId: league.id,
       season: league.season,
@@ -129,6 +156,20 @@ export function SleeperLinkPage() {
         <h1 className="text-2xl font-bold text-text-primary mb-1">Link Sleeper League</h1>
         <p className="text-text-secondary">Connect your Sleeper league to sync settings and data</p>
       </div>
+
+      {/* Invalid League Warning */}
+      {hasInvalidLeague && (
+        <Alert className="bg-yellow-500/10 border-yellow-500/50 text-yellow-600 dark:text-yellow-400" data-testid="alert-invalid-league">
+          <AlertTriangle className="h-4 w-4" />
+          <div className="ml-2">
+            <div className="font-semibold">Invalid League Selected</div>
+            <div className="text-sm mt-1">
+              Please select a valid league from the dropdown in the top navigation bar before linking your Sleeper account.
+              {isDemoLeague && " Demo leagues cannot be linked to Sleeper."}
+            </div>
+          </div>
+        </Alert>
+      )}
 
       {/* Current Integration Status */}
       {integrationLoading ? (
@@ -177,7 +218,7 @@ export function SleeperLinkPage() {
             <div className="flex gap-2">
               <Button
                 onClick={() => syncMutation.mutate()}
-                disabled={syncMutation.isPending}
+                disabled={syncMutation.isPending || hasInvalidLeague}
                 className="flex items-center gap-2"
                 data-testid="button-sync-now"
               >
@@ -234,7 +275,7 @@ export function SleeperLinkPage() {
             </div>
             <Button
               onClick={handleSearch}
-              disabled={leaguesLoading}
+              disabled={leaguesLoading || hasInvalidLeague}
               className="w-full"
               data-testid="button-search"
             >
@@ -305,7 +346,7 @@ export function SleeperLinkPage() {
                     <div className="flex gap-2">
                       <Button
                         onClick={() => handleLink(league)}
-                        disabled={linkMutation.isPending}
+                        disabled={linkMutation.isPending || hasInvalidLeague}
                         className="flex-1 flex items-center gap-2"
                         data-testid={`button-link-${league.id}`}
                       >

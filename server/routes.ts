@@ -3295,6 +3295,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         username
       });
       
+      // Check for PostgreSQL foreign key constraint error
+      const errorMessage = e instanceof Error ? e.message : '';
+      const isPostgresError = errorMessage.includes('constraint') || errorMessage.includes('foreign key');
+      const isForeignKeyError = errorMessage.includes('fkey') || errorMessage.includes('23503');
+      
+      if (isPostgresError && isForeignKeyError) {
+        console.error("[Sleeper Setup] Foreign key constraint violation - invalid leagueId:", leagueId);
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_LEAGUE_ID", 
+          message: "Invalid league ID - please select a valid league from the dropdown in the top navigation" 
+        });
+      }
+      
       // Return original error response structure
       res.status(500).json({ 
         ok: false, 

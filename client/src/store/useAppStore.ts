@@ -56,7 +56,7 @@ interface AppState {
 export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
-      selectedLeagueId: 'lg_demo_1',
+      selectedLeagueId: '',
       currentWeek: 4,
       userPersona: 'neutral',
       waiverQueue: [],
