@@ -99,10 +99,8 @@ export function SettingsPage() {
   // Sleeper sync mutation
   const syncMutation = useMutation({
     mutationFn: async () => {
-      return apiRequest('/api/v2/sleeper/sync', {
-        method: 'POST',
-        body: JSON.stringify({ leagueId: selectedLeagueId }),
-        headers: { 'Content-Type': 'application/json' },
+      return apiRequest('POST', '/api/v2/sleeper/sync', {
+        leagueId: selectedLeagueId,
       });
     },
     onSuccess: () => {
