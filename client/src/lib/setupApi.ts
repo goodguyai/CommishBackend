@@ -92,10 +92,7 @@ export async function getSetupState(): Promise<SetupState> {
 }
 
 export async function advanceSetup(step: 'account' | 'connections' | 'assignments'): Promise<void> {
-  await apiRequest('/api/v2/setup/advance', {
-    method: 'POST',
-    body: { step },
-  });
+  await apiRequest('POST', '/api/v2/setup/advance', { step });
 }
 
 // Discord Setup
@@ -128,12 +125,9 @@ export async function getDiscordChannels(guildId: string): Promise<DiscordChanne
 }
 
 export async function selectDiscord(guildId: string, channelId: string): Promise<{ leagueId: string }> {
-  const response = await apiRequest('/api/v2/discord/select', {
-    method: 'POST',
-    body: { guildId, channelId },
-  });
-  
-  return response.data;
+  const response = await apiRequest('POST', '/api/v2/discord/select', { guildId, channelId });
+  const json = await response.json();
+  return json.data;
 }
 
 export async function verifyDiscord(guildId: string, channelId: string): Promise<{ capabilities: any }> {
@@ -180,12 +174,9 @@ export async function getSleeperLeagues(userId: string): Promise<SleeperLeague[]
 }
 
 export async function selectSleeperLeague(leagueId: string, username: string): Promise<{ snapshot: any; leagueId: string }> {
-  const response = await apiRequest('/api/v2/sleeper/select', {
-    method: 'POST',
-    body: { leagueId, username },
-  });
-  
-  return response.data;
+  const response = await apiRequest('POST', '/api/v2/sleeper/select', { leagueId, username });
+  const json = await response.json();
+  return json.data;
 }
 
 export async function verifySleeper(leagueId: string): Promise<{ valid: boolean; details: any }> {
@@ -222,10 +213,7 @@ export async function getAssignmentsBootstrap(leagueId: string, guildId: string)
 }
 
 export async function commitAssignments(assignments: Assignment[]): Promise<{ committed: number }> {
-  const response = await apiRequest('/api/v2/assignments/commit', {
-    method: 'POST',
-    body: { assignments },
-  });
-  
-  return response.data;
+  const response = await apiRequest('POST', '/api/v2/assignments/commit', { assignments });
+  const json = await response.json();
+  return json.data;
 }
