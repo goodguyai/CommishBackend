@@ -14,7 +14,7 @@ THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrate
 - **AI Recaps**: Automated weekly recap generation using league matchup data and standings
 - **Frontend Pages**: ConstitutionDrafts, AutomationReactions, AutomationAnnouncements, AIAsk, AIRecaps
 
-### Bug Fixes (October 7, 2025)
+### Bug Fixes (October 7-8, 2025)
 - **Phase 13 Routing**: Added all 5 Phase 13 pages (AI Ask, AI Recaps, Automation Announcements/Reactions, Constitution Drafts) to App.tsx routing system for proper accessibility
 - **Discord Channel Dropdowns**: Fixed API response property mismatch in Dashboard - changed from `.data` to `.channels` to match actual API contract
 - **Sleeper Sync**: Migrated SleeperLinkPage from localStorage to useAppStore() for consistent league ID management across pages
@@ -22,6 +22,10 @@ THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrate
 - **Non-blocking Operations**: Event logging and initial roster sync now properly wrapped in try-catch to prevent blocking setup flow
 - **Announcement Service Refactor**: Migrated announceService from discord.js Client to DiscordService REST API while preserving all guardrails (idempotency checks, rate limiting, retry logic, operation marking)
 - **Forgot Password Feature**: Created /forgot-password page with Supabase resetPasswordForEmail integration, proper error/success handling, and seamless navigation with login page
+- **Sleeper Integration Unlinking**: Added comprehensive unlink functionality with DELETE endpoint, UI button, and proper error handling for removing Sleeper integrations
+- **Change League Button**: Fixed SleeperLinkPage "Change League" button to properly show search form (set searchTriggered to true instead of false)
+- **Database Constraint Handling**: Enhanced Sleeper link setup to detect and handle unique constraint violations on (sleeperLeagueId, season) with clear 409 error messages requiring explicit unlinking before re-linking
+- **Mutation Error Handling**: Fixed unlink mutation to properly validate response.ok and result.ok, ensuring failed operations show error toasts instead of false success messages
 
 ## User Preferences
 Preferred communication style: Simple, everyday language.
