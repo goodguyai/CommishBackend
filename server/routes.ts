@@ -7,6 +7,7 @@ import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { eq, sql } from "drizzle-orm";
+import { validate as validateCron } from "node-cron";
 import { storage } from "./storage";
 import { env, getEnv } from "./services/env";
 import { verifyDiscordSignature, generateRequestId } from "./lib/crypto";
@@ -36,7 +37,7 @@ import * as constitutionDraftsService from "./services/constitutionDrafts";
 import * as announceService from "./services/announceService";
 import * as doctor from "./services/doctor";
 import { aiAsk, aiRecap } from "./ai/agent";
-import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues, constitutionDrafts } from "@shared/schema";
+import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues, constitutionDrafts, jobs, jobRuns, jobFailures, botActivity } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
 import { verifySupabaseToken, requireSupabaseAuth } from "./middleware/auth";
 
@@ -249,6 +250,33 @@ const updateJobsSchema = z.object({
 const rulesAskSchema = z.object({
   league_id: z.string().uuid(),
   question: z.string().min(1),
+});
+
+// Zod schemas for Phase 3 Jobs API endpoints
+const getJobsSchema = z.object({
+  league_id: z.string().uuid(),
+});
+
+const upsertJobSchema = z.object({
+  league_id: z.string().uuid(),
+  kind: z.string().min(1),
+  cron: z.string().optional(),
+  channel_id: z.string().min(1),
+  config: z.record(z.any()).optional(),
+  enabled: z.boolean().optional(),
+});
+
+const runJobNowSchema = z.object({
+  job_id: z.string().uuid(),
+});
+
+const getJobHistorySchema = z.object({
+  league_id: z.string().uuid(),
+  kind: z.string().optional(),
+});
+
+const getJobFailuresSchema = z.object({
+  league_id: z.string().uuid(),
 });
 
 // Zod schemas for Sleeper Status API endpoints
@@ -7778,7 +7806,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // H. GET /api/v3/jobs?league_id=
   app.get("/api/v3/jobs", requireSupabaseAuth, async (req, res) => {
-    const requestId = generateRequestId();
+    const requestId = nanoid(8);
     
     try {
       const { league_id } = req.query;
@@ -7802,11 +7830,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      const jobs = league.jobs || [];
+      const jobsList = await db.select().from(jobs).where(eq(jobs.leagueId, league_id));
+      
+      const jobsWithNextRun = jobsList.map(job => ({
+        ...job,
+        next_run: job.nextRun?.toISOString() || null,
+      }));
       
       res.json({
         ok: true,
-        data: { jobs },
+        data: { jobs: jobsWithNextRun },
         request_id: requestId
       });
     } catch (error: any) {
@@ -7820,12 +7853,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // I. POST /api/v3/jobs/update
-  app.post("/api/v3/jobs/update", requireSupabaseAuth, async (req, res) => {
-    const requestId = generateRequestId();
+  // I. POST /api/v3/jobs/upsert
+  app.post("/api/v3/jobs/upsert", requireSupabaseAuth, async (req, res) => {
+    const requestId = nanoid(8);
     
     try {
-      const validation = updateJobsSchema.safeParse(req.body);
+      const validation = upsertJobSchema.safeParse(req.body);
       if (!validation.success) {
         return res.status(400).json({
           ok: false,
@@ -7835,7 +7868,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      const { league_id, jobs } = validation.data;
+      const { league_id, kind, cron, channel_id, config, enabled } = validation.data;
       
       const league = await storage.getLeague(league_id);
       if (!league) {
@@ -7847,19 +7880,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      await storage.updateLeague(league_id, { jobs });
+      if (cron) {
+        if (!validateCron(cron)) {
+          return res.status(400).json({
+            ok: false,
+            code: "INVALID_CRON",
+            message: "Invalid cron expression. Expected format: 'minute hour day month weekday' (e.g., '0 9 * * 1' or '*/5 * * * *')",
+            request_id: requestId
+          });
+        }
+      }
+      
+      const existingJobs = await db.select().from(jobs).where(
+        sql`${jobs.leagueId} = ${league_id} AND ${jobs.kind} = ${kind}`
+      );
+      
+      let job;
+      if (existingJobs.length > 0) {
+        const [updatedJob] = await db.update(jobs)
+          .set({
+            cron: cron || existingJobs[0].cron,
+            channelId: channel_id,
+            config: config || existingJobs[0].config,
+            enabled: enabled !== undefined ? enabled : existingJobs[0].enabled,
+            updatedAt: new Date(),
+          })
+          .where(eq(jobs.id, existingJobs[0].id))
+          .returning();
+        job = updatedJob;
+      } else {
+        const [newJob] = await db.insert(jobs)
+          .values({
+            leagueId: league_id,
+            kind,
+            cron: cron || null,
+            channelId: channel_id,
+            config: config || {},
+            enabled: enabled !== undefined ? enabled : true,
+          })
+          .returning();
+        job = newJob;
+      }
       
       res.json({
         ok: true,
-        data: { jobs },
+        data: { job },
         request_id: requestId
       });
     } catch (error: any) {
-      console.error("[POST /api/v3/jobs/update] Error:", error);
+      console.error("[POST /api/v3/jobs/upsert] Error:", error);
       res.status(500).json({
         ok: false,
-        code: "UPDATE_FAILED",
-        message: error.message || "Failed to update jobs",
+        code: "UPSERT_FAILED",
+        message: error.message || "Failed to upsert job",
         request_id: requestId
       });
     }
@@ -7905,6 +7978,278 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ok: false,
         code: "ASK_FAILED",
         message: error.message || "Failed to process question",
+        request_id: requestId
+      });
+    }
+  });
+
+  // K. POST /api/v3/jobs/run-now
+  app.post("/api/v3/jobs/run-now", requireSupabaseAuth, async (req, res) => {
+    const requestId = nanoid(8);
+    
+    try {
+      const validation = runJobNowSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          ok: false,
+          code: "INVALID_REQUEST",
+          message: validation.error.message,
+          request_id: requestId
+        });
+      }
+      
+      const { job_id } = validation.data;
+      
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, job_id));
+      if (!job) {
+        return res.status(404).json({
+          ok: false,
+          code: "JOB_NOT_FOUND",
+          message: "Job not found",
+          request_id: requestId
+        });
+      }
+      
+      const cooldownMinutes = 5;
+      const cooldownTime = new Date(Date.now() - cooldownMinutes * 60 * 1000);
+      const recentActivity = await db.select().from(botActivity)
+        .where(
+          sql`${botActivity.leagueId} = ${job.leagueId} 
+              AND ${botActivity.kind} = ${job.kind} 
+              AND ${botActivity.createdAt} > ${cooldownTime}`
+        )
+        .limit(1);
+      
+      if (recentActivity.length > 0) {
+        return res.status(409).json({
+          ok: false,
+          code: "COOLDOWN_ACTIVE",
+          message: `Job on cooldown. Wait ${cooldownMinutes} minutes between runs.`,
+          request_id: requestId
+        });
+      }
+      
+      const [jobRun] = await db.insert(jobRuns)
+        .values({
+          jobId: job_id,
+          startedAt: new Date(),
+          status: "PENDING",
+          requestId,
+        })
+        .returning();
+      
+      try {
+        console.log(`[Job Run] Executing job ${job_id} (kind: ${job.kind}) for league ${job.leagueId}`);
+        
+        await db.insert(botActivity).values({
+          leagueId: job.leagueId,
+          kind: job.kind,
+          status: "RUNNING",
+          requestId,
+          detail: { job_id, manual_run: true },
+        });
+        
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        await db.update(jobRuns)
+          .set({
+            finishedAt: new Date(),
+            status: "SUCCESS",
+            detail: { message: "Job executed successfully (stub)" },
+          })
+          .where(eq(jobRuns.id, jobRun.id));
+        
+        console.log(`[Job Run] Job ${job_id} completed successfully`);
+        
+        res.json({
+          ok: true,
+          data: {
+            requestId,
+            status: "SUCCESS",
+            messageId: null,
+          },
+          request_id: requestId
+        });
+      } catch (execError: any) {
+        await db.update(jobRuns)
+          .set({
+            finishedAt: new Date(),
+            status: "FAILED",
+            detail: { error: execError.message },
+          })
+          .where(eq(jobRuns.id, jobRun.id));
+        
+        const existingFailure = await db.select().from(jobFailures)
+          .where(eq(jobFailures.jobId, job_id))
+          .limit(1);
+        
+        if (existingFailure.length > 0) {
+          await db.update(jobFailures)
+            .set({
+              lastSeenAt: new Date(),
+              count: sql`${jobFailures.count} + 1`,
+              lastErrorExcerpt: execError.message.substring(0, 500),
+            })
+            .where(eq(jobFailures.id, existingFailure[0].id));
+        } else {
+          await db.insert(jobFailures).values({
+            jobId: job_id,
+            count: 1,
+            lastErrorExcerpt: execError.message.substring(0, 500),
+          });
+        }
+        
+        res.json({
+          ok: true,
+          data: {
+            requestId,
+            status: "FAILED",
+            messageId: null,
+          },
+          request_id: requestId
+        });
+      }
+    } catch (error: any) {
+      console.error("[POST /api/v3/jobs/run-now] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "RUN_FAILED",
+        message: error.message || "Failed to run job",
+        request_id: requestId
+      });
+    }
+  });
+
+  // L. GET /api/v3/jobs/history?league_id=&kind=
+  app.get("/api/v3/jobs/history", requireSupabaseAuth, async (req, res) => {
+    const requestId = nanoid(8);
+    
+    try {
+      const { league_id, kind } = req.query;
+      
+      if (!league_id || typeof league_id !== 'string') {
+        return res.status(400).json({
+          ok: false,
+          code: "LEAGUE_ID_REQUIRED",
+          message: "league_id query parameter required",
+          request_id: requestId
+        });
+      }
+      
+      const league = await storage.getLeague(league_id);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found",
+          request_id: requestId
+        });
+      }
+      
+      let query = db.select({
+        id: jobRuns.id,
+        jobId: jobRuns.jobId,
+        kind: jobs.kind,
+        startedAt: jobRuns.startedAt,
+        finishedAt: jobRuns.finishedAt,
+        status: jobRuns.status,
+        requestId: jobRuns.requestId,
+        detail: jobRuns.detail,
+      })
+      .from(jobRuns)
+      .innerJoin(jobs, eq(jobRuns.jobId, jobs.id))
+      .where(eq(jobs.leagueId, league_id))
+      .orderBy(sql`${jobRuns.startedAt} DESC`)
+      .limit(50);
+      
+      if (kind && typeof kind === 'string') {
+        query = db.select({
+          id: jobRuns.id,
+          jobId: jobRuns.jobId,
+          kind: jobs.kind,
+          startedAt: jobRuns.startedAt,
+          finishedAt: jobRuns.finishedAt,
+          status: jobRuns.status,
+          requestId: jobRuns.requestId,
+          detail: jobRuns.detail,
+        })
+        .from(jobRuns)
+        .innerJoin(jobs, eq(jobRuns.jobId, jobs.id))
+        .where(sql`${jobs.leagueId} = ${league_id} AND ${jobs.kind} = ${kind}`)
+        .orderBy(sql`${jobRuns.startedAt} DESC`)
+        .limit(50);
+      }
+      
+      const history = await query;
+      
+      res.json({
+        ok: true,
+        data: { history },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[GET /api/v3/jobs/history] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "FETCH_FAILED",
+        message: error.message || "Failed to fetch job history",
+        request_id: requestId
+      });
+    }
+  });
+
+  // M. GET /api/v3/jobs/failures?league_id=
+  app.get("/api/v3/jobs/failures", requireSupabaseAuth, async (req, res) => {
+    const requestId = nanoid(8);
+    
+    try {
+      const { league_id } = req.query;
+      
+      if (!league_id || typeof league_id !== 'string') {
+        return res.status(400).json({
+          ok: false,
+          code: "LEAGUE_ID_REQUIRED",
+          message: "league_id query parameter required",
+          request_id: requestId
+        });
+      }
+      
+      const league = await storage.getLeague(league_id);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found",
+          request_id: requestId
+        });
+      }
+      
+      const failures = await db.select({
+        id: jobFailures.id,
+        jobId: jobFailures.jobId,
+        kind: jobs.kind,
+        channelId: jobs.channelId,
+        firstSeenAt: jobFailures.firstSeenAt,
+        lastSeenAt: jobFailures.lastSeenAt,
+        count: jobFailures.count,
+        lastErrorExcerpt: jobFailures.lastErrorExcerpt,
+      })
+      .from(jobFailures)
+      .innerJoin(jobs, eq(jobFailures.jobId, jobs.id))
+      .where(eq(jobs.leagueId, league_id))
+      .orderBy(sql`${jobFailures.lastSeenAt} DESC`);
+      
+      res.json({
+        ok: true,
+        data: { failures },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[GET /api/v3/jobs/failures] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "FETCH_FAILED",
+        message: error.message || "Failed to fetch job failures",
         request_id: requestId
       });
     }
