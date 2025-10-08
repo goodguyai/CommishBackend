@@ -47,6 +47,7 @@ export const accounts = pgTable("accounts", {
   name: text("name"),
   plan: text("plan").default("beta"),
   createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export const userAccounts = pgTable("user_accounts", {
@@ -108,7 +109,9 @@ export const leagues = pgTable("leagues", {
   digestFrequency: text("digest_frequency").default("off"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => ({
+  uniqGuildId: unique("uq_leagues_guild_id").on(table.guildId),
+}));
 
 export const members = pgTable("members", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -119,6 +122,7 @@ export const members = pgTable("members", {
   sleeperTeamName: text("sleeper_team_name"),
   discordUsername: text("discord_username"),
   createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
   uniqLeagueSleeper: unique("uq_members_league_sleeper").on(table.leagueId, table.sleeperOwnerId),
   uniqLeagueDiscord: unique("uq_members_league_discord").on(table.leagueId, table.discordUserId),

@@ -19,6 +19,7 @@ import { LandingPage } from './pages/Landing';
 import { HomePage } from './pages/Home';
 import { LoginPage } from './pages/Login';
 import { ForgotPasswordPage } from './pages/ForgotPassword';
+import Setup from './pages/Setup';
 import StyleGuide from './pages/StyleGuide';
 import PreviewDashboard from './pages/PreviewDashboard';
 import { SleeperLinkPage } from './pages/SleeperLinkPage';
@@ -75,7 +76,7 @@ function AppRouter() {
       <Route path="/login" component={LoginPage} />
       <Route path="/forgot-password" component={ForgotPasswordPage} />
       <Route path="/onboarding" component={OnboardingPage} />
-      <Route path="/setup" component={OnboardingPage} />
+      <Route path="/setup" component={Setup} />
       <Route path="/style-guide" component={StyleGuide} />
       <Route path="/preview-dashboard" component={PreviewDashboard} />
       <Route>

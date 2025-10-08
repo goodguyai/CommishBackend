@@ -272,6 +272,56 @@ const aiRecapSchema = z.object({
   week: z.number().int().min(1).max(18),
 });
 
+// Zod schemas for Phase 2: Setup Wizard endpoints
+const setupAdvanceSchema = z.object({
+  step: z.enum(['account', 'connections', 'assignments']),
+});
+
+const discordSelectSchema = z.object({
+  guildId: z.string(),
+  channelId: z.string(),
+});
+
+const discordVerifySchema = z.object({
+  guild_id: z.string(),
+  channel_id: z.string(),
+});
+
+const discordChannelsSchema = z.object({
+  guild_id: z.string(),
+});
+
+const sleeperLookupSchema = z.object({
+  username: z.string().min(1),
+});
+
+const sleeperLeaguesSchema = z.object({
+  user_id: z.string().min(1),
+});
+
+const sleeperSelectSchema = z.object({
+  leagueId: z.string(),
+  username: z.string(),
+});
+
+const sleeperVerifySchema = z.object({
+  league_id: z.string(),
+});
+
+const assignmentsBootstrapSchema = z.object({
+  league_id: z.string(),
+  guild_id: z.string(),
+});
+
+const assignmentsCommitSchema = z.object({
+  assignments: z.array(z.object({
+    sleeperOwnerId: z.string(),
+    discordUserId: z.string(),
+    sleeperTeamName: z.string().optional(),
+    discordUsername: z.string().optional(),
+  })),
+});
+
 // Module-level variables that will be initialized after env validation
 let ragService: RAGService;
 let eventBus: EventBus;
@@ -1680,6 +1730,520 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e) {
       console.error('[Owners Delete]', e);
       res.status(500).json({ ok: false, code: "DELETE_FAILED", message: "Failed to delete mapping" });
+    }
+  });
+
+  // === PHASE 2: SETUP WIZARD ==
+
+  // GET /api/v2/setup/state - Returns wizard state with readiness checks and nextStep
+  app.get("/api/v2/setup/state", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    const startTime = Date.now();
+    
+    try {
+      const supabaseUserId = (req as any).supabaseUser?.id;
+      if (!supabaseUserId) {
+        return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Authentication required", request_id: requestId });
+      }
+
+      const account = await storage.getAccountBySupabaseUserId(supabaseUserId);
+      if (!account) {
+        return res.status(404).json({ ok: false, code: "ACCOUNT_NOT_FOUND", message: "Account not found", request_id: requestId });
+      }
+
+      const leagues = await storage.getLeaguesByAccount(account.id);
+      const league = leagues[0];
+
+      const state = {
+        account: {
+          ready: !!account.email,
+          email: account.email,
+          supabaseUserId: account.supabaseUserId,
+        },
+        discord: {
+          ready: !!(league?.guildId && league?.channelId),
+          guildId: league?.guildId || null,
+          channelId: league?.channelId || null,
+        },
+        sleeper: {
+          ready: !!league?.sleeperLeagueId,
+          leagueId: league?.sleeperLeagueId || null,
+        },
+        assignments: {
+          ready: false,
+          count: 0,
+        },
+        nextStep: 'account' as 'account' | 'connections' | 'assignments',
+      };
+
+      if (league?.id) {
+        const members = await storage.getMembersByLeague(league.id);
+        const mappedCount = members.filter(m => m.sleeperOwnerId && m.discordUserId).length;
+        state.assignments.ready = mappedCount > 0;
+        state.assignments.count = mappedCount;
+      }
+
+      if (!state.account.ready) {
+        state.nextStep = 'account';
+      } else if (!state.discord.ready || !state.sleeper.ready) {
+        state.nextStep = 'connections';
+      } else {
+        state.nextStep = 'assignments';
+      }
+
+      await storage.createEvent({
+        leagueId: league?.id,
+        type: "INSTALL_COMPLETED",
+        payload: { step: "state_check", state },
+        requestId,
+        latency: Date.now() - startTime,
+      });
+
+      res.json({ ok: true, data: state, request_id: requestId });
+    } catch (error) {
+      console.error("[Setup State]", error);
+      res.status(500).json({ ok: false, code: "STATE_FAILED", message: "Failed to fetch setup state", request_id: requestId });
+    }
+  });
+
+  // POST /api/v2/setup/advance - Advances wizard progress (idempotent)
+  app.post("/api/v2/setup/advance", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    const startTime = Date.now();
+
+    try {
+      const validation = setupAdvanceSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid request body", request_id: requestId });
+      }
+
+      const supabaseUserId = (req as any).supabaseUser?.id;
+      if (!supabaseUserId) {
+        return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Authentication required", request_id: requestId });
+      }
+
+      const { step } = validation.data;
+
+      const account = await storage.getAccountBySupabaseUserId(supabaseUserId);
+      if (!account) {
+        return res.status(404).json({ ok: false, code: "ACCOUNT_NOT_FOUND", message: "Account not found", request_id: requestId });
+      }
+
+      const leagues = await storage.getLeaguesByAccount(account.id);
+      const league = leagues[0];
+
+      await storage.createEvent({
+        leagueId: league?.id,
+        type: "INSTALL_COMPLETED",
+        payload: { step, advanced: true },
+        requestId,
+        latency: Date.now() - startTime,
+      });
+
+      res.json({ ok: true, data: { step, advanced: true }, request_id: requestId });
+    } catch (error) {
+      console.error("[Setup Advance]", error);
+      res.status(500).json({ ok: false, code: "ADVANCE_FAILED", message: "Failed to advance setup", request_id: requestId });
+    }
+  });
+
+  // GET /api/v2/discord/guilds - Returns user's manageable guilds
+  app.get("/api/v2/discord/guilds", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+
+    try {
+      const discord = (req as any).session?.discord;
+      if (!discord?.access_token) {
+        return res.status(401).json({ ok: false, code: "NO_DISCORD_AUTH", message: "Discord authentication required", request_id: requestId });
+      }
+
+      const guilds = await discordService.getUserGuilds(discord.access_token);
+      const manageableGuilds = guilds.filter(g => {
+        const permissions = BigInt(g.permissions);
+        const MANAGE_GUILD = BigInt(0x20);
+        return (permissions & MANAGE_GUILD) === MANAGE_GUILD;
+      });
+
+      res.json({ ok: true, data: { guilds: manageableGuilds }, request_id: requestId });
+    } catch (error) {
+      console.error("[Discord Guilds]", error);
+      res.status(500).json({ ok: false, code: "GUILDS_FAILED", message: "Failed to fetch Discord guilds", request_id: requestId });
+    }
+  });
+
+  // GET /api/v2/discord/channels?guild_id= - Returns text channels with capabilities
+  app.get("/api/v2/discord/channels", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+
+    try {
+      const validation = discordChannelsSchema.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "guild_id is required", request_id: requestId });
+      }
+
+      const { guild_id } = validation.data;
+      const channels = await discordService.getGuildChannels(guild_id);
+      const textChannels = channels.filter(c => c.type === 0);
+
+      res.json({ ok: true, data: { channels: textChannels }, request_id: requestId });
+    } catch (error) {
+      console.error("[Discord Channels]", error);
+      res.status(500).json({ ok: false, code: "CHANNELS_FAILED", message: "Failed to fetch Discord channels", request_id: requestId });
+    }
+  });
+
+  // POST /api/v2/discord/select - Saves guild/channel to league (idempotent)
+  app.post("/api/v2/discord/select", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    const startTime = Date.now();
+
+    try {
+      const validation = discordSelectSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "guildId and channelId are required", request_id: requestId });
+      }
+
+      const supabaseUserId = (req as any).supabaseUser?.id;
+      if (!supabaseUserId) {
+        return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Authentication required", request_id: requestId });
+      }
+
+      const { guildId, channelId } = validation.data;
+
+      const account = await storage.getAccountBySupabaseUserId(supabaseUserId);
+      if (!account) {
+        return res.status(404).json({ ok: false, code: "ACCOUNT_NOT_FOUND", message: "Account not found", request_id: requestId });
+      }
+
+      let leagues = await storage.getLeaguesByAccount(account.id);
+      let league = leagues[0];
+      let updatedLeague;
+
+      if (!league) {
+        const leagueId = await storage.createLeague({
+          accountId: account.id,
+          name: "My League",
+          platform: "sleeper",
+          guildId,
+          channelId,
+        });
+        updatedLeague = await storage.getLeague(leagueId);
+      } else {
+        await storage.updateLeague(league.id, { guildId, channelId });
+        updatedLeague = await storage.getLeague(league.id);
+      }
+
+      if (!updatedLeague) {
+        return res.status(500).json({ ok: false, code: "LEAGUE_CREATE_FAILED", message: "Failed to create league", request_id: requestId });
+      }
+
+      league = updatedLeague;
+
+      await storage.createEvent({
+        leagueId: league.id,
+        type: "INSTALL_COMPLETED",
+        payload: { step: "discord_select", guildId, channelId },
+        requestId,
+        latency: Date.now() - startTime,
+      });
+
+      res.json({ ok: true, data: { guildId, channelId, leagueId: league.id }, request_id: requestId });
+    } catch (error) {
+      console.error("[Discord Select]", error);
+      res.status(500).json({ ok: false, code: "SELECT_FAILED", message: "Failed to save Discord selection", request_id: requestId });
+    }
+  });
+
+  // GET /api/v2/discord/verify?guild_id=&channel_id= - Proxies to doctor, returns capabilities
+  app.get("/api/v2/discord/verify", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+
+    try {
+      const validation = discordVerifySchema.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "guild_id and channel_id are required", request_id: requestId });
+      }
+
+      const { guild_id, channel_id } = validation.data;
+
+      const checkResult = await doctor.checkDiscord({ guildId: guild_id, channelId: channel_id });
+
+      if (!checkResult.ok) {
+        const errorMessage = checkResult.errors.length > 0 
+          ? checkResult.errors[0]
+          : "The bot can't post in this channel. Grant: View Channel, Read History, Send Messages, Embed Links.";
+        return res.status(400).json({ ok: false, code: "VERIFICATION_FAILED", message: errorMessage, request_id: requestId });
+      }
+
+      res.json({ ok: true, data: { capabilities: checkResult.details }, request_id: requestId });
+    } catch (error) {
+      console.error("[Discord Verify]", error);
+      res.status(500).json({ ok: false, code: "VERIFY_FAILED", message: "Failed to verify Discord setup", request_id: requestId });
+    }
+  });
+
+  // GET /api/v2/sleeper/lookup?username= - Finds Sleeper user
+  app.get("/api/v2/sleeper/lookup", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+
+    try {
+      const validation = sleeperLookupSchema.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "username is required", request_id: requestId });
+      }
+
+      const { username } = validation.data;
+      const user = await sleeperService.getUser(username);
+
+      if (!user) {
+        return res.status(404).json({ ok: false, code: "USER_NOT_FOUND", message: "Sleeper user not found", request_id: requestId });
+      }
+
+      res.json({ ok: true, data: { user }, request_id: requestId });
+    } catch (error) {
+      console.error("[Sleeper Lookup]", error);
+      res.status(500).json({ ok: false, code: "LOOKUP_FAILED", message: "Failed to lookup Sleeper user", request_id: requestId });
+    }
+  });
+
+  // GET /api/v2/sleeper/leagues?user_id= - Returns user's leagues for current season
+  app.get("/api/v2/sleeper/leagues", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+
+    try {
+      const validation = sleeperLeaguesSchema.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "user_id is required", request_id: requestId });
+      }
+
+      const { user_id } = validation.data;
+      const currentYear = new Date().getFullYear();
+      const season = currentYear.toString();
+
+      const leagues = await sleeperService.getUserLeagues(user_id, season);
+
+      res.json({ ok: true, data: { leagues }, request_id: requestId });
+    } catch (error) {
+      console.error("[Sleeper Leagues]", error);
+      res.status(500).json({ ok: false, code: "LEAGUES_FAILED", message: "Failed to fetch Sleeper leagues", request_id: requestId });
+    }
+  });
+
+  // POST /api/v2/sleeper/select - Saves league selection, fetches snapshot (idempotent)
+  app.post("/api/v2/sleeper/select", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    const startTime = Date.now();
+
+    try {
+      const validation = sleeperSelectSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "leagueId and username are required", request_id: requestId });
+      }
+
+      const supabaseUserId = (req as any).supabaseUser?.id;
+      if (!supabaseUserId) {
+        return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Authentication required", request_id: requestId });
+      }
+
+      const { leagueId: sleeperLeagueId, username } = validation.data;
+
+      const account = await storage.getAccountBySupabaseUserId(supabaseUserId);
+      if (!account) {
+        return res.status(404).json({ ok: false, code: "ACCOUNT_NOT_FOUND", message: "Account not found", request_id: requestId });
+      }
+
+      const leagues = await storage.getLeaguesByAccount(account.id);
+      let league = leagues[0];
+      let updatedLeague;
+
+      if (!league) {
+        const newLeagueId = await storage.createLeague({
+          accountId: account.id,
+          name: "My League",
+          platform: "sleeper",
+          sleeperLeagueId,
+        });
+        updatedLeague = await storage.getLeague(newLeagueId);
+      } else {
+        await storage.updateLeague(league.id, { sleeperLeagueId });
+        updatedLeague = await storage.getLeague(league.id);
+      }
+
+      if (!updatedLeague) {
+        return res.status(500).json({ ok: false, code: "LEAGUE_CREATE_FAILED", message: "Failed to create league", request_id: requestId });
+      }
+
+      league = updatedLeague;
+
+      const sleeperData = await sleeperService.syncLeagueData(sleeperLeagueId);
+
+      await storage.createEvent({
+        leagueId: league.id,
+        type: "SLEEPER_SYNCED",
+        payload: { step: "sleeper_select", sleeperLeagueId, username },
+        requestId,
+        latency: Date.now() - startTime,
+      });
+
+      res.json({ ok: true, data: { sleeperLeagueId, snapshot: sleeperData, leagueId: league.id }, request_id: requestId });
+    } catch (error) {
+      console.error("[Sleeper Select]", error);
+      res.status(500).json({ ok: false, code: "SELECT_FAILED", message: "Failed to save Sleeper selection", request_id: requestId });
+    }
+  });
+
+  // GET /api/v2/sleeper/verify?league_id= - Proxies to doctor, validates snapshot
+  app.get("/api/v2/sleeper/verify", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+
+    try {
+      const validation = sleeperVerifySchema.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "league_id is required", request_id: requestId });
+      }
+
+      const { league_id } = validation.data;
+
+      const checkResult = await doctor.checkSleeper({ leagueId: league_id });
+
+      if (!checkResult.ok) {
+        const errorMessage = checkResult.errors.length > 0
+          ? checkResult.errors[0]
+          : "League snapshot is incomplete. Click Retry or re-select your league.";
+        return res.status(400).json({ ok: false, code: "VERIFICATION_FAILED", message: errorMessage, request_id: requestId });
+      }
+
+      res.json({ ok: true, data: { valid: true, details: checkResult.details }, request_id: requestId });
+    } catch (error) {
+      console.error("[Sleeper Verify]", error);
+      res.status(500).json({ ok: false, code: "VERIFY_FAILED", message: "Failed to verify Sleeper setup", request_id: requestId });
+    }
+  });
+
+  // GET /api/v2/assignments/bootstrap?league_id=&guild_id= - Returns Sleeper teams, Discord members, suggestions
+  app.get("/api/v2/assignments/bootstrap", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+
+    try {
+      const validation = assignmentsBootstrapSchema.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "league_id and guild_id are required", request_id: requestId });
+      }
+
+      const supabaseUserId = (req as any).supabaseUser?.id;
+      if (!supabaseUserId) {
+        return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Authentication required", request_id: requestId });
+      }
+
+      const { league_id, guild_id } = validation.data;
+
+      const account = await storage.getAccountBySupabaseUserId(supabaseUserId);
+      if (!account) {
+        return res.status(404).json({ ok: false, code: "ACCOUNT_NOT_FOUND", message: "Account not found", request_id: requestId });
+      }
+
+      const leagues = await storage.getLeaguesByAccount(account.id);
+      const league = leagues[0];
+
+      if (!league || league.sleeperLeagueId !== league_id) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found", request_id: requestId });
+      }
+
+      const sleeperData = await sleeperService.syncLeagueData(league_id);
+      const sleeperTeams = sleeperData.rosters.map(r => ({
+        ownerId: r.owner_id,
+        teamName: r.metadata?.team_name || `Team ${r.roster_id}`,
+        rosterId: r.roster_id,
+      }));
+
+      const discordMembers = await discordService.getGuildMembers(guild_id);
+
+      const existingMembers = await storage.getMembersByLeague(league.id);
+      const suggestions = sleeperTeams.map(team => {
+        const existing = existingMembers.find(m => m.sleeperOwnerId === team.ownerId);
+        if (existing) {
+          return {
+            sleeperOwnerId: team.ownerId,
+            sleeperTeamName: team.teamName,
+            discordUserId: existing.discordUserId,
+            discordUsername: existing.discordUsername || '',
+            confidence: 1.0,
+          };
+        }
+        return null;
+      }).filter(Boolean);
+
+      res.json({ 
+        ok: true, 
+        data: { 
+          sleeperTeams, 
+          discordMembers: discordMembers.map(m => ({ id: m.id, username: m.username })), 
+          suggestions 
+        }, 
+        request_id: requestId 
+      });
+    } catch (error) {
+      console.error("[Assignments Bootstrap]", error);
+      res.status(500).json({ ok: false, code: "BOOTSTRAP_FAILED", message: "Failed to fetch assignment data", request_id: requestId });
+    }
+  });
+
+  // POST /api/v2/assignments/commit - Saves team-Discord assignments (idempotent upsert)
+  app.post("/api/v2/assignments/commit", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    const startTime = Date.now();
+
+    try {
+      const validation = assignmentsCommitSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "assignments array is required", request_id: requestId });
+      }
+
+      const supabaseUserId = (req as any).supabaseUser?.id;
+      if (!supabaseUserId) {
+        return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Authentication required", request_id: requestId });
+      }
+
+      const { assignments } = validation.data;
+
+      if (assignments.length === 0) {
+        return res.status(400).json({ ok: false, code: "NO_ASSIGNMENTS", message: "Some teams are unmapped. Assign every owner before finishing.", request_id: requestId });
+      }
+
+      const account = await storage.getAccountBySupabaseUserId(supabaseUserId);
+      if (!account) {
+        return res.status(404).json({ ok: false, code: "ACCOUNT_NOT_FOUND", message: "Account not found", request_id: requestId });
+      }
+
+      const leagues = await storage.getLeaguesByAccount(account.id);
+      const league = leagues[0];
+
+      if (!league) {
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found", request_id: requestId });
+      }
+
+      for (const assignment of assignments) {
+        await storage.upsertMember({
+          leagueId: league.id,
+          discordUserId: assignment.discordUserId,
+          sleeperOwnerId: assignment.sleeperOwnerId,
+          sleeperTeamName: assignment.sleeperTeamName,
+          discordUsername: assignment.discordUsername,
+        });
+      }
+
+      await storage.createEvent({
+        leagueId: league.id,
+        type: "INSTALL_COMPLETED",
+        payload: { step: "assignments_commit", count: assignments.length },
+        requestId,
+        latency: Date.now() - startTime,
+      });
+
+      res.json({ ok: true, data: { committed: assignments.length }, request_id: requestId });
+    } catch (error) {
+      console.error("[Assignments Commit]", error);
+      res.status(500).json({ ok: false, code: "COMMIT_FAILED", message: "Failed to save assignments", request_id: requestId });
     }
   });
 

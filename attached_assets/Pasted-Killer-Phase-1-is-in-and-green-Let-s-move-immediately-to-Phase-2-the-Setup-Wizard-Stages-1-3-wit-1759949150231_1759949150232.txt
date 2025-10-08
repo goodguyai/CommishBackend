@@ -1,0 +1,212 @@
+Killer—Phase 1 is in and green. Let’s move immediately to Phase 2: the Setup Wizard (Stages 1–3) with tight scope, zero regressions, and crisp acceptance tests.
+
+Copy-paste this back to Replit as your next instruction.
+
+⸻
+
+✅ Proceed to Phase 2 — Setup Wizard (Stages 1–3) with Guardrails
+
+Objective: Replace the ad-hoc onboarding with a single, resumable 3-step wizard that always lands a league in a ready state:
+	1.	Account (Supabase auth + app session)
+	2.	Connect Discord & Sleeper (clean handshakes, doctor-verified)
+	3.	Assign Users to Teams (Sleeper owners ↔ Discord members mapping)
+
+No full redesign yet; only the wizard and the APIs it needs. Keep current dashboard intact (don’t delete), but route new users to /setup until readiness = true.
+
+⸻
+
+Non-negotiable guardrails
+	•	No global middleware changes. Don’t touch raw-body + interaction signature flow.
+	•	Additive only. No deletions/renames of existing routes; don’t change route semantics.
+	•	Idempotent writes. All POSTs must be safe to retry and return stable output.
+	•	One source of truth. Supabase user → accounts.id → leagues.id. No shadow accounts.
+	•	Strict types. Treat Discord snowflakes as strings; reject placeholders ("YOUR_GUILD_ID").
+	•	Doctor-gated. Wizard buttons that say “Verify” must call /api/doctor/* and show exact failures.
+
+⸻
+
+Deliverables (Phase 2 only)
+
+1) Data contracts & tiny schema hardening (idempotent)
+	•	No new tables required if you already have:
+	•	accounts (id, email, supabase_user_id, discord_user_id?)
+	•	leagues (id, account_id, discord_guild_id?, discord_channel_id?, sleeper_league_id?, features jsonb default {}, settings jsonb default {}, constitution jsonb default {})
+	•	league_members (league_id, sleeper_team_id, sleeper_user_id?, discord_user_id?, role)
+	•	Add (if missing): updated_at timestamptz default now() on leagues, league_members.
+	•	Add composite uniqueness (if missing, via idempotent migration later in Phase 2.5—not blocking UI):
+	•	unique(leagues.discord_guild_id) (one Commish per guild)
+	•	unique(league_members.league_id, sleeper_team_id)
+	•	unique(league_members.league_id, discord_user_id) nullable-aware partial unique
+
+If you need a migration, create it but don’t run destructive operations. We’ll apply after UI is integrated.
+
+⸻
+
+2) Backend APIs (new, additive)
+
+All responses use { ok, code?, message?, data? } and include request_id.
+
+Auth/session
+	•	POST /api/auth/session (already exists) — confirm it exchanges Supabase JWT → app session and returns {accountId}.
+
+Wizard state
+	•	GET /api/v2/setup/state
+Returns { account: {...}, league: {...}, readiness: { discord:bool, sleeper:bool, assignments: "complete"|"partial"|"none" }, nextStep: "account"|"connect"|"assign"|"done" }
+	•	Compute nextStep server-side. Persist league context in session.
+	•	POST /api/v2/setup/advance
+Body: { stepCompleted: "account"|"connect"|"assign" }
+Effect: Sets server-side progress marker (idempotent). Returns updated state.
+
+Discord connect
+	•	GET /api/v2/discord/guilds
+Returns manageable guilds (name, id, icon, installed?). Use User OAuth data you already store.
+	•	GET /api/v2/discord/channels?guild_id=
+Returns text channels and capabilities for each (from doctor permissions calc).
+	•	POST /api/v2/discord/select
+Body: { guildId, channelId }
+Effect: Writes to leagues (discord_guild_id, discord_channel_id) for the active league (create if missing).
+	•	GET /api/v2/discord/verify?guild_id=&channel_id=
+Proxy to /api/doctor/discord and return structured caps; no writes.
+
+Sleeper connect
+	•	GET /api/v2/sleeper/lookup?username= or GET /api/v2/sleeper/leagues?user_id=
+Returns candidate leagues for the season.
+	•	POST /api/v2/sleeper/select
+Body: { sleeperLeagueId }
+Effect: Fetch minimal snapshot (roster, owners, settings). Persist to leagues.settings.raw (or similar) and sleeper_league_id. Return settings_hash.
+	•	GET /api/v2/sleeper/verify?league_id=
+Proxy to /api/doctor/sleeper with this league; ensure snapshot is non-empty.
+
+Assignments
+	•	GET /api/v2/assignments/bootstrap?league_id=&guild_id=
+Returns:
+	•	sleeperTeams: [{teamId, ownerUserId, displayName}]
+	•	discordCandidates: [{userId, username, nick}]
+	•	suggestions: [{ teamId, discord_user_id, confidence }] (basic username heuristic)
+	•	POST /api/v2/assignments/commit
+Body: { leagueId, pairs: Array<{ teamId, discordUserId }>, mode: "merge"|"replace" }
+Effect: Upsert into league_members. Idempotent by (league_id, sleeper_team_id). Return a summary of counts.
+
+⸻
+
+3) Frontend — new Setup Wizard at /setup
+
+Keep it lean and deterministic, three cards:
+
+Step A: Account
+	•	Show current Supabase user (email). If not logged in, send to login/register.
+	•	Button: “Create App Session” → calls POST /api/auth/session then GET /api/v2/setup/state.
+	•	✅ Pill turns green when {accountId} exists and nextStep !== "account".
+
+Step B: Connect Discord & Sleeper (two tiles inside one step)
+
+Discord tile
+	•	“Select Server” → GET /api/v2/discord/guilds, choose guild
+	•	“Select Channel” → GET /api/v2/discord/channels?guild_id=...
+	•	“Verify” → GET /api/v2/discord/verify?guild_id=...&channel_id=...
+	•	UX: Show each required capability as a checklist; if missing, show “Fix permissions” helper.
+
+Sleeper tile
+	•	Lookup by username or user id; list leagues (current season).
+	•	“Select League” → POST /api/v2/sleeper/select
+	•	“Verify” → GET /api/v2/sleeper/verify?league_id=... with snapshot facts (teams, scoring keys count).
+	•	If snapshot incomplete: show Retry + error copy (no stack traces).
+
+Step completion rule: Both Discord and Sleeper show green checks. Then “Continue” advances to Assign.
+
+Step C: Assign Users to Teams
+	•	Side-by-side list:
+	•	Left: Sleeper teams (team name, owner)
+	•	Right: Discord members select dropdown (searchable)
+	•	Show suggestions pre-filled; user can override.
+	•	Button: “Save Assignments” → POST /api/v2/assignments/commit
+	•	Show completion badge with counts: “12/12 mapped.”
+	•	Button: “Finish Setup” → calls POST /api/v2/setup/advance then route to /app (but keep a “Setup” link visible until readiness is fully green).
+
+Resume logic: On mount, call GET /api/v2/setup/state and jump to the correct step. If the user refreshes, they land back where they left off.
+
+⸻
+
+Acceptance criteria (must pass before Phase 3)
+
+API-level cURL checks (replace host)
+
+# State & advance
+curl -sS https://<APP>/api/v2/setup/state | jq
+curl -sS -X POST https://<APP>/api/v2/setup/advance -H 'Content-Type: application/json' -d '{"stepCompleted":"account"}' | jq
+
+# Discord
+curl -sS https://<APP>/api/v2/discord/guilds | jq
+curl -sS "https://<APP>/api/v2/discord/channels?guild_id=<G>" | jq
+curl -sS -X POST https://<APP>/api/v2/discord/select -H 'Content-Type: application/json' -d '{"guildId":"<G>","channelId":"<C>"}' | jq
+curl -sS "https://<APP>/api/v2/discord/verify?guild_id=<G>&channel_id=<C>" | jq
+
+# Sleeper
+curl -sS "https://<APP>/api/v2/sleeper/leagues?user_id=<U>" | jq   # or .../lookup?username=<name>
+curl -sS -X POST https://<APP>/api/v2/sleeper/select -H 'Content-Type: application/json' -d '{"sleeperLeagueId":"<SLID>"}' | jq
+curl -sS "https://<APP>/api/v2/sleeper/verify?league_id=<L>" | jq
+
+# Assignments
+curl -sS "https://<APP>/api/v2/assignments/bootstrap?league_id=<L>&guild_id=<G>" | jq
+curl -sS -X POST https://<APP>/api/v2/assignments/commit -H 'Content-Type: application/json' \
+  -d '{"leagueId":"<L>","mode":"merge","pairs":[{"teamId":"TEAM1","discordUserId":"USER1"}]}' | jq
+
+Pass conditions
+	•	All endpoints respond < 1500ms and are idempotent (safe to repeat).
+	•	/api/v2/setup/state returns nextStep accurately as wiring progresses.
+	•	Discord verify reports real capabilities (no placeholder IDs).
+	•	Sleeper verify shows snapshot facts (counts); returns degraded if incomplete.
+	•	Assignments commit returns added/updated/unchanged counts correctly.
+
+⸻
+
+Minimal file plan (don’t exceed this scope)
+
+Backend (additive):
+	•	server/routes.setup.ts (or section in existing routes): state/advance endpoints
+	•	server/routes.discord.setup.ts: guilds/channels/select/verify
+	•	server/routes.sleeper.setup.ts: lookup/leagues/select/verify
+	•	server/routes.assignments.ts: bootstrap/commit
+	•	Reuse doctor logic internally for verify routes (no duplication).
+	•	If needed: tiny helpers in server/services/setupState.ts.
+
+Frontend (additive):
+	•	client/src/pages/Setup.tsx — the wizard (3 steps as above)
+	•	client/src/lib/setupApi.ts — thin API functions (GET/POST)
+	•	Route: /setup and redirect to it for any user with state.nextStep !== 'done'.
+
+Do not remove the current dashboard. Only change the router to prefer /setup until done.
+
+⸻
+
+Error copy (teach the user, no stack traces)
+	•	Discord Missing Permissions:
+“The bot can’t post in #. Grant: View Channel, Read History, Send Messages, Embed Links. Then click Verify again.”
+	•	Sleeper Snapshot Incomplete:
+“We connected to Sleeper but the league snapshot is incomplete (rosters/scoring). Click Retry or re-select your league.”
+	•	Assignments Partial:
+“Some teams are unmapped. Assign every owner before finishing.”
+
+⸻
+
+Telemetry & reliability (Phase 2)
+	•	Every step writes an event to your existing ledger/logs with {request_id, account_id, league_id, step, outcome}.
+	•	All POST routes must insert an idempotency key derived from {leagueId, operation, normalizedPayload} (reuse bot_activity if you prefer).
+	•	No writes in Verify routes. Writes only in select and commit.
+
+⸻
+
+Rollback & safety
+	•	New routes are additive; can be disabled by unmounting /setup route if anything misbehaves.
+	•	DB writes are limited to leagues updates and league_members upserts.
+	•	No cron or Discord message sends in Phase 2.
+
+⸻
+
+When done, return
+	1.	File diff (added/modified files only)
+	2.	curl outputs demonstrating each endpoint + an assignment commit
+	3.	A screenshot/GIF of the /setup wizard showing green checks for all three steps
+	4.	Confirmation that raw-body Discord signature path is untouched
+
+If you agree, start Phase 2 now under these constraints. When Phase 2 passes acceptance, we’ll greenlight Phase 3 (Stages 4–5: Constitution drafts + League Switchboard) immediately.
