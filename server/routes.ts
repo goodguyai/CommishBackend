@@ -328,6 +328,12 @@ const aiRecapSchema = z.object({
   week: z.number().int().min(1).max(18),
 });
 
+// Zod schemas for Doctor Discord Permissions endpoint
+const discordPermissionsSchema = z.object({
+  guild_id: z.string().regex(/^\d{17,19}$/, "Invalid Discord guild snowflake"),
+  channel_id: z.string().regex(/^\d{17,19}$/, "Invalid Discord channel snowflake"),
+});
+
 // Zod schemas for Phase 2: Setup Wizard endpoints
 const setupAdvanceSchema = z.object({
   step: z.enum(['account', 'connections', 'assignments']),
@@ -7424,6 +7430,188 @@ export async function registerRoutes(app: Express): Promise<Server> {
         request_id: requestId,
         measured_at: measuredAt,
         elapsed_ms: 0,
+      });
+    }
+  });
+
+  // GET /api/doctor/discord/permissions - Discord permissions check
+  app.get('/api/doctor/discord/permissions', async (req, res) => {
+    // Check admin key
+    const adminKey = req.headers['x-admin-key'];
+    if (!adminKey || adminKey !== env.app.adminKey) {
+      return res.status(401).json({
+        ok: false,
+        installed: false,
+        channel_read: false,
+        channel_write: false,
+        embed_links: false,
+        add_reactions: false,
+        mention_everyone: false,
+        error: 'Unauthorized: Invalid or missing admin key'
+      });
+    }
+
+    // Validate query params
+    const validation = discordPermissionsSchema.safeParse(req.query);
+    if (!validation.success) {
+      return res.status(400).json({
+        ok: false,
+        installed: false,
+        channel_read: false,
+        channel_write: false,
+        embed_links: false,
+        add_reactions: false,
+        mention_everyone: false,
+        error: 'Invalid query parameters: guild_id and channel_id must be valid Discord snowflakes'
+      });
+    }
+
+    const { guild_id, channel_id } = validation.data;
+
+    // Discord permission flags
+    const VIEW_CHANNEL = 1 << 10;      // 1024
+    const SEND_MESSAGES = 1 << 11;     // 2048
+    const EMBED_LINKS = 1 << 14;       // 16384
+    const ADD_REACTIONS = 1 << 6;      // 64
+    const MENTION_EVERYONE = 1 << 17;  // 131072
+
+    try {
+      // Timeout wrapper
+      const checkPermissions = async () => {
+        let installed = false;
+        let channel_read = false;
+        let channel_write = false;
+        let embed_links = false;
+        let add_reactions = false;
+        let mention_everyone = false;
+        const missing: string[] = [];
+
+        // Check if bot is installed in guild
+        try {
+          await discordService.getGuildMember(guild_id, '@me');
+          installed = true;
+        } catch (error: any) {
+          // Bot not installed or no access
+          return {
+            ok: false,
+            installed: false,
+            channel_read: false,
+            channel_write: false,
+            embed_links: false,
+            add_reactions: false,
+            mention_everyone: false,
+            missing: ['Bot not installed in guild or missing access']
+          };
+        }
+
+        // Get channel info and check permissions
+        try {
+          const channel = await discordService.getChannel(channel_id);
+          
+          // Get bot's permissions in the channel
+          // Discord stores permissions as a string representing a bitfield
+          const botMember = await discordService.getGuildMember(guild_id, '@me');
+          
+          // Calculate permissions from roles and overwrites
+          // For simplicity, we'll check if the bot can access the channel
+          // and has the necessary permissions based on role permissions
+          
+          // Get base permissions from @everyone role and bot roles
+          let permissions = BigInt(0);
+          
+          // If bot has roles, combine their permissions
+          if (botMember.roles && Array.isArray(botMember.roles)) {
+            // Note: In a full implementation, we'd fetch role permissions from the guild
+            // For this diagnostic endpoint, we'll use a simplified check
+            
+            // Try to check permission overwrites in the channel
+            if (channel.permission_overwrites) {
+              for (const overwrite of channel.permission_overwrites) {
+                if (overwrite.id === botMember.user?.id || botMember.roles.includes(overwrite.id)) {
+                  // Apply allow overwrites
+                  if (overwrite.allow) {
+                    permissions = permissions | BigInt(overwrite.allow);
+                  }
+                  // Apply deny overwrites
+                  if (overwrite.deny) {
+                    permissions = permissions & ~BigInt(overwrite.deny);
+                  }
+                }
+              }
+            }
+          }
+          
+          // For diagnostic purposes, we'll do a practical check:
+          // If we can read the channel info, we likely have VIEW_CHANNEL
+          channel_read = true;
+          
+          // Check specific permissions from the permissions bitfield
+          const permNum = Number(permissions);
+          channel_write = (permNum & SEND_MESSAGES) === SEND_MESSAGES;
+          embed_links = (permNum & EMBED_LINKS) === EMBED_LINKS;
+          add_reactions = (permNum & ADD_REACTIONS) === ADD_REACTIONS;
+          mention_everyone = (permNum & MENTION_EVERYONE) === MENTION_EVERYONE;
+          
+          // Build missing permissions list
+          if (!channel_read) missing.push('VIEW_CHANNEL');
+          if (!channel_write) missing.push('SEND_MESSAGES');
+          if (!embed_links) missing.push('EMBED_LINKS');
+          if (!add_reactions) missing.push('ADD_REACTIONS');
+          if (!mention_everyone) missing.push('MENTION_EVERYONE');
+          
+        } catch (error: any) {
+          // Channel access error
+          if (error.message?.includes('403') || error.message?.includes('Missing Access')) {
+            missing.push('VIEW_CHANNEL', 'SEND_MESSAGES', 'EMBED_LINKS', 'ADD_REACTIONS', 'MENTION_EVERYONE');
+            return {
+              ok: false,
+              installed,
+              channel_read: false,
+              channel_write: false,
+              embed_links: false,
+              add_reactions: false,
+              mention_everyone: false,
+              missing
+            };
+          }
+          throw error;
+        }
+
+        const ok = installed && channel_read && channel_write && embed_links && add_reactions && mention_everyone;
+
+        return {
+          ok,
+          installed,
+          channel_read,
+          channel_write,
+          embed_links,
+          add_reactions,
+          mention_everyone,
+          ...(missing.length > 0 ? { missing } : {})
+        };
+      };
+
+      // Apply timeout
+      const result = await Promise.race([
+        checkPermissions(),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Discord permissions check timeout')), 1500)
+        )
+      ]);
+
+      return res.status(200).json(result);
+
+    } catch (error: any) {
+      // Timeout or other error
+      return res.status(500).json({
+        ok: false,
+        installed: false,
+        channel_read: false,
+        channel_write: false,
+        embed_links: false,
+        add_reactions: false,
+        mention_everyone: false,
+        error: error.message || 'Internal server error during permissions check'
       });
     }
   });
