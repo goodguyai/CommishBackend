@@ -6,7 +6,7 @@ import { nanoid } from "nanoid";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and } from "drizzle-orm";
 import { validate as validateCron } from "node-cron";
 import { storage } from "./storage";
 import { env, getEnv } from "./services/env";
@@ -327,6 +327,12 @@ const aiAskSchema = z.object({
 const aiRecapSchema = z.object({
   leagueId: z.string().uuid(),
   week: z.number().int().min(1).max(18),
+});
+
+// Zod schema for Reactions Stats endpoint
+const reactionsStatsSchema = z.object({
+  league_id: z.string().uuid(),
+  hours: z.string().regex(/^\d+$/).transform(Number).optional().default("24"),
 });
 
 // Zod schemas for Doctor Discord Permissions endpoint
@@ -7993,7 +7999,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // H. GET /api/v3/jobs?league_id=
+  // H. GET /api/v3/reactions/stats?league_id={uuid}&hours=24
+  app.get("/api/v3/reactions/stats", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const validation = reactionsStatsSchema.safeParse(req.query);
+      if (!validation.success) {
+        return res.status(400).json({
+          ok: false,
+          code: "INVALID_REQUEST",
+          message: validation.error.message,
+          request_id: requestId
+        });
+      }
+      
+      const { league_id, hours } = validation.data;
+      
+      const league = await storage.getLeague(league_id);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found",
+          request_id: requestId
+        });
+      }
+      
+      // Calculate timestamp for N hours ago
+      const hoursAgo = new Date(Date.now() - hours * 60 * 60 * 1000);
+      
+      // Query bot_activity for reactions within the time window
+      const reactions = await db
+        .select()
+        .from(botActivity)
+        .where(
+          and(
+            eq(botActivity.leagueId, league_id),
+            eq(botActivity.kind, 'reaction'),
+            sql`${botActivity.createdAt} >= ${hoursAgo}`
+          )
+        );
+      
+      // Aggregate stats
+      const count = reactions.length;
+      const by_emoji: Record<string, number> = {};
+      
+      reactions.forEach(reaction => {
+        const detail = reaction.detail as any;
+        const emoji = detail?.emoji;
+        if (emoji) {
+          by_emoji[emoji] = (by_emoji[emoji] || 0) + 1;
+        }
+      });
+      
+      res.json({
+        ok: true,
+        data: { count, by_emoji },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[GET /api/v3/reactions/stats] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "FETCH_FAILED",
+        message: error.message || "Failed to fetch reactions stats",
+        request_id: requestId
+      });
+    }
+  });
+
+  // I. GET /api/v3/jobs?league_id=
   app.get("/api/v3/jobs", requireSupabaseAuth, async (req, res) => {
     const requestId = nanoid(8);
     
