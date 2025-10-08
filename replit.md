@@ -5,8 +5,8 @@ THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrate
 
 ## Recent Changes (October 2025)
 
-### System Rebuild - Phases 1-2 Complete (October 8, 2025)
-**Environment Doctor & Setup Wizard**: Comprehensive health monitoring and streamlined 3-stage onboarding flow.
+### System Rebuild - Phases 1-3 Complete (October 8, 2025)
+**Environment Doctor, Setup Wizard, and League Switchboard**: Comprehensive health monitoring, streamlined onboarding, and centralized league management.
 
 #### Phase 1: Environment Doctor (Complete)
 - **Health Check Suite**: 6 diagnostic endpoints at `/api/v2/doctor/*` (status, discord, sleeper, database, cron, secrets)
@@ -23,6 +23,24 @@ THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrate
   - Assignments: `/bootstrap`, `/commit`
 - **Frontend Implementation**: Setup.tsx wizard page with stage progression and setupApi.ts React Query client
 - **Schema Hardening**: Added updatedAt timestamps to accounts/members, unique constraint on leagues.guildId
+
+#### Phase 3: Constitution Drafts & League Switchboard (Complete)
+- **Constitution Draft Pipeline**: 5 endpoints at `/api/v3/constitution/*` for syncing Sleeper settings to league constitution with reversible apply/reject workflow
+  - `POST /sync`: Generate draft from current Sleeper league settings
+  - `GET /drafts`: List all drafts (pending/applied/rejected) for a league
+  - `GET /draft/:id`: View specific draft with detailed diff
+  - `POST /apply`: Atomically apply draft to league constitution
+  - `POST /reject`: Reject draft with optional reason
+- **League Switchboard**: 4 endpoints at `/api/v3/*` for centralized league configuration
+  - `GET /features`: Retrieve league feature toggles
+  - `POST /features`: Update feature flags in bulk
+  - `GET /jobs`: List scheduled jobs with next run times
+  - `POST /jobs/update`: Modify job schedules and settings
+- **AI Q&A Stub**: `POST /api/v3/rules/ask` endpoint ready for RAG integration
+- **Database Schema**: Added `constitution` (jsonb) and `jobs` (jsonb) fields to leagues table; constitution_drafts table with status tracking
+- **Frontend Implementation**: Constitution.tsx (draft management with diff expansion) and Switchboard.tsx (feature toggles and job list) with React Query integration
+- **Authentication**: All Phase 3 endpoints secured with requireSupabaseAuth middleware
+- **Error Handling**: Proper HTTP semantics - 400 for validation, 404 for not found, 409 for conflicts, 500 for unexpected errors
 
 ### Phase 13 Features (October 2025)
 - **Constitution Drafts**: Reversible proposal system for syncing Sleeper settings to league constitution with apply/reject workflow
