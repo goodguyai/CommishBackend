@@ -34,6 +34,7 @@ import { reportsService } from "./services/reports";
 import { DiscordDoctorService } from "./services/discordDoctor";
 import * as constitutionDraftsService from "./services/constitutionDrafts";
 import * as announceService from "./services/announceService";
+import * as doctor from "./services/doctor";
 import { aiAsk, aiRecap } from "./ai/agent";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
@@ -6531,6 +6532,283 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // === END DEBUG ENDPOINTS ===
+
+  // === DOCTOR HEALTH CHECK ENDPOINTS ===
+  
+  // Admin key middleware (production only)
+  const requireAdminKeyInProduction = (req: Request, res: Response, next: NextFunction) => {
+    if (env.app.nodeEnv === 'production') {
+      const adminKey = req.header('x-admin-key');
+      if (adminKey !== env.app.adminKey) {
+        return res.status(403).json({ 
+          ok: false, 
+          code: "FORBIDDEN", 
+          message: "Admin key required in production" 
+        });
+      }
+    }
+    next();
+  };
+
+  // Helper function to wrap health checks with timeout
+  const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) => 
+        setTimeout(() => reject(new Error(`Health check timeout after ${ms}ms`)), ms)
+      )
+    ]);
+  };
+
+  // GET /api/doctor/status - Aggregate health check
+  app.get('/api/doctor/status', requireAdminKeyInProduction, async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const measuredAt = new Date().toISOString();
+
+    try {
+      const result = await withTimeout(doctor.checkStatus(), 1500);
+      
+      const summary = result.ok 
+        ? (result.status === 'healthy' ? 'All systems green' : 'Some warnings detected')
+        : 'System issues detected';
+
+      res.status(result.ok ? 200 : 503).json({
+        ok: result.ok,
+        service: 'doctor:status',
+        status: result.status,
+        summary,
+        details: result.details,
+        warnings: result.warnings,
+        errors: result.errors,
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: result.elapsed_ms,
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        service: 'doctor:status',
+        status: 'down',
+        summary: 'Health check failed',
+        details: {},
+        warnings: [],
+        errors: [error instanceof Error ? error.message : String(error)],
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: 0,
+      });
+    }
+  });
+
+  // GET /api/doctor/discord - Discord health check
+  app.get('/api/doctor/discord', requireAdminKeyInProduction, async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const measuredAt = new Date().toISOString();
+
+    try {
+      const opts = {
+        guildId: req.query.guild_id as string | undefined,
+        channelId: req.query.channel_id as string | undefined,
+        probe: req.query.probe as string | undefined,
+      };
+
+      const result = await withTimeout(doctor.checkDiscord(opts), 1500);
+      
+      const summary = result.ok 
+        ? 'Discord integration healthy'
+        : 'Discord integration issues';
+
+      res.status(result.ok ? 200 : 503).json({
+        ok: result.ok,
+        service: 'doctor:discord',
+        status: result.status,
+        summary,
+        details: result.details,
+        warnings: result.warnings,
+        errors: result.errors,
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: result.elapsed_ms,
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        service: 'doctor:discord',
+        status: 'down',
+        summary: 'Discord check failed',
+        details: {},
+        warnings: [],
+        errors: [error instanceof Error ? error.message : String(error)],
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: 0,
+      });
+    }
+  });
+
+  // GET /api/doctor/sleeper - Sleeper health check
+  app.get('/api/doctor/sleeper', requireAdminKeyInProduction, async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const measuredAt = new Date().toISOString();
+
+    try {
+      const opts = {
+        leagueId: req.query.league_id as string | undefined,
+      };
+
+      const result = await withTimeout(doctor.checkSleeper(opts), 1500);
+      
+      const summary = result.ok 
+        ? 'Sleeper integration healthy'
+        : 'Sleeper integration issues';
+
+      res.status(result.ok ? 200 : 503).json({
+        ok: result.ok,
+        service: 'doctor:sleeper',
+        status: result.status,
+        summary,
+        details: result.details,
+        warnings: result.warnings,
+        errors: result.errors,
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: result.elapsed_ms,
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        service: 'doctor:sleeper',
+        status: 'down',
+        summary: 'Sleeper check failed',
+        details: {},
+        warnings: [],
+        errors: [error instanceof Error ? error.message : String(error)],
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: 0,
+      });
+    }
+  });
+
+  // GET /api/doctor/database - Database health check
+  app.get('/api/doctor/database', requireAdminKeyInProduction, async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const measuredAt = new Date().toISOString();
+
+    try {
+      const result = await withTimeout(doctor.checkDatabase(), 1500);
+      
+      const summary = result.ok 
+        ? 'Database healthy'
+        : 'Database issues detected';
+
+      res.status(result.ok ? 200 : 503).json({
+        ok: result.ok,
+        service: 'doctor:database',
+        status: result.status,
+        summary,
+        details: result.details,
+        warnings: result.warnings,
+        errors: result.errors,
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: result.elapsed_ms,
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        service: 'doctor:database',
+        status: 'down',
+        summary: 'Database check failed',
+        details: {},
+        warnings: [],
+        errors: [error instanceof Error ? error.message : String(error)],
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: 0,
+      });
+    }
+  });
+
+  // GET /api/doctor/cron - Cron jobs health check
+  app.get('/api/doctor/cron', requireAdminKeyInProduction, async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const measuredAt = new Date().toISOString();
+
+    try {
+      const result = await withTimeout(doctor.checkCron(), 1500);
+      
+      const summary = `${result.details.total_jobs} scheduled jobs`;
+
+      res.status(result.ok ? 200 : 503).json({
+        ok: result.ok,
+        service: 'doctor:cron',
+        status: result.status,
+        summary,
+        details: result.details,
+        warnings: result.warnings,
+        errors: result.errors,
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: result.elapsed_ms,
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        service: 'doctor:cron',
+        status: 'down',
+        summary: 'Cron check failed',
+        details: {},
+        warnings: [],
+        errors: [error instanceof Error ? error.message : String(error)],
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: 0,
+      });
+    }
+  });
+
+  // GET /api/doctor/secrets - Secrets health check
+  app.get('/api/doctor/secrets', requireAdminKeyInProduction, async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const measuredAt = new Date().toISOString();
+
+    try {
+      const result = await withTimeout(doctor.checkSecrets(getEnv()), 1500);
+      
+      const summary = result.ok 
+        ? 'All secrets configured'
+        : 'Secret configuration issues';
+
+      res.status(result.ok ? 200 : 503).json({
+        ok: result.ok,
+        service: 'doctor:secrets',
+        status: result.status,
+        summary,
+        details: result.details,
+        warnings: result.warnings,
+        errors: result.errors,
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: result.elapsed_ms,
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        service: 'doctor:secrets',
+        status: 'down',
+        summary: 'Secrets check failed',
+        details: {},
+        warnings: [],
+        errors: [error instanceof Error ? error.message : String(error)],
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: 0,
+      });
+    }
+  });
+
+  // === END DOCTOR HEALTH CHECK ENDPOINTS ===
 
   const httpServer = createServer(app);
   return httpServer;

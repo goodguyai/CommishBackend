@@ -313,6 +313,10 @@ export class Scheduler extends EventEmitter {
     
     console.log("Scheduled Sleeper Settings Sync: every 6 hours (UTC)");
   }
+
+  getTasks(): Map<string, ScheduledTask> {
+    return this.tasks;
+  }
 }
 
 export const scheduler = new Scheduler();
