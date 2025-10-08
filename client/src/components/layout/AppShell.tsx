@@ -13,6 +13,8 @@ import {
   ChevronDown,
   Bell,
   Check,
+  BookOpen,
+  Zap,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useQuery } from '@tanstack/react-query';
@@ -33,6 +35,8 @@ const navigation = [
   { name: 'Matchups', href: '/app/matchups', icon: Trophy },
   { name: 'Reports', href: '/app/reports', icon: FileText },
   { name: 'Rules', href: '/app/rules', icon: FileText },
+  { name: 'Constitution', href: '/app/constitution', icon: BookOpen },
+  { name: 'Switchboard', href: '/app/switchboard', icon: Zap },
   { name: 'Chat', href: '/app/chat', icon: MessageSquare },
   { name: 'Settings', href: '/app/settings', icon: Settings },
   { name: 'Terminal', href: '/app/terminal', icon: TerminalIcon },

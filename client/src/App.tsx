@@ -31,6 +31,8 @@ import { AIRecaps } from './pages/AIRecaps';
 import { AutomationAnnouncements } from './pages/AutomationAnnouncements';
 import { AutomationReactions } from './pages/AutomationReactions';
 import { ConstitutionDrafts } from './pages/ConstitutionDrafts';
+import { Constitution } from './pages/Constitution';
+import { Switchboard } from './pages/Switchboard';
 
 function AppRouter() {
   const [location] = useLocation();
@@ -58,6 +60,8 @@ function AppRouter() {
           <Route path="/app/automation/announcements" component={AutomationAnnouncements} />
           <Route path="/app/automation/reactions" component={AutomationReactions} />
           <Route path="/app/constitution/drafts" component={ConstitutionDrafts} />
+          <Route path="/app/constitution" component={Constitution} />
+          <Route path="/app/switchboard" component={Switchboard} />
           <Route>
             <div className="text-center py-12">
               <h1 className="text-2xl font-bold text-text-primary mb-2">404</h1>
