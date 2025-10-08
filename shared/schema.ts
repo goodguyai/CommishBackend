@@ -109,6 +109,14 @@ export const leagues = pgTable("leagues", {
   }),
   digestFrequency: text("digest_frequency").default("off"),
   constitution: jsonb("constitution"),
+  features: jsonb("features").default({
+    onboarding: true,
+    reactions: false,
+    announcements: false,
+    weeklyRecaps: true,
+    ruleQA: true,
+    moderation: false
+  }),
   jobs: jsonb("jobs"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

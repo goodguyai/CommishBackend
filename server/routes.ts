@@ -36,7 +36,7 @@ import * as constitutionDraftsService from "./services/constitutionDrafts";
 import * as announceService from "./services/announceService";
 import * as doctor from "./services/doctor";
 import { aiAsk, aiRecap } from "./ai/agent";
-import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues } from "@shared/schema";
+import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues, constitutionDrafts } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
 import { verifySupabaseToken, requireSupabaseAuth } from "./middleware/auth";
 
@@ -221,6 +221,34 @@ const tradesDigestQuerySchema = z.object({
 const standingsReportSchema = z.object({
   leagueId: z.string().uuid(),
   season: z.string().min(4),
+});
+
+// Zod schemas for Phase 3 v3 API endpoints
+const constitutionSyncSchema = z.object({
+  league_id: z.string().uuid(),
+});
+
+const constitutionApplySchema = z.object({
+  draft_id: z.string().uuid(),
+});
+
+const constitutionRejectSchema = z.object({
+  draft_id: z.string().uuid(),
+});
+
+const updateFeaturesSchema = z.object({
+  league_id: z.string().uuid(),
+  features: z.record(z.any()),
+});
+
+const updateJobsSchema = z.object({
+  league_id: z.string().uuid(),
+  jobs: z.array(z.any()),
+});
+
+const rulesAskSchema = z.object({
+  league_id: z.string().uuid(),
+  question: z.string().min(1),
 });
 
 // Zod schemas for Sleeper Status API endpoints
@@ -7373,6 +7401,516 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // === END DOCTOR HEALTH CHECK ENDPOINTS ===
+
+  // === PHASE 3 V3 API ENDPOINTS ===
+
+  // A. POST /api/v3/constitution/sync
+  app.post("/api/v3/constitution/sync", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const validation = constitutionSyncSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          ok: false,
+          code: "INVALID_REQUEST",
+          message: validation.error.message,
+          request_id: requestId
+        });
+      }
+      
+      const { league_id } = validation.data;
+      const dryRun = req.query.dryRun === '1';
+      
+      const league = await storage.getLeague(league_id);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found",
+          request_id: requestId
+        });
+      }
+      
+      if (!league.sleeperLeagueId) {
+        return res.status(400).json({
+          ok: false,
+          code: "NO_SLEEPER_LEAGUE",
+          message: "League has no Sleeper league ID",
+          request_id: requestId
+        });
+      }
+      
+      const sleeperData = await sleeperService.getLeague(league.sleeperLeagueId);
+      
+      if (dryRun) {
+        const { diffSleeperToConstitution } = await import("./services/sleeperMapping");
+        const diffs = diffSleeperToConstitution(sleeperData, league.constitution || {});
+        
+        return res.json({
+          ok: true,
+          data: { diffs },
+          request_id: requestId
+        });
+      }
+      
+      const draft = await constitutionDraftsService.buildDraftFromSleeper(league_id, sleeperData);
+      
+      res.json({
+        ok: true,
+        data: {
+          draft_id: draft.id,
+          diffs: draft.changes
+        },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[POST /api/v3/constitution/sync] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "SYNC_FAILED",
+        message: error.message || "Failed to sync constitution",
+        request_id: requestId
+      });
+    }
+  });
+
+  // B. GET /api/v3/constitution/drafts?league_id=
+  app.get("/api/v3/constitution/drafts", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const { league_id } = req.query;
+      
+      if (!league_id || typeof league_id !== 'string') {
+        return res.status(400).json({
+          ok: false,
+          code: "LEAGUE_ID_REQUIRED",
+          message: "league_id query parameter required",
+          request_id: requestId
+        });
+      }
+      
+      const drafts = await constitutionDraftsService.listDrafts(league_id);
+      
+      res.json({
+        ok: true,
+        data: { drafts },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[GET /api/v3/constitution/drafts] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "FETCH_FAILED",
+        message: error.message || "Failed to fetch drafts",
+        request_id: requestId
+      });
+    }
+  });
+
+  // C. GET /api/v3/constitution/draft/:id
+  app.get("/api/v3/constitution/draft/:id", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const { id } = req.params;
+      
+      const [draft] = await db.select()
+        .from(constitutionDrafts)
+        .where(eq(constitutionDrafts.id, id))
+        .limit(1);
+      
+      if (!draft) {
+        return res.status(404).json({
+          ok: false,
+          code: "DRAFT_NOT_FOUND",
+          message: "Draft not found",
+          request_id: requestId
+        });
+      }
+      
+      res.json({
+        ok: true,
+        data: {
+          draft: {
+            ...draft,
+            changes: draft.proposed
+          }
+        },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[GET /api/v3/constitution/draft/:id] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "FETCH_FAILED",
+        message: error.message || "Failed to fetch draft",
+        request_id: requestId
+      });
+    }
+  });
+
+  // D. POST /api/v3/constitution/apply
+  app.post("/api/v3/constitution/apply", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const validation = constitutionApplySchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          ok: false,
+          code: "INVALID_REQUEST",
+          message: validation.error.message,
+          request_id: requestId
+        });
+      }
+      
+      const { draft_id } = validation.data;
+      
+      // Check if draft exists to distinguish 404 vs 409
+      const [existingDraft] = await db.select()
+        .from(constitutionDrafts)
+        .where(eq(constitutionDrafts.id, draft_id))
+        .limit(1);
+      
+      if (!existingDraft) {
+        return res.status(404).json({
+          ok: false,
+          code: "DRAFT_NOT_FOUND",
+          message: "Draft not found",
+          request_id: requestId
+        });
+      }
+      
+      if (existingDraft.status !== 'PENDING') {
+        return res.status(409).json({
+          ok: false,
+          code: "DRAFT_ALREADY_DECIDED",
+          message: `Draft already ${existingDraft.status.toLowerCase()}`,
+          request_id: requestId
+        });
+      }
+      
+      const draft = await constitutionDraftsService.applyDraft(draft_id);
+      
+      res.json({
+        ok: true,
+        data: { draft },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[POST /api/v3/constitution/apply] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "APPLY_FAILED",
+        message: error.message || "Failed to apply draft",
+        request_id: requestId
+      });
+    }
+  });
+
+  // E. POST /api/v3/constitution/reject
+  app.post("/api/v3/constitution/reject", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const validation = constitutionRejectSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          ok: false,
+          code: "INVALID_REQUEST",
+          message: validation.error.message,
+          request_id: requestId
+        });
+      }
+      
+      const { draft_id } = validation.data;
+      
+      // Check if draft exists to distinguish 404 vs 409
+      const [existingDraft] = await db.select()
+        .from(constitutionDrafts)
+        .where(eq(constitutionDrafts.id, draft_id))
+        .limit(1);
+      
+      if (!existingDraft) {
+        return res.status(404).json({
+          ok: false,
+          code: "DRAFT_NOT_FOUND",
+          message: "Draft not found",
+          request_id: requestId
+        });
+      }
+      
+      if (existingDraft.status !== 'PENDING') {
+        return res.status(409).json({
+          ok: false,
+          code: "DRAFT_ALREADY_DECIDED",
+          message: `Draft already ${existingDraft.status.toLowerCase()}`,
+          request_id: requestId
+        });
+      }
+      
+      const draft = await constitutionDraftsService.rejectDraft(draft_id);
+      
+      res.json({
+        ok: true,
+        data: { draft },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[POST /api/v3/constitution/reject] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "REJECT_FAILED",
+        message: error.message || "Failed to reject draft",
+        request_id: requestId
+      });
+    }
+  });
+
+  // F. GET /api/v3/features?league_id=
+  app.get("/api/v3/features", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const { league_id } = req.query;
+      
+      if (!league_id || typeof league_id !== 'string') {
+        return res.status(400).json({
+          ok: false,
+          code: "LEAGUE_ID_REQUIRED",
+          message: "league_id query parameter required",
+          request_id: requestId
+        });
+      }
+      
+      const league = await storage.getLeague(league_id);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found",
+          request_id: requestId
+        });
+      }
+      
+      const features = league.features || {
+        onboarding: true,
+        reactions: false,
+        announcements: false,
+        weeklyRecaps: true,
+        ruleQA: true,
+        moderation: false
+      };
+      
+      res.json({
+        ok: true,
+        data: { features },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[GET /api/v3/features] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "FETCH_FAILED",
+        message: error.message || "Failed to fetch features",
+        request_id: requestId
+      });
+    }
+  });
+
+  // G. POST /api/v3/features
+  app.post("/api/v3/features", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const validation = updateFeaturesSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          ok: false,
+          code: "INVALID_REQUEST",
+          message: validation.error.message,
+          request_id: requestId
+        });
+      }
+      
+      const { league_id, features } = validation.data;
+      
+      const league = await storage.getLeague(league_id);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found",
+          request_id: requestId
+        });
+      }
+      
+      const currentFeatures = league.features || {
+        onboarding: true,
+        reactions: false,
+        announcements: false,
+        weeklyRecaps: true,
+        ruleQA: true,
+        moderation: false
+      };
+      
+      const updatedFeatures = { ...currentFeatures, ...features };
+      
+      await storage.updateLeague(league_id, { features: updatedFeatures });
+      
+      res.json({
+        ok: true,
+        data: { features: updatedFeatures },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[POST /api/v3/features] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "UPDATE_FAILED",
+        message: error.message || "Failed to update features",
+        request_id: requestId
+      });
+    }
+  });
+
+  // H. GET /api/v3/jobs?league_id=
+  app.get("/api/v3/jobs", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const { league_id } = req.query;
+      
+      if (!league_id || typeof league_id !== 'string') {
+        return res.status(400).json({
+          ok: false,
+          code: "LEAGUE_ID_REQUIRED",
+          message: "league_id query parameter required",
+          request_id: requestId
+        });
+      }
+      
+      const league = await storage.getLeague(league_id);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found",
+          request_id: requestId
+        });
+      }
+      
+      const jobs = league.jobs || [];
+      
+      res.json({
+        ok: true,
+        data: { jobs },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[GET /api/v3/jobs] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "FETCH_FAILED",
+        message: error.message || "Failed to fetch jobs",
+        request_id: requestId
+      });
+    }
+  });
+
+  // I. POST /api/v3/jobs/update
+  app.post("/api/v3/jobs/update", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const validation = updateJobsSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          ok: false,
+          code: "INVALID_REQUEST",
+          message: validation.error.message,
+          request_id: requestId
+        });
+      }
+      
+      const { league_id, jobs } = validation.data;
+      
+      const league = await storage.getLeague(league_id);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found",
+          request_id: requestId
+        });
+      }
+      
+      await storage.updateLeague(league_id, { jobs });
+      
+      res.json({
+        ok: true,
+        data: { jobs },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[POST /api/v3/jobs/update] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "UPDATE_FAILED",
+        message: error.message || "Failed to update jobs",
+        request_id: requestId
+      });
+    }
+  });
+
+  // J. POST /api/v3/rules/ask
+  app.post("/api/v3/rules/ask", requireSupabaseAuth, async (req, res) => {
+    const requestId = generateRequestId();
+    
+    try {
+      const validation = rulesAskSchema.safeParse(req.body);
+      if (!validation.success) {
+        return res.status(400).json({
+          ok: false,
+          code: "INVALID_REQUEST",
+          message: validation.error.message,
+          request_id: requestId
+        });
+      }
+      
+      const { league_id, question } = validation.data;
+      
+      const league = await storage.getLeague(league_id);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found",
+          request_id: requestId
+        });
+      }
+      
+      res.json({
+        ok: true,
+        data: {
+          answer: "Feature coming soon"
+        },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[POST /api/v3/rules/ask] Error:", error);
+      res.status(500).json({
+        ok: false,
+        code: "ASK_FAILED",
+        message: error.message || "Failed to process question",
+        request_id: requestId
+      });
+    }
+  });
+
+  // === END PHASE 3 V3 API ENDPOINTS ===
 
   const httpServer = createServer(app);
   return httpServer;
