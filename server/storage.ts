@@ -16,7 +16,8 @@ import type {
   ContentQueue, InsertContentQueue,
   SleeperRoster, InsertSleeperRoster,
   SleeperTransaction, InsertSleeperTransaction,
-  SleeperMatchup, InsertSleeperMatchup
+  SleeperMatchup, InsertSleeperMatchup,
+  Job, InsertJobRun, JobRun, JobFailure
 } from "@shared/schema";
 import { EmbeddingResult } from "./services/rag";
 import { env } from "./services/env";
