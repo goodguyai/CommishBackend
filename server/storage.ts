@@ -205,6 +205,7 @@ export interface IStorage {
   // Sleeper sync methods
   saveSleeperLink(params: { leagueId: string; sleeperLeagueId: string; season: string; username?: string }): Promise<void>;
   getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string; username?: string | null; createdAt?: Date | null } | null>;
+  deleteSleeperIntegration(leagueId: string): Promise<void>;
   saveSleeperSnapshot(params: { leagueId: string; payload: any }): Promise<void>;
   getLeagueSettings(leagueId: string): Promise<any | null>;
   saveLeagueSettings(params: { leagueId: string; scoring: any; roster: any; waivers: any; playoffs: any; trades: any; misc: any }): Promise<void>;
@@ -1242,6 +1243,10 @@ export class DatabaseStorage implements IStorage {
 
   // Sleeper sync methods implementation
   async saveSleeperLink(params: { leagueId: string; sleeperLeagueId: string; season: string; username?: string }): Promise<void> {
+    // Insert or update the integration for this league
+    // If the (sleeperLeagueId, season) pair is already linked to another league,
+    // the database will throw a unique constraint violation error.
+    // This is intentional - users must explicitly unlink before re-linking.
     await this.db.insert(schema.sleeperIntegrations)
       .values({
         leagueId: params.leagueId,
@@ -1265,6 +1270,11 @@ export class DatabaseStorage implements IStorage {
       .where(eq(schema.sleeperIntegrations.leagueId, leagueId))
       .limit(1);
     return results[0] || null;
+  }
+
+  async deleteSleeperIntegration(leagueId: string): Promise<void> {
+    await this.db.delete(schema.sleeperIntegrations)
+      .where(eq(schema.sleeperIntegrations.leagueId, leagueId));
   }
 
   async saveSleeperSnapshot(params: { leagueId: string; payload: any }): Promise<void> {
@@ -2520,6 +2530,10 @@ export class MemStorage implements IStorage {
 
   async getSleeperIntegration(leagueId: string): Promise<{ sleeperLeagueId: string; season: string; sport: string; username?: string | null; createdAt?: Date | null } | null> {
     return null;
+  }
+
+  async deleteSleeperIntegration(leagueId: string): Promise<void> {
+    console.log("MemStorage: deleteSleeperIntegration not implemented");
   }
 
   async saveSleeperSnapshot(params: { leagueId: string; payload: any }): Promise<void> {

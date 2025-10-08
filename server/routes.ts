@@ -3295,12 +3295,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         username
       });
       
-      // Check for PostgreSQL foreign key constraint error
       const errorMessage = e instanceof Error ? e.message : '';
-      const isPostgresError = errorMessage.includes('constraint') || errorMessage.includes('foreign key');
-      const isForeignKeyError = errorMessage.includes('fkey') || errorMessage.includes('23503');
+      const errorCode = (e as any)?.code;
+      const errorConstraint = (e as any)?.constraint;
       
-      if (isPostgresError && isForeignKeyError) {
+      // Check for PostgreSQL unique constraint violation on (sleeperLeagueId, season)
+      if (errorCode === '23505' && errorConstraint === 'uq_sleeper_int_sleeper_season') {
+        console.error("[Sleeper Setup] Unique constraint violation - Sleeper league already linked:", { sleeperLeagueId, season });
+        return res.status(409).json({ 
+          ok: false, 
+          code: "SLEEPER_ALREADY_LINKED", 
+          message: "This Sleeper league is already linked to another fantasy league. Please unlink it first or use the existing link." 
+        });
+      }
+      
+      // Check for PostgreSQL foreign key constraint error
+      if (errorCode === '23503') {
         console.error("[Sleeper Setup] Foreign key constraint violation - invalid leagueId:", leagueId);
         return res.status(400).json({ 
           ok: false, 
@@ -3355,6 +3365,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e) {
       console.error("[Get Sleeper Integration]", e);
       res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get Sleeper integration" });
+    }
+  });
+
+  // DELETE /api/v2/sleeper/integration/:leagueId - Unlink Sleeper integration
+  app.delete("/api/v2/sleeper/integration/:leagueId", async (req, res) => {
+    try {
+      const parsed = getSettingsSchema.safeParse(req.params);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          ok: false, 
+          code: "INVALID_INPUT", 
+          message: "Invalid league ID",
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { leagueId } = parsed.data;
+      
+      await storage.deleteSleeperIntegration(leagueId);
+      
+      // Create event to track the unlinking
+      try {
+        await storage.createEvent({
+          type: "COMMAND_EXECUTED",
+          leagueId,
+          payload: { action: "sleeper_league_unlinked" },
+        });
+      } catch (eventError) {
+        console.error("[Sleeper Unlink] Failed to create event (non-fatal):", eventError);
+      }
+      
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("[Delete Sleeper Integration]", e);
+      res.status(500).json({ ok: false, code: "DELETE_FAILED", message: "Failed to unlink Sleeper integration" });
     }
   });
 

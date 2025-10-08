@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Alert } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import { apiRequest, queryClient } from '@/lib/queryClient';
-import { ExternalLink, RefreshCw, CheckCircle, Link as LinkIcon, Search, AlertTriangle } from 'lucide-react';
+import { ExternalLink, RefreshCw, CheckCircle, Link as LinkIcon, Search, AlertTriangle, Unlink } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 
 interface SleeperLeague {
@@ -79,7 +79,18 @@ export function SleeperLinkPage() {
         season: data.season,
         username: data.username,
       });
-      return response.json();
+      const result = await response.json();
+      
+      // Check for specific error codes
+      if (!result.ok && result.code === 'SLEEPER_ALREADY_LINKED') {
+        throw new Error(result.message || 'This Sleeper league is already linked to another fantasy league');
+      }
+      
+      if (!result.ok) {
+        throw new Error(result.message || 'Failed to link league');
+      }
+      
+      return result;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/v2/sleeper/integration', selectedLeagueId] });
@@ -112,6 +123,32 @@ export function SleeperLinkPage() {
     },
     onError: (error: Error) => {
       toast.error('Failed to sync', {
+        description: error.message || 'An error occurred',
+      });
+    },
+  });
+
+  // Unlink mutation
+  const unlinkMutation = useMutation({
+    mutationFn: async (leagueId: string) => {
+      const response = await apiRequest('DELETE', `/api/v2/sleeper/integration/${leagueId}`);
+      const result = await response.json();
+      
+      // Throw error if request failed
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || 'Failed to unlink Sleeper integration');
+      }
+      
+      return result;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/v2/sleeper/integration', selectedLeagueId] });
+      toast.success('Sleeper league unlinked', {
+        description: 'Your Sleeper integration has been removed',
+      });
+    },
+    onError: (error: Error) => {
+      toast.error('Failed to unlink', {
         description: error.message || 'An error occurred',
       });
     },
@@ -231,6 +268,16 @@ export function SleeperLinkPage() {
                 data-testid="button-change-league"
               >
                 Change League
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => unlinkMutation.mutate(integration.leagueId)}
+                disabled={unlinkMutation.isPending || hasInvalidLeague}
+                className="flex items-center gap-2"
+                data-testid="button-unlink"
+              >
+                <Unlink className="w-4 h-4" />
+                {unlinkMutation.isPending ? 'Unlinking...' : 'Unlink'}
               </Button>
             </div>
           </CardContent>
