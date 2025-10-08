@@ -232,6 +232,14 @@ export interface IStorage {
   getConstitutionDraft(draftId: string): Promise<any | null>;
   updateConstitutionDraft(draftId: string, updates: { status?: string; decidedAt?: Date }): Promise<void>;
 
+  // Jobs methods
+  getEnabledJobs(): Promise<Job[]>;
+  getJob(id: string): Promise<Job | undefined>;
+  getJobsByLeague(leagueId: string): Promise<Job[]>;
+  createJobRun(jobRun: InsertJobRun): Promise<string>;
+  updateJobRun(id: string, updates: Partial<JobRun>): Promise<void>;
+  createOrUpdateJobFailure(jobId: string, errorExcerpt: string): Promise<void>;
+
   // Migration methods
   runRawSQL(query: string): Promise<any>;
   ensurePgVectorExtension(): Promise<void>;
@@ -1601,6 +1609,64 @@ export class DatabaseStorage implements IStorage {
       .where(eq(schema.constitutionDrafts.id, draftId));
   }
 
+  // Jobs methods implementation
+  async getEnabledJobs(): Promise<Job[]> {
+    return this.db.select()
+      .from(schema.jobs)
+      .where(eq(schema.jobs.enabled, true));
+  }
+
+  async getJob(id: string): Promise<Job | undefined> {
+    const jobs = await this.db.select()
+      .from(schema.jobs)
+      .where(eq(schema.jobs.id, id));
+    return jobs[0];
+  }
+
+  async getJobsByLeague(leagueId: string): Promise<Job[]> {
+    return this.db.select()
+      .from(schema.jobs)
+      .where(eq(schema.jobs.leagueId, leagueId));
+  }
+
+  async createJobRun(jobRun: InsertJobRun): Promise<string> {
+    const inserted = await this.db.insert(schema.jobRuns)
+      .values(jobRun)
+      .returning({ id: schema.jobRuns.id });
+    return inserted[0].id;
+  }
+
+  async updateJobRun(id: string, updates: Partial<JobRun>): Promise<void> {
+    await this.db.update(schema.jobRuns)
+      .set(updates)
+      .where(eq(schema.jobRuns.id, id));
+  }
+
+  async createOrUpdateJobFailure(jobId: string, errorExcerpt: string): Promise<void> {
+    const existing = await this.db.select()
+      .from(schema.jobFailures)
+      .where(eq(schema.jobFailures.jobId, jobId));
+    
+    if (existing.length > 0) {
+      await this.db.update(schema.jobFailures)
+        .set({
+          lastSeenAt: new Date(),
+          count: sql`${schema.jobFailures.count} + 1`,
+          lastErrorExcerpt: errorExcerpt,
+        })
+        .where(eq(schema.jobFailures.jobId, jobId));
+    } else {
+      await this.db.insert(schema.jobFailures)
+        .values({
+          jobId,
+          firstSeenAt: new Date(),
+          lastSeenAt: new Date(),
+          count: 1,
+          lastErrorExcerpt: errorExcerpt,
+        });
+    }
+  }
+
   // Migration methods implementation
   async runRawSQL(query: string): Promise<any> {
     return this.db.execute(sql.raw(query));
@@ -2621,6 +2687,31 @@ export class MemStorage implements IStorage {
 
   async updateConstitutionDraft(draftId: string, updates: { status?: string; decidedAt?: Date }): Promise<void> {
     console.log("MemStorage: updateConstitutionDraft not implemented");
+  }
+
+  // Jobs methods implementation (stub implementations for in-memory storage)
+  async getEnabledJobs(): Promise<Job[]> {
+    return [];
+  }
+
+  async getJob(id: string): Promise<Job | undefined> {
+    return undefined;
+  }
+
+  async getJobsByLeague(leagueId: string): Promise<Job[]> {
+    return [];
+  }
+
+  async createJobRun(jobRun: InsertJobRun): Promise<string> {
+    return this.generateId();
+  }
+
+  async updateJobRun(id: string, updates: Partial<JobRun>): Promise<void> {
+    console.log("MemStorage: updateJobRun not implemented");
+  }
+
+  async createOrUpdateJobFailure(jobId: string, errorExcerpt: string): Promise<void> {
+    console.log("MemStorage: createOrUpdateJobFailure not implemented");
   }
 
   // Migration methods implementation (no-op for in-memory storage)

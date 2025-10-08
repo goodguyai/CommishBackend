@@ -1,8 +1,11 @@
 import cron, { ScheduledTask } from "node-cron";
 import { EventEmitter } from "events";
+import { storage } from "../storage";
+import type { Job } from "@shared/schema";
 
 export class Scheduler extends EventEmitter {
   private tasks: Map<string, ScheduledTask> = new Map();
+  private jobTaskMap: Map<string, string> = new Map(); // Maps job.id to task key
 
   scheduleWeeklyDigest(
     leagueId: string, 
@@ -312,6 +315,127 @@ export class Scheduler extends EventEmitter {
     task.start();
     
     console.log("Scheduled Sleeper Settings Sync: every 6 hours (UTC)");
+  }
+
+  // Load and schedule jobs from database
+  async loadJobsFromDatabase() {
+    console.log("Loading jobs from database...");
+    try {
+      const jobs = await storage.getEnabledJobs();
+      console.log(`Found ${jobs.length} enabled jobs to schedule`);
+      
+      for (const job of jobs) {
+        await this.scheduleJob(job);
+      }
+    } catch (error) {
+      console.error("Error loading jobs from database:", error);
+    }
+  }
+
+  // Schedule a single job from the database
+  private async scheduleJob(job: Job) {
+    const taskKey = job.id;
+    
+    // Unschedule existing task if already scheduled (idempotent)
+    if (this.tasks.has(taskKey)) {
+      this.unschedule(taskKey);
+    }
+
+    const task = cron.createTask(
+      job.cron,
+      async () => {
+        await this.executeJob(job);
+      },
+      {
+        timezone: "UTC"
+      }
+    );
+
+    this.tasks.set(taskKey, task);
+    this.jobTaskMap.set(job.id, taskKey);
+    task.start();
+    
+    console.log(`Scheduled job ${job.id} (${job.kind}) for league ${job.leagueId}: ${job.cron} (UTC)`);
+  }
+
+  // Generic job execution handler
+  private async executeJob(job: Job) {
+    console.log(`Executing job ${job.id} (${job.kind}) for league ${job.leagueId}`);
+    
+    // Create job run entry
+    let runId: string;
+    try {
+      runId = await storage.createJobRun({
+        jobId: job.id,
+        status: "RUNNING",
+        startedAt: new Date(),
+      });
+    } catch (error) {
+      console.error(`Failed to create job run for job ${job.id}:`, error);
+      return;
+    }
+
+    try {
+      // Map job.kind to event name and emit
+      const eventMap: Record<string, string> = {
+        weekly_recap: "recap_due",
+        announcements: "content_poster_due",
+        sleeper_sync: "sleeper_sync_due",
+        highlights: "highlights_due",
+        rivalry: "rivalry_due",
+      };
+
+      const eventName = eventMap[job.kind];
+      if (!eventName) {
+        throw new Error(`Unknown job kind: ${job.kind}`);
+      }
+
+      // Emit the event with job context
+      this.emit(eventName, {
+        leagueId: job.leagueId,
+        jobId: job.id,
+        timezone: "UTC",
+        config: job.config,
+      });
+
+      // Update job run as successful
+      await storage.updateJobRun(runId, {
+        status: "SUCCESS",
+        finishedAt: new Date(),
+        detail: { eventEmitted: eventName },
+      });
+
+      console.log(`Job ${job.id} completed successfully`);
+    } catch (error) {
+      // Update job run as failed
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorExcerpt = errorMessage.substring(0, 500);
+      
+      await storage.updateJobRun(runId, {
+        status: "FAILED",
+        finishedAt: new Date(),
+        detail: { error: errorMessage },
+      });
+
+      // Create or update job failure record
+      await storage.createOrUpdateJobFailure(job.id, errorExcerpt);
+
+      console.error(`Job ${job.id} failed:`, error);
+    }
+  }
+
+  // Refresh jobs from database (unschedule all, reload, reschedule)
+  async refreshJobs() {
+    console.log("Refreshing jobs from database...");
+    
+    // Unschedule all job-based tasks (keep system tasks like global_cleanup)
+    for (const [jobId, taskKey] of this.jobTaskMap.entries()) {
+      this.unschedule(taskKey);
+      this.jobTaskMap.delete(jobId);
+    }
+    
+    // Reload jobs from database
+    await this.loadJobsFromDatabase();
   }
 
   getTasks(): Map<string, ScheduledTask> {

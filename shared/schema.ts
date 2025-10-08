@@ -892,6 +892,33 @@ export const insertLeagueStandingsSchema = createInsertSchema(leagueStandings).p
   table: true,
 });
 
+export const insertJobSchema = createInsertSchema(jobs).pick({
+  leagueId: true,
+  kind: true,
+  cron: true,
+  nextRun: true,
+  channelId: true,
+  config: true,
+  enabled: true,
+});
+
+export const insertJobRunSchema = createInsertSchema(jobRuns).pick({
+  jobId: true,
+  startedAt: true,
+  finishedAt: true,
+  status: true,
+  requestId: true,
+  detail: true,
+});
+
+export const insertJobFailureSchema = createInsertSchema(jobFailures).pick({
+  jobId: true,
+  firstSeenAt: true,
+  lastSeenAt: true,
+  count: true,
+  lastErrorExcerpt: true,
+});
+
 // Types
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
@@ -968,6 +995,12 @@ export type SleeperMatchup = typeof sleeperMatchups.$inferSelect;
 export type InsertSleeperMatchup = z.infer<typeof insertSleeperMatchupSchema>;
 export type LeagueStandings = typeof leagueStandings.$inferSelect;
 export type InsertLeagueStandings = z.infer<typeof insertLeagueStandingsSchema>;
+export type Job = typeof jobs.$inferSelect;
+export type InsertJob = z.infer<typeof insertJobSchema>;
+export type JobRun = typeof jobRuns.$inferSelect;
+export type InsertJobRun = z.infer<typeof insertJobRunSchema>;
+export type JobFailure = typeof jobFailures.$inferSelect;
+export type InsertJobFailure = z.infer<typeof insertJobFailureSchema>;
 
 // Keep legacy user schema for compatibility
 export const users = pgTable("users", {

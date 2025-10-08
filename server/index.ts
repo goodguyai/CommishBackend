@@ -202,6 +202,15 @@ app.use((req, res, next) => {
   // Sleeper Settings Sync: Initialize automatic sync every 6 hours
   scheduler.scheduleSleeperSync();
 
+  // Jobs table integration: Load and schedule jobs from database
+  (async () => {
+    try {
+      await scheduler.loadJobsFromDatabase();
+    } catch (error) {
+      console.error("Failed to load jobs from database:", error);
+    }
+  })();
+
   // Phase 5: Load all enabled reminders on startup
   (async () => {
     try {
