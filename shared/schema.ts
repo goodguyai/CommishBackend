@@ -517,6 +517,44 @@ export const botActivity = pgTable("bot_activity", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const jobs = pgTable("jobs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  leagueId: uuid("league_id").notNull().references(() => leagues.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  cron: text("cron"),
+  nextRun: timestamp("next_run"),
+  channelId: text("channel_id").notNull(),
+  config: jsonb("config").default({}),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  uniqLeagueKind: unique("uq_jobs_league_kind").on(table.leagueId, table.kind),
+}));
+
+export const jobRuns = pgTable("job_runs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  jobId: uuid("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  finishedAt: timestamp("finished_at"),
+  status: text("status").notNull(),
+  requestId: text("request_id"),
+  detail: jsonb("detail").default({}),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const jobFailures = pgTable("job_failures", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  jobId: uuid("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+  firstSeenAt: timestamp("first_seen_at").notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+  count: integer("count").notNull().default(1),
+  lastErrorExcerpt: text("last_error_excerpt"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  uniqJobId: unique("uq_job_failures_job").on(table.jobId),
+}));
+
 export const constitutionDrafts = pgTable("constitution_drafts", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   leagueId: uuid("league_id").notNull().references(() => leagues.id, { onDelete: "cascade" }),

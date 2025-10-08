@@ -1,0 +1,216 @@
+Perfect—Phase 1 and Phase 2 are in, and Replit reports Phase 3 is “done.” Let’s keep the momentum tight and surgical.
+
+Below is a single, battle-tested Phase 4 plan + system check you can paste straight into Replit’s planning thread. It assumes your Phase 3 endpoints and tabs exist, but it’s self-contained and additive. No breaking changes, just stabilization + real value in chat.
+
+⸻
+
+Phase 4 — Job Observability + Reliable Automations (Recaps, Announcements, Reactions)
+
+Why this next
+
+Users now finish the wizard and can see Constitution Drafts + a Switchboard. The moment of truth is “Does The Commish do things on its own, reliably, and visibly?”
+Phase 4 gives you:
+	•	A job ledger (what will run, what ran, what failed)
+	•	Run-now buttons for operators (fast feedback)
+	•	Idempotent posting into Discord (no double posts)
+	•	Solid rate-limit discipline and permissions checks
+	•	A Reactions toggle that actually does something day-1
+
+Think “flight deck” for a bot that works without babysitting.
+
+⸻
+
+Pre-Phase 4 Validation (run now)
+	•	/api/doctor/status → status:"healthy".
+	•	/api/v2/setup/state → for your test league, nextStep:"done".
+	•	DB: leagues row for test league has:
+	•	discord_guild_id and a real discord_channel_id
+	•	sleeper_league_id
+	•	constitution (jsonb) present
+	•	features (jsonb) exists; Switchboard toggles persist
+	•	Frontend: Constitution tab shows at least one draft cycle (sync → apply/reject).
+	•	Discord: bot is in the guild; the channel you plan to use is accessible (View, Read History, Send, Embed, Add Reactions; Mention Everyone optional).
+
+If any fail, stop and re-run Phase 2/3 fixes before proceeding.
+
+⸻
+
+What to Build in Phase 4 (no deletions, all additive)
+
+1) Job Ledger & Observability
+
+Objective: Persistent, queryable record of scheduled tasks and their outcomes—clear, human-readable history.
+
+Data (add if missing):
+	•	jobs (per league, per feature) — source of truth for schedules
+	•	id (uuid), league_id (uuid), kind (text) e.g., weekly_recap|digest|poll|reminder
+	•	cron (text) or next_run (timestamptz) for simple schedules
+	•	channel_id (text), config (jsonb), enabled (bool), created_at, updated_at
+	•	Uniq on (league_id,kind) to avoid duplicates
+	•	job_runs (append-only)
+	•	id, job_id, started_at, finished_at, status (SUCCESS|FAILED|SKIPPED)
+	•	request_id (text), detail (jsonb) (include Discord messageId/guild/channel)
+	•	job_failures (optional but recommended)
+	•	id, job_id, first_seen_at, last_seen_at, count, last_error_excerpt (text)
+
+Endpoints (add under /api/v3)
+	•	GET  /jobs?league_id= → list jobs (with computed next run)
+	•	POST /jobs/upsert → create/update one job (validates cron, channel, permissions; idempotent)
+	•	POST /jobs/run-now → run one job immediately (respects cooldowns, returns result with request_id)
+	•	GET  /jobs/history?league_id=&kind= → recent job_runs
+	•	GET  /jobs/failures?league_id= → open failures, grouped
+
+Scheduler hook
+	•	Teach the existing scheduler to:
+	•	Read jobs.enabled + cron and enqueue work
+	•	On run: create job_runs row first (PENDING), then mark SUCCESS/FAILED
+	•	Emit structured logs: {request_id, league_id, job_id, kind, status, elapsed_ms}
+
+Operator UX
+	•	Switchboard → “Automations” section shows:
+	•	Job table (Kind, Channel, Next Run, Enabled, Last Result)
+	•	Run now button per row
+	•	Link to “History” drawer (last 20 runs)
+
+⸻
+
+2) Reliable Posting Pipeline (Discord-safe)
+
+Objective: No accidental double posts, no permission surprises.
+
+Contract
+	•	Idempotency key: kind:guild_id:channel_id:payloadHash
+	•	Before posting: check bot_activity for SUCCESS with same key → if found, return the prior messageId (and mark as skipped: true).
+	•	Permission check: before any send, validate channel permissions and fail with code:"MISSING_PERMISSION" listing exact missing flags.
+	•	Rate-limit discipline:
+	•	Per channel cooldown for automations (e.g., announcements 1/min; recaps 1/5min)
+	•	Backoff on Discord 429/5xx with jitter
+	•	Dry-run mode: for “preview” actions, render but don’t post; return the would-be payload
+
+Endpoints
+	•	POST /api/v3/announce/preview → {preview} (no network calls)
+	•	POST /api/v3/announce/send → posts with idempotency + cooldown; returns {messageId}
+	•	(If you already have /api/announce/* from earlier, keep the path but upgrade the behavior—backwards compatible)
+
+⸻
+
+3) Weekly Recaps (MVP—real, but conservative)
+
+Objective: Ship a dependable “it posts something useful” weekly recap. Keep creative fluff for later phases.
+
+MVP behavior
+	•	Trigger: jobs.kind=weekly_recap
+	•	Data: Sleeper matchup results + top scorers for the last completed week
+	•	Copy: succinct markdown (Top Scorer, Closest Matchup, Biggest Blowout)
+	•	Post: into configured channel, idempotent, with messageId recorded
+	•	Run-now available from Switchboard to test instantly
+
+Acceptance tests
+	•	Create a weekly_recap job; Run now; see a post; re-run → second call returns skipped:true with the same messageId
+	•	On channel permission issue → operator sees precise missing flags and a doctor link
+
+⸻
+
+4) Reactions Toggle (light, tasteful)
+
+Objective: Deliver the “selective ❤️/👍” users asked for, under a kill-switch.
+
+Behavior
+	•	If features.reactions === true:
+	•	Listen to messageCreate, ignore bots
+	•	Heuristic: “gg|good game” → ❤️, “thanks|awesome|love|great|amazing|fun” → 👍
+	•	Per-channel rate-limit (~1 reaction / 5s, burst 2)
+	•	If disabled: listener exits early
+
+Observability
+	•	Count reactions per day in bot_activity with kind=reaction
+	•	Show “Reactions (24h): n” on Switchboard
+
+⸻
+
+5) Permissions Doctor (operator confidence)
+
+Objective: Eliminate “YOUR_GUILD_ID”-style footguns and snowflake mistakes.
+
+Endpoint
+	•	GET /api/doctor/discord/permissions?guild_id=&channel_id=
+	•	Returns { installed:bool, channel_read:bool, channel_write:bool, embed_links:bool, add_reactions:bool, mention_everyone:bool }
+	•	All IDs treated as strings; never Number() coerce snowflakes
+	•	Add a “Verify Channel” button next to the channel selector on Switchboard that calls this doctor and renders a checklist.
+
+⸻
+
+Guardrails (do not allow regressions)
+	•	Raw-body interaction route stays untouched. No global body parsers that could break Discord signature verification.
+	•	Admin key gating remains for /doctor/* in production.
+	•	Short timeouts (≤ 1500ms) on all doctor checks; no long-running requests in the web tier.
+	•	Idempotency: Use your existing bot_activity for every automated post; unique key + request_id in logs.
+	•	No destructive migrations. Every DB change must be idempotent, with IF NOT EXISTS.
+
+⸻
+
+Acceptance Criteria (copy/paste QA)
+
+Jobs
+	•	POST /api/v3/jobs/upsert with kind=weekly_recap returns ok:true
+	•	GET  /api/v3/jobs?league_id= shows the job with computed next run
+	•	POST /api/v3/jobs/run-now → posts a recap; returns {messageId, status:"SUCCESS"}
+	•	Second run-now within 1 minute → {skipped:true, messageId:<same>}
+
+Announcements
+	•	POST /api/v3/announce/preview returns markdown safely offline
+	•	POST /api/v3/announce/send posts once; re-sending same body w/in cooldown → skipped:true
+	•	Missing permission returns {ok:false, code:"MISSING_PERMISSION", missing:["EMBED_LINKS"]}
+
+Reactions
+	•	Toggle features.reactions on → send “gg” in the wired channel → see ❤️ (rate-limited)
+	•	Toggle off → no reactions
+
+Doctor
+	•	GET /api/doctor/discord/permissions?guild_id=&channel_id= returns accurate checklist for the chosen channel
+
+Logs
+	•	Every automation run emits one job_runs row and one bot_activity row; request_id present in both
+
+⸻
+
+Known Risks + Mitigations
+	•	Channel missing/changed: jobs.upsert validates channel upfront and rejects with a fix URL.
+	•	Discord 429: Backoff + retry with jitter; record the 429 in job_runs.detail.
+	•	Sleeper data latency: If week not closed, recap job should SKIP with a reason; don’t post stale/empty recaps.
+	•	Double-posting: Idempotency key includes normalized payload (week + league + channel). Always check before sending.
+
+⸻
+
+What to tell Replit (paste this block)
+
+✅ Proceed with Phase 4: Job Observability + Reliable Automations.
+Scope: Add a persistent job ledger and promote recaps/announcements/reactions from stubs to reliable features.
+Do not delete or rewrite Phase 1–3 code; this is additive and backward-compatible.
+
+Build exactly:
+	1.	Data: jobs, job_runs, (optional) job_failures—idempotent migrations and unique constraints.
+	2.	Endpoints (/api/v3):
+	•	GET /jobs, POST /jobs/upsert, POST /jobs/run-now, GET /jobs/history, GET /jobs/failures
+	•	POST /announce/preview, POST /announce/send (upgrade behavior if these already exist)
+	•	GET /doctor/discord/permissions?guild_id=&channel_id=
+	3.	Scheduler: Read jobs and enqueue work. On execution, write job_runs first, then post with idempotency+cooldown, then mark SUCCESS/FAILED.
+	4.	Reactions: Honor features.reactions and apply the lightweight heuristic with per-channel rate limits.
+	5.	Switchboard UI: Show jobs table (Kind, Channel, Next Run, Enabled, Last Result), Run now button, link to History drawer. Add “Verify Channel” using the new doctor endpoint.
+
+Guardrails: keep raw-body Discord interaction path untouched; enforce admin key for /doctor/* in prod; timeouts ≤ 1500ms for checks; never coerce snowflakes to numbers.
+
+Deliverables: file diff; DB migration snippet; cURL examples for each endpoint; demo run of a recap (run-now) that posts once and then skips duplicates (idempotency).
+
+Definition of Done: All acceptance criteria above pass; Switchboard can run a recap immediately; announcements are idempotent; reactions respect the toggle; doctor/permissions returns accurate flags for the configured channel.
+
+⸻
+
+After Phase 4 (preview)
+	•	Phase 5: AI & RAG you can trust (citations, guardrails, /ask in chat)
+	•	Phase 6: Slash command polish /status /assign /whoami /recap /ask /announce with unified error copy
+	•	Phase 7: Dashboard diet (move controls to Switchboard; keep Overview lean)
+
+⸻
+
+If you want, I can also hand you a short “operator playbook” for triaging user reports in under 5 minutes using the new doctor endpoints and the job ledger.
