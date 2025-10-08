@@ -294,7 +294,7 @@ export async function checkSecrets(env: ReturnType<typeof getEnv>): Promise<Heal
     { key: "DISCORD_CLIENT_SECRET", value: env.DISCORD_CLIENT_SECRET, minLength: 16 },
     { key: "DISCORD_PUBLIC_KEY", value: env.DISCORD_PUBLIC_KEY, minLength: 16 },
     { key: "DISCORD_BOT_TOKEN", value: env.DISCORD_BOT_TOKEN, minLength: 16 },
-    { key: "ADMIN_KEY", value: env.ADMIN_KEY, minLength: 16 },
+    { key: "ADMIN_API_KEY", value: env.ADMIN_API_KEY || env.ADMIN_KEY, minLength: 16 },
     { key: "SESSION_SECRET", value: env.SESSION_SECRET, minLength: 16 },
   ];
 

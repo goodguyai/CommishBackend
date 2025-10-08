@@ -7193,8 +7193,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ]);
   };
 
-  // GET /api/doctor/status - Aggregate health check
-  app.get('/api/doctor/status', requireAdminKeyInProduction, async (req, res) => {
+  // GET /api/v2/doctor/status - Aggregate health check
+  app.get('/api/v2/doctor/status', requireAdminKeyInProduction, async (req, res) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const measuredAt = new Date().toISOString();
 
@@ -7233,8 +7233,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/doctor/discord - Discord health check
-  app.get('/api/doctor/discord', requireAdminKeyInProduction, async (req, res) => {
+  // GET /api/v2/doctor/discord - Discord health check
+  app.get('/api/v2/doctor/discord', requireAdminKeyInProduction, async (req, res) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const measuredAt = new Date().toISOString();
 
@@ -7279,8 +7279,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/doctor/sleeper - Sleeper health check
-  app.get('/api/doctor/sleeper', requireAdminKeyInProduction, async (req, res) => {
+  // GET /api/v2/doctor/sleeper - Sleeper health check
+  app.get('/api/v2/doctor/sleeper', requireAdminKeyInProduction, async (req, res) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const measuredAt = new Date().toISOString();
 
@@ -7323,8 +7323,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/doctor/database - Database health check
-  app.get('/api/doctor/database', requireAdminKeyInProduction, async (req, res) => {
+  // GET /api/v2/doctor/database - Database health check
+  app.get('/api/v2/doctor/database', requireAdminKeyInProduction, async (req, res) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const measuredAt = new Date().toISOString();
 
@@ -7363,8 +7363,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/doctor/cron - Cron jobs health check
-  app.get('/api/doctor/cron', requireAdminKeyInProduction, async (req, res) => {
+  // GET /api/v2/doctor/cron - Cron jobs health check
+  app.get('/api/v2/doctor/cron', requireAdminKeyInProduction, async (req, res) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const measuredAt = new Date().toISOString();
 
@@ -7401,8 +7401,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // GET /api/doctor/secrets - Secrets health check
-  app.get('/api/doctor/secrets', requireAdminKeyInProduction, async (req, res) => {
+  // GET /api/v2/doctor/secrets - Secrets health check
+  app.get('/api/v2/doctor/secrets', requireAdminKeyInProduction, async (req, res) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const measuredAt = new Date().toISOString();
 

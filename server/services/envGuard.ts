@@ -26,8 +26,11 @@ const must = (k: string, v?: string) => {
   "DEEPSEEK_API_KEY",
   "APP_BASE_URL",
   "SESSION_SECRET",
-  "DATABASE_URL",
-  "ADMIN_KEY"
+  "DATABASE_URL"
 ].forEach(k => must(k, process.env[k]));
+
+// Check for at least one admin key (ADMIN_API_KEY or ADMIN_KEY for backwards compatibility)
+const adminKey = process.env.ADMIN_API_KEY || process.env.ADMIN_KEY;
+asrt(adminKey && adminKey.trim().length > 0, "Missing env var: ADMIN_API_KEY or ADMIN_KEY (at least one required)");
 
 console.log("✅ Environment validation passed");

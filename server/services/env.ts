@@ -46,8 +46,9 @@ const envSchema = z.object({
   // Application Configuration
   APP_BASE_URL: z.string().url("APP_BASE_URL must be a valid URL (e.g., https://your-replit-domain)"),
   
-  // Admin Configuration
-  ADMIN_KEY: z.string().min(16, "ADMIN_KEY must be at least 16 characters for security"),
+  // Admin Configuration (support both ADMIN_KEY and ADMIN_API_KEY for backwards compatibility)
+  ADMIN_KEY: z.string().min(16, "ADMIN_KEY must be at least 16 characters for security").optional(),
+  ADMIN_API_KEY: z.string().min(16, "ADMIN_API_KEY must be at least 16 characters for security").optional(),
   
   // Node Environment
   NODE_ENV: z.enum(["development", "production"]).optional().default("development"),
@@ -91,6 +92,11 @@ export function validateEnvironment(): EnvConfig {
       throw new Error("OPENAI_API_KEY is required when EMBEDDINGS_PROVIDER=openai");
     }
     
+    // Validate admin key - require at least one to be set
+    if (!validatedEnv.ADMIN_KEY && !validatedEnv.ADMIN_API_KEY) {
+      throw new Error("Either ADMIN_KEY or ADMIN_API_KEY must be set");
+    }
+    
     console.log("✅ Environment validation passed");
     console.log(`🤖 LLM: ${validatedEnv.LLM_MODEL} via ${validatedEnv.DEEPSEEK_BASE_URL}`);
     console.log(`🔍 Embeddings: ${validatedEnv.EMBED_MODEL} (${validatedEnv.EMBED_DIM}D) via ${validatedEnv.EMBEDDINGS_PROVIDER}`);
@@ -115,7 +121,7 @@ export function validateEnvironment(): EnvConfig {
       console.error("  • DISCORD_BOT_TOKEN - Discord bot token with permissions");
       console.error("  • DISCORD_BOT_PERMISSIONS - Discord bot permission integer");
       console.error("  • APP_BASE_URL - Your application's public URL");
-      console.error("  • ADMIN_KEY - Strong random string for admin endpoints");
+      console.error("  • ADMIN_API_KEY - Strong random string for admin endpoints (or ADMIN_KEY for backwards compatibility)");
       console.error("  • SESSION_SECRET - Session encryption secret");
     } else {
       console.error("❌ Environment validation error:", error);
@@ -164,11 +170,13 @@ export const env = {
     };
   },
   get app() {
+    const envConfig = getEnv();
     return {
-      baseUrl: getEnv().APP_BASE_URL,
-      adminKey: getEnv().ADMIN_KEY,
-      nodeEnv: getEnv().NODE_ENV,
-      sessionSecret: getEnv().SESSION_SECRET,
+      baseUrl: envConfig.APP_BASE_URL,
+      // Prefer ADMIN_API_KEY over ADMIN_KEY for backwards compatibility
+      adminKey: envConfig.ADMIN_API_KEY || envConfig.ADMIN_KEY || '',
+      nodeEnv: envConfig.NODE_ENV,
+      sessionSecret: envConfig.SESSION_SECRET,
       devBetaAutosession: process.env.DEV_BETA_AUTOSESSION === 'true' || false,
     };
   },
