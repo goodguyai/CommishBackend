@@ -3,10 +3,28 @@
 ## Overview
 THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrated with the Sleeper platform. It serves as a commissioner assistant, handling rule inquiries, tracking deadlines, and generating automated digests. The system includes a React frontend for management and a Node.js backend for Discord interactions, leveraging RAG capabilities with DeepSeek LLM for intelligent responses to league constitution questions. Key capabilities include an advanced reminder system, enhanced rules indexing with versioning, improved RAG semantic search, quick polls, auto-meme feature, Sleeper↔Constitution sync with reversible drafts, controlled announcements with guardrails, and AI-powered Q&A and weekly recaps. The project provides a comprehensive, intelligent assistant to streamline fantasy football league management.
 
-## Recent Changes (Phase 13 - October 2025)
-**Constitution Sync & Safety Enhancements**: Added reversible Sleeper→Constitution sync, rate-limiting, retry logic, controlled announcements, and AI function-calling for Q&A and recaps.
+## Recent Changes (October 2025)
 
-### Phase 13 Features
+### System Rebuild - Phases 1-2 Complete (October 8, 2025)
+**Environment Doctor & Setup Wizard**: Comprehensive health monitoring and streamlined 3-stage onboarding flow.
+
+#### Phase 1: Environment Doctor (Complete)
+- **Health Check Suite**: 6 diagnostic endpoints at `/api/v2/doctor/*` (status, discord, sleeper, database, cron, secrets)
+- **Read-Only Architecture**: All checks use non-destructive validation with consistent JSON envelope format
+- **Admin Protection**: Secured with ADMIN_API_KEY for internal/development use
+- **Integration Points**: Discord REST endpoints, Sleeper API validation, database connectivity, cron job status
+
+#### Phase 2: Setup Wizard (Complete)
+- **Resumable 3-Step Flow**: Account verification → Discord/Sleeper connections → Team assignments
+- **12 New /api/v2 Endpoints**: Complete wizard state management with idempotent operations
+  - Setup: `/state`, `/advance`
+  - Discord: `/guilds`, `/channels`, `/select`, `/verify`
+  - Sleeper: `/lookup`, `/leagues`, `/select`, `/verify`
+  - Assignments: `/bootstrap`, `/commit`
+- **Frontend Implementation**: Setup.tsx wizard page with stage progression and setupApi.ts React Query client
+- **Schema Hardening**: Added updatedAt timestamps to accounts/members, unique constraint on leagues.guildId
+
+### Phase 13 Features (October 2025)
 - **Constitution Drafts**: Reversible proposal system for syncing Sleeper settings to league constitution with apply/reject workflow
 - **Safety Infrastructure**: Token-bucket rate limiter, exponential backoff retry logic, and enhanced idempotency guards
 - **Controlled Announcements**: Guardrailed @everyone announcements with cooldowns and role-based permissions
@@ -15,6 +33,7 @@ THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrate
 - **Frontend Pages**: ConstitutionDrafts, AutomationReactions, AutomationAnnouncements, AIAsk, AIRecaps
 
 ### Bug Fixes (October 7-8, 2025)
+- **Phase 2 Authentication Bug**: Fixed critical authentication field mismatch - changed all Phase 2 wizard endpoints from `req.user?.id` to `req.supabaseUser?.id` to align with requireSupabaseAuth middleware contract (6 endpoints affected)
 - **Phase 13 Routing**: Added all 5 Phase 13 pages (AI Ask, AI Recaps, Automation Announcements/Reactions, Constitution Drafts) to App.tsx routing system for proper accessibility
 - **Discord Channel Dropdowns**: Fixed API response property mismatch in Dashboard - changed from `.data` to `.channels` to match actual API contract
 - **Sleeper Sync**: Migrated SleeperLinkPage from localStorage to useAppStore() for consistent league ID management across pages
