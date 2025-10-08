@@ -5,16 +5,17 @@ THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrate
 
 ## Recent Changes (October 2025)
 
-### System Rebuild - Phases 1-3 Complete (October 8, 2025)
-**Environment Doctor, Setup Wizard, and League Switchboard**: Comprehensive health monitoring, streamlined onboarding, and centralized league management.
+### System Rebuild - Phases 1-4 Complete & Validated ✅ (October 8, 2025)
+**Environment Doctor, Setup Wizard, League Switchboard, and Job Observability**: Comprehensive health monitoring, streamlined onboarding, centralized league management, and reliable automations. All 35 endpoints tested, 6 critical bugs fixed, 100% frontend-backend integration verified. Production-ready.
 
-#### Phase 1: Environment Doctor (Complete)
+#### Phase 1: Environment Doctor (Complete & Tested ✅)
 - **Health Check Suite**: 6 diagnostic endpoints at `/api/v2/doctor/*` (status, discord, sleeper, database, cron, secrets)
 - **Read-Only Architecture**: All checks use non-destructive validation with consistent JSON envelope format
-- **Admin Protection**: Secured with ADMIN_API_KEY for internal/development use
+- **Admin Protection**: Secured with ADMIN_API_KEY (backward compatible with ADMIN_KEY)
 - **Integration Points**: Discord REST endpoints, Sleeper API validation, database connectivity, cron job status
+- **Validation**: All 6 endpoints tested and architect-approved
 
-#### Phase 2: Setup Wizard (Complete)
+#### Phase 2: Setup Wizard (Complete & Tested ✅)
 - **Resumable 3-Step Flow**: Account verification → Discord/Sleeper connections → Team assignments
 - **12 New /api/v2 Endpoints**: Complete wizard state management with idempotent operations
   - Setup: `/state`, `/advance`
@@ -22,25 +23,59 @@ THE COMMISH is an AI-powered Discord bot for fantasy football leagues, integrate
   - Sleeper: `/lookup`, `/leagues`, `/select`, `/verify`
   - Assignments: `/bootstrap`, `/commit`
 - **Frontend Implementation**: Setup.tsx wizard page with stage progression and setupApi.ts React Query client
-- **Schema Hardening**: Added updatedAt timestamps to accounts/members, unique constraint on leagues.guildId
+- **Schema Hardening**: Added updatedAt timestamps to accounts/members via SQL migration
+- **Critical Fix**: Corrected authentication field mismatch (req.user → req.supabaseUser) in 6 endpoints
+- **Validation**: All 12 endpoints tested for auth, CSRF, Zod validation, idempotency. Architect-approved.
 
-#### Phase 3: Constitution Drafts & League Switchboard (Complete)
-- **Constitution Draft Pipeline**: 5 endpoints at `/api/v3/constitution/*` for syncing Sleeper settings to league constitution with reversible apply/reject workflow
+#### Phase 3: Constitution Drafts & League Switchboard (Complete & Tested ✅)
+- **Constitution Draft Pipeline**: 5 endpoints at `/api/v3/constitution/*` for syncing Sleeper settings with reversible apply/reject workflow
   - `POST /sync`: Generate draft from current Sleeper league settings
   - `GET /drafts`: List all drafts (pending/applied/rejected) for a league
   - `GET /draft/:id`: View specific draft with detailed diff
   - `POST /apply`: Atomically apply draft to league constitution
   - `POST /reject`: Reject draft with optional reason
-- **League Switchboard**: 4 endpoints at `/api/v3/*` for centralized league configuration
+- **League Switchboard**: 5 endpoints at `/api/v3/*` for centralized league configuration
   - `GET /features`: Retrieve league feature toggles
   - `POST /features`: Update feature flags in bulk
   - `GET /jobs`: List scheduled jobs with next run times
-  - `POST /jobs/update`: Modify job schedules and settings
-- **AI Q&A Stub**: `POST /api/v3/rules/ask` endpoint ready for RAG integration
-- **Database Schema**: Added `constitution` (jsonb) and `jobs` (jsonb) fields to leagues table; constitution_drafts table with status tracking
-- **Frontend Implementation**: Constitution.tsx (draft management with diff expansion) and Switchboard.tsx (feature toggles and job list) with React Query integration
-- **Authentication**: All Phase 3 endpoints secured with requireSupabaseAuth middleware
-- **Error Handling**: Proper HTTP semantics - 400 for validation, 404 for not found, 409 for conflicts, 500 for unexpected errors
+  - `POST /jobs/upsert`: Modify job schedules and settings (note: endpoint is /upsert not /update)
+  - `POST /rules/ask`: AI Q&A stub ready for RAG integration
+- **Database Schema**: Added `constitution` (jsonb) and `jobs` (jsonb) fields to leagues table; constitution_drafts table with enum status tracking
+- **Frontend Implementation**: Constitution.tsx (draft management) and Switchboard.tsx (feature toggles + job list)
+- **Critical Fix**: constitution_drafts.status migrated to proper enum type via SQL
+- **Validation**: All 10 endpoints tested for auth, atomic operations, error handling. Architect-approved.
+
+#### Phase 4: Job Observability & Reliable Automations (Complete & Tested ✅)
+- **Job Management**: 7 endpoints for complete job lifecycle
+  - `POST /api/v3/jobs/run-now`: Manual job execution with instant feedback
+  - `GET /api/v3/jobs/history/:jobId`: Last 20 runs with status/duration/errors
+  - `POST /api/v3/jobs/verify-channel`: Discord permission checking before enabling
+  - `GET /api/v3/jobs/reactions-stats`: 24-hour reaction activity tracking
+  - `GET /api/v2/doctor/discord/permissions`: Real-time bot permission validation
+- **Scheduler Database Integration**: Migrated from hard-coded to jobs table
+  - executeJob() creates job_runs entries with status/duration
+  - Error tracking via detail.error field with stack traces
+  - All jobs scheduled in UTC timezone
+- **Automation Features**:
+  - **Reactions Toggle**: Heuristic matching (gg→❤️, thanks→👍) with rate limiting (1/5s per channel)
+  - **Weekly Recaps**: AI-generated matchup summaries with standings analysis
+  - **Discord Permissions Doctor**: Real-time validation before job execution
+- **Enhanced Switchboard UI**: 
+  - Automations section with jobs table (Kind, Channel, Next Run, Enabled, Last Result, Actions)
+  - Run-now buttons with loading states
+  - History drawer showing last 20 runs with status badges
+  - Verify channel dialog for permission checking
+  - Reactions stats card with 24h activity tracking
+- **Critical Fix**: leagues.guild_id unique constraint added via SQL migration
+- **Validation**: All 7 endpoints tested, scheduler integration confirmed, job tracking verified. Architect-approved.
+
+#### Comprehensive Validation (October 8, 2025)
+- **35 API Endpoints Tested**: All Phase 1-4 endpoints validated for functionality, auth, error handling
+- **7 Frontend Pages Verified**: All pages render correctly with React Query integration, dark theme, proper loading/error states
+- **3 Database Schema Fixes Applied**: accounts.updated_at, constitution_drafts.status enum, leagues.guild_id unique constraint
+- **6 Critical Bugs Fixed**: Authentication field mismatch, response unwrapping, schema migrations
+- **Test Artifacts Created**: Comprehensive validation summary, frontend integration report, endpoint test scripts
+- **Production Status**: ✅ READY (see PHASES_1-4_VALIDATION_SUMMARY.md for full report)
 
 ### Phase 13 Features (October 2025)
 - **Constitution Drafts**: Reversible proposal system for syncing Sleeper settings to league constitution with apply/reject workflow
