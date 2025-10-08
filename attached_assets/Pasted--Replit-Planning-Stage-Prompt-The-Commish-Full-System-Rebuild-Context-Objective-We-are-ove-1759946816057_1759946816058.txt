@@ -1,0 +1,130 @@
+🧠 Replit Planning Stage Prompt — The Commish (Full System Rebuild)
+
+Context & Objective
+
+We are overhauling The Commish, a fantasy football co-commissioner service that acts as a living league assistant — a bot that lives in the league’s chat (Discord first) and helps manage rules, disputes, scheduling, weekly updates, and humor.
+
+Right now, the codebase is semi-functional but fragmented: the Discord bot installs but doesn’t always respond, the Sleeper sync is inconsistent, the dashboard is overloaded, and the onboarding flow is confusing. The goal of this rebuild is to transform it into a clean, reliable, and delightful experience built around a 7-stage customer journey and a 4-tab console that makes league management effortless.
+
+You are now stepping into the planning phase — before code. Your job is to fully understand why we’re making these changes, how the system should behave end-to-end, and prepare for the execution phase with clear, internally consistent architecture, schema, and flow.
+
+⸻
+
+🎯 Mission Statement
+
+Transform The Commish from a brittle prototype into a production-grade, user-centric fantasy co-commissioner that installs smoothly, syncs intelligently, and provides immediate in-chat value.
+
+This means:
+	•	Simplifying the onboarding to a linear 7-step wizard that completes in under 8 minutes.
+	•	Making Discord and Sleeper integrations bulletproof and observable.
+	•	Creating a League Console with only four clear tabs instead of one cluttered dashboard.
+	•	Making every automation (recaps, announcements, reminders, rule Q&A) reliable and idempotent.
+	•	Rebuilding the system so users instantly see that The Commish is alive and helpful in their league chat.
+
+⸻
+
+⚙️ Why We’re Changing Everything
+	1.	Fragmented Onboarding — The setup flow is scattered across multiple screens; users hit dead ends and partial success states.
+	2.	Discord Instability — The bot install often fails due to missing permissions, race conditions, or raw-body verification bugs.
+	3.	Sleeper Sync Confusion — The integration is one-way; changes to Sleeper settings don’t properly reflect in the constitution.
+	4.	Dashboard Overload — The dashboard tries to do everything at once. It needs to become a focused, clean console.
+	5.	Invisible Jobs — Schedulers, digests, and recaps run without user visibility or retry logic.
+	6.	Poor Observability — When something breaks, we can’t tell why; no /doctor/* endpoints or health feedback exist.
+	7.	UX Drift — The Commish doesn’t feel alive in the chat immediately after setup — which kills user trust and retention.
+
+⸻
+
+🧩 Core Vision (The 7-Stage Customer Experience)
+	1.	Make an account — Supabase user = Account (single source of truth).
+	2.	Sync Discord & Sleeper — Reliable auth and install; validate all permissions and connections.
+	3.	Assign users to teams — Auto-suggest + manual map between Sleeper and Discord.
+	4.	Set up League Constitution — Sleeper settings → Draft diffs → Apply/Reject → stored constitution JSON.
+	5.	Configure The Commish — Toggle features (recaps, reactions, announcements, etc.) in one “Automations” tab.
+	6.	Finish installing to Discord — Auto Welcome + /status + proof of life.
+	7.	Interact with The Commish — Weekly recaps, AI rule Q&A, meme generation, moderation, /assign and /whoami all working seamlessly.
+
+The Commish must work end-to-end through these 7 steps without dev intervention.
+
+⸻
+
+🧱 System Architecture (Target Blueprint)
+
+Two surfaces + one brain:
+	•	🖥️ Setup Wizard (web) → 7 stages, resumable, shows “green checks” per stage.
+	•	⚙️ League Console (4 tabs) → Setup / Automations / Constitution / Moderation.
+	•	🤖 Discord Bot → in-chat experience, all slash commands, reactions, recaps, and moderation hooks.
+
+Key backend laws
+	•	Every user action = one durable DB write (no ghosts).
+	•	Idempotency keys everywhere for all outbound actions.
+	•	/doctor/* endpoints for Discord, Sleeper, League, Cron, Secrets.
+	•	A jobs and job_failures ledger for scheduled tasks.
+	•	Environment validation at startup + “Secrets Doctor.”
+	•	All logs structured: {request_id, account_id, league_id, step, result}.
+
+⸻
+
+🧮 Schema Summary
+
+accounts(id, email, supabase_user_id, discord_user_id?, created_at, updated_at)
+leagues(id, account_id, sleeper_league_id, discord_guild_id, discord_channel_id, settings jsonb, features jsonb, constitution jsonb, created_at, updated_at)
+league_members(league_id, sleeper_team_id, sleeper_user_id?, discord_user_id?, role enum(manager|co|observer))
+constitution_drafts(id, league_id, source, proposed jsonb[], status, created_at, decided_at)
+constitution_snapshots(id, league_id, season, doc jsonb, created_at)
+bot_activity(id, league_id, guild_id, channel_id, kind, key unique, status, detail jsonb, request_id, created_at)
+jobs(id, league_id?, type, schedule_cron, last_run_at, last_result, next_run_at, run_count, meta jsonb)
+job_failures(id, job_id?, league_id?, type, error_text, payload jsonb, first_seen_at, last_seen_at, retry_count)
+
+
+⸻
+
+💡 Design & UX Rules
+	•	The Wizard: Always show what’s done, what’s next, and how to fix it.
+	•	The Console: Replace the “kitchen sink dashboard” with clarity—just 4 tabs.
+	•	Discord Onboarding: Always post a welcome message; /status always available.
+	•	Feedback loops: Users see progress via “green checks” and “Doctor” endpoints.
+	•	Automation Transparency: Every job visible with last run, next run, and result.
+	•	Instant Delight: Within 2 minutes of install, the league sees The Commish post something useful in chat.
+
+⸻
+
+🔍 What Replit Must Do in This Planning Stage
+	1.	Ingest this entire blueprint.
+	2.	Validate architecture consistency: routes, schema, state flows, front-end pages, and Discord/Sleeper integrations.
+	3.	Generate a full execution plan (the order of build phases, tasks, and testing steps).
+	4.	Preserve existing functionality that works (don’t overwrite working commands or stable API handlers).
+	5.	Flag conflicts, missing dependencies, and broken data flows.
+	6.	Prepare for build execution — define what migrations, front-end refactors, and backend rewires are required.
+	7.	Draft an internal “Work Order.md” summarizing the tasks by epic, with acceptance criteria and dependencies.
+
+⸻
+
+📋 Execution Order Summary
+	1.	Wizard Hardening (Stages 1–7)
+	2.	Discord Hygiene (OAuth separation, raw-body lock, Channel Doctor)
+	3.	Sleeper Authority (hash sync, constitution drafts, versioned snapshots)
+	4.	Jobs & Cron Observability (jobs ledger + DLQ + /doctor/cron)
+	5.	Console & UX Cleanup (4-tab redesign)
+	6.	AI/RAG Guardrails (citations, safe fallbacks)
+
+Each epic must be delivered sequentially, fully tested, and verified via the /doctor/* suite.
+
+⸻
+
+✅ Success Criteria
+
+When complete:
+	•	A brand new user can onboard without help and see a working Discord bot post a welcome message.
+	•	/status returns all green checks.
+	•	The constitution auto-syncs when a Sleeper setting changes.
+	•	The dashboard is lean and logical.
+	•	Jobs have visible history.
+	•	The bot never double-posts.
+	•	Logs are structured and readable.
+	•	Environment issues are caught up front.
+	•	The Commish feels alive, funny, and functional from Day 1.
+
+⸻
+
+Prompt Goal:
+Use this as your full contextual plan. Ingest it, map it, and prepare the internal execution scaffolding for each epic (schema, front-end, backend, and QA flows). When ready, confirm back that you understand the mission and produce the detailed Work Order.md build plan.

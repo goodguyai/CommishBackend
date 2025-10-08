@@ -1,0 +1,253 @@
+Awesome—this is exactly the moment to tighten the guardrails before Replit starts cutting code.
+Below is a copy-paste response you can drop into your Replit thread right now to kick off Phase 1 with the precision we need (no regressions, no “creative liberties,” zero surprises).
+
+⸻
+
+✅ Execute Phase 1 now — with these guardrails and exact specs
+
+Non-negotiables (do not proceed unless you agree to all):
+	•	No regressions. Do not touch or remove existing working routes/handlers. New work must be additive and behind stable paths.
+	•	No global body parser changes. Keep the raw-body middleware for Discord interactions intact. Never mount express.json() globally; only mount per-route as needed.
+	•	No write operations in any /api/doctor/* route. All checks are read-only unless a specific ?probe=1 is passed and x-admin-key header is valid.
+	•	Prod access control. All /api/doctor/* routes must require x-admin-key: <ADMIN_KEY> in production; in dev they may allow unauthenticated access.
+	•	Snowflakes are strings. Never coerce Discord IDs to numbers; reject placeholders like "YOUR_GUILD_ID".
+	•	Observability. Every doctor handler returns a consistent envelope with request_id, measured_at, and elapsed_ms.
+
+⸻
+
+Files to add (and only these for Phase 1)
+	•	server/services/doctor.ts (new)
+	•	server/routes/doctor.ts (new or inline in existing routes file under a clearly marked section)
+	•	(Optional) client/src/pages/SystemStatus.tsx (minimal: read-only table; can be a stub if time runs short)
+
+Do not rename or delete other files in Phase 1. If you must touch an existing file (e.g., export discordClient), list it in the diff.
+
+⸻
+
+Route map & exact JSON contracts
+
+All responses must follow this envelope:
+
+{
+  "ok": true,
+  "service": "doctor:status",
+  "status": "healthy",
+  "summary": "All systems green",
+  "details": { /* service-specific data */ },
+  "warnings": [],
+  "errors": [],
+  "request_id": "req_...",
+  "measured_at": "2025-10-06T10:22:00.000Z",
+  "elapsed_ms": 123
+}
+
+1) GET /api/doctor/status  (master aggregator)
+	•	Joins all checks below (discord, sleeper, database, cron, secrets).
+	•	status rules:
+	•	healthy if all subchecks healthy
+	•	degraded if any subcheck degraded and none down
+	•	down if any subcheck down
+	•	details MUST include each subcheck with the same envelope (nested):
+	•	details.discord, details.sleeper, details.database, details.cron, details.secrets
+	•	Also include:
+	•	details.revision (git sha if available)
+	•	details.uptime_sec (process uptime)
+	•	details.node (process.versions.node)
+
+2) GET /api/doctor/discord
+
+Query params (all optional):
+	•	guild_id: string
+	•	channel_id: string
+	•	probe: 1 to run extra read-only fetches (no posting)
+
+Checks:
+	•	Client ready (client.user.id, client.uptime)
+	•	Global app commands registered count
+	•	If guild_id:
+	•	bot is a member of guild
+	•	permissions summary at guild-level
+	•	If channel_id:
+	•	report channel type & capabilities computed from permissions:
+["VIEW_CHANNEL", "READ_MESSAGE_HISTORY", "SEND_MESSAGES", "EMBED_LINKS", "ADD_REACTIONS", "MENTION_EVERYONE", "MANAGE_MESSAGES", "USE_APPLICATION_COMMANDS"]
+	•	do not send a message; for “send test” we will add a separate, admin-only endpoint later.
+
+Status mapping:
+	•	healthy when client is ready AND (if params provided) membership + required caps are present.
+	•	degraded when client ready but missing non-critical caps (e.g., MENTION_EVERYONE).
+	•	down when client not ready OR missing critical caps (VIEW_CHANNEL, READ_MESSAGE_HISTORY, SEND_MESSAGES, EMBED_LINKS).
+
+Example OK details:
+
+{
+  "bot_user_id": "1228872586725818439",
+  "app_commands": 9,
+  "guild_id": "123456789012345678",
+  "guild_member": true,
+  "channel_id": "234567890123456789",
+  "channel_caps": {
+    "VIEW_CHANNEL": true,
+    "READ_MESSAGE_HISTORY": true,
+    "SEND_MESSAGES": true,
+    "EMBED_LINKS": true,
+    "ADD_REACTIONS": true,
+    "MENTION_EVERYONE": false,
+    "MANAGE_MESSAGES": false,
+    "USE_APPLICATION_COMMANDS": true
+  }
+}
+
+3) GET /api/doctor/sleeper
+
+Checks:
+	•	Reach a known Sleeper endpoint (e.g., state/nfl or a league metadata call if we have league.sleeper_league_id).
+	•	If a league is currently selected in session/server state, return:
+	•	league_id
+	•	last_sync_at
+	•	settings_hash (if we persist it)
+	•	counts: teams, roster positions, scoring keys present
+
+Status mapping:
+	•	healthy if reachable + league snapshot looks complete
+	•	degraded if reachable but snapshot incomplete/missing keys
+	•	down if endpoint unreachable or timeouts
+
+4) GET /api/doctor/database
+
+Checks:
+	•	SELECT 1
+	•	Verify presence of core tables (and only read):
+	•	accounts, leagues, league_members
+	•	constitution_drafts, bot_activity
+	•	rag_documents, rag_chunks (names as in your repo)
+	•	(Optional) report row counts (bounded to avoid heavy scans)
+	•	(Optional) verify pgvector extension (if used)
+
+Status mapping:
+	•	healthy if connection + tables found
+	•	degraded if connection ok but tables missing
+	•	down on connection failure
+
+Example details:
+
+{
+  "pool_active": 2,
+  "pool_idle": 5,
+  "tables_present": ["accounts","leagues","league_members","constitution_drafts","bot_activity","rag_documents","rag_chunks"],
+  "row_counts": { "leagues": 3, "constitution_drafts": 1 }
+}
+
+5) GET /api/doctor/cron
+
+Checks:
+	•	List registered jobs with:
+	•	name
+	•	schedule (cron or interval)
+	•	next_run_at
+	•	last_run_at
+	•	last_status (SUCCESS|FAILED|NONE)
+	•	last_error (truncated string)
+
+Status mapping:
+	•	healthy if all jobs registered and none overdue by > 2× interval
+	•	degraded if some jobs overdue or had recent failures
+	•	down if scheduler not initialized
+
+6) GET /api/doctor/secrets
+
+Security rules:
+	•	Mask all secret values except last 4 chars.
+	•	Validate presence and format only (no network calls).
+
+Checks:
+	•	DISCORD_CLIENT_ID, DISCORD_PUBLIC_KEY, DISCORD_BOT_TOKEN
+	•	SUPABASE_URL, DATABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+	•	VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
+	•	DEEPSEEK_API_KEY, OPENAI_API_KEY (if used)
+	•	Validation rule to avoid repeats of last outage:
+VITE_SUPABASE_URL must be a URL, not a JWT; VITE_SUPABASE_ANON_KEY must be a JWT.
+
+Status mapping:
+	•	healthy if present + format valid
+	•	degraded if present but suspicious (e.g., wrong host)
+	•	down if missing required
+
+Example details:
+
+{
+  "checks": [
+    { "key": "SUPABASE_URL", "ok": true, "masked": "https://igibo...supabase.co" },
+    { "key": "VITE_SUPABASE_URL", "ok": true, "masked": "https://igibo...supabase.co" },
+    { "key": "VITE_SUPABASE_ANON_KEY", "ok": true, "masked": "****...k9uQ" },
+    { "key": "DISCORD_BOT_TOKEN", "ok": true, "masked": "****...t8T" }
+  ],
+  "notes": ["Frontend URL is a URL, Anon key is a JWT — good."]
+}
+
+
+⸻
+
+Implementation notes
+	•	Put pure logic in server/services/doctor.ts:
+	•	checkDiscord(opts), checkSleeper(opts), checkDatabase(), checkCron(), checkSecrets(env), checkStatus().
+	•	Each returns {ok, status, details, warnings, errors, elapsed_ms}.
+	•	Thin routing layer in server/routes/doctor.ts:
+	•	Attach under /api/doctor/*.
+	•	Enforce x-admin-key only in production (NODE_ENV==='production').
+	•	Always attach request_id, measured_at, compute elapsed timing.
+	•	Timeouts: each subcheck should time out within 1500ms and return degraded/down with a clear error message, not hang the whole request.
+	•	Zero writes: never mutate DB, send messages, or register commands from doctor routes.
+
+⸻
+
+Curl tests (what you will run & paste back)
+
+# Master
+curl -sS -H "x-admin-key: $ADMIN_KEY" https://<APP>/api/doctor/status | jq
+
+# Discord – no params (global)
+curl -sS -H "x-admin-key: $ADMIN_KEY" https://<APP>/api/doctor/discord | jq
+
+# Discord – with guild & channel
+curl -sS -H "x-admin-key: $ADMIN_KEY" "https://<APP>/api/doctor/discord?guild_id=<G>&channel_id=<C>" | jq
+
+# Sleeper
+curl -sS -H "x-admin-key: $ADMIN_KEY" https://<APP>/api/doctor/sleeper | jq
+
+# Database
+curl -sS -H "x-admin-key: $ADMIN_KEY" https://<APP>/api/doctor/database | jq
+
+# Cron
+curl -sS -H "x-admin-key: $ADMIN_KEY" https://<APP>/api/doctor/cron | jq
+
+# Secrets
+curl -sS -H "x-admin-key: $ADMIN_KEY" https://<APP>/api/doctor/secrets | jq
+
+Acceptance for Phase 1:
+	•	All endpoints respond within ≤2s.
+	•	/api/doctor/status returns healthy (or clearly shows which subcheck is degraded/down with readable errors).
+	•	Discord doctor reports capabilities for a real channel (no “YOUR_GUILD_ID” anywhere).
+	•	Secrets doctor catches the VITE_SUPABASE_URL class of misconfig instantly.
+	•	No existing routes broken; Discord interactions still validate signatures (raw body intact).
+
+⸻
+
+Optional minimal UI (only if time remains)
+
+Create client/src/pages/SystemStatus.tsx:
+	•	Fetch /api/doctor/status and render a simple table with subchecks and colored badges (healthy/degraded/down).
+	•	Read-only. No buttons, no writes.
+
+⸻
+
+Deliverable format (what you return)
+	1.	File tree diff (added/modified files only).
+	2.	One-paragraph summary of implementation + guardrails honored.
+	3.	Curl outputs (redact secrets) showing at least one healthy run and one intentional degraded example (e.g., guild_id not installed).
+	4.	Confirmation that no global body parser was changed and Discord interactions still verify signatures.
+
+If you accept, start Phase 1 now under these constraints. When complete, paste the diff + curl outputs. Then I’ll greenlight Phase 2 (Wizard Stages 1–3) immediately.
+
+⸻
+
+If you want this shorter, say the word and I’ll compress to a ~10-line directive.
