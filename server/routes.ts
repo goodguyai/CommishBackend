@@ -33,6 +33,7 @@ import { DemoService } from "./services/demo";
 import { IdempotencyService } from "./services/idempotency";
 import { reportsService } from "./services/reports";
 import { DiscordDoctorService } from "./services/discordDoctor";
+import { recapService } from "./services/recapService";
 import * as constitutionDraftsService from "./services/constitutionDrafts";
 import * as announceService from "./services/announceService";
 import * as doctor from "./services/doctor";
@@ -8229,32 +8230,109 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         console.log(`[Job Run] Executing job ${job_id} (kind: ${job.kind}) for league ${job.leagueId}`);
         
-        await db.insert(botActivity).values({
-          leagueId: job.leagueId,
-          kind: job.kind,
-          status: "RUNNING",
-          requestId,
-          detail: { job_id, manual_run: true },
-        });
+        let messageId: string | null = null;
+        let jobStatus: "SUCCESS" | "FAILED" | "SKIPPED" = "SUCCESS";
+        let jobDetail: any = {};
         
-        await new Promise(resolve => setTimeout(resolve, 100));
+        switch (job.kind) {
+          case 'weekly_recap': {
+            try {
+              const league = await storage.getLeague(job.leagueId);
+              if (!league) {
+                throw new Error("League not found");
+              }
+              
+              const recap = await recapService.generateWeeklyRecap(job.leagueId);
+              const idempotencyKey = `recap:${job.leagueId}:${recap.week}:${job.channelId}`;
+              
+              const existingActivity = await db.select().from(botActivity)
+                .where(eq(botActivity.key, idempotencyKey))
+                .limit(1);
+              
+              if (existingActivity.length > 0) {
+                const existingMessageId = (existingActivity[0].detail as any)?.messageId;
+                console.log(`[Job Run] Idempotency hit for key ${idempotencyKey}, skipping`);
+                
+                await db.update(jobRuns)
+                  .set({
+                    finishedAt: new Date(),
+                    status: "SKIPPED",
+                    detail: { 
+                      reason: "Already posted", 
+                      messageId: existingMessageId,
+                      idempotencyKey 
+                    },
+                  })
+                  .where(eq(jobRuns.id, jobRun.id));
+                
+                return res.json({
+                  ok: true,
+                  data: {
+                    requestId,
+                    status: "SKIPPED",
+                    messageId: existingMessageId,
+                    skipped: true
+                  },
+                  request_id: requestId
+                });
+              }
+              
+              messageId = await discordService.postMessage(job.channelId, {
+                content: recap.text
+              });
+              
+              await db.insert(botActivity).values({
+                leagueId: job.leagueId,
+                channelId: job.channelId,
+                kind: job.kind,
+                key: idempotencyKey,
+                status: "SUCCESS",
+                requestId,
+                detail: { job_id, manual_run: true, messageId, week: recap.week },
+              });
+              
+              jobDetail = { messageId, week: recap.week };
+            } catch (error: any) {
+              if (error.message === "Week not completed") {
+                jobStatus = "SKIPPED";
+                jobDetail = { reason: "Week not completed" };
+              } else {
+                throw error;
+              }
+            }
+            break;
+          }
+          
+          default: {
+            await db.insert(botActivity).values({
+              leagueId: job.leagueId,
+              kind: job.kind,
+              status: "RUNNING",
+              requestId,
+              detail: { job_id, manual_run: true },
+            });
+            
+            jobDetail = { message: "Job executed successfully (stub)" };
+            break;
+          }
+        }
         
         await db.update(jobRuns)
           .set({
             finishedAt: new Date(),
-            status: "SUCCESS",
-            detail: { message: "Job executed successfully (stub)" },
+            status: jobStatus,
+            detail: jobDetail,
           })
           .where(eq(jobRuns.id, jobRun.id));
         
-        console.log(`[Job Run] Job ${job_id} completed successfully`);
+        console.log(`[Job Run] Job ${job_id} completed with status ${jobStatus}`);
         
         res.json({
           ok: true,
           data: {
             requestId,
-            status: "SUCCESS",
-            messageId: null,
+            status: jobStatus,
+            messageId,
           },
           request_id: requestId
         });
