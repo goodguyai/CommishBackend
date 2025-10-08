@@ -37,6 +37,7 @@ export const eventTypeEnum = pgEnum("event_type", [
 ]);
 export const disputeStatusEnum = pgEnum("dispute_status", ["open", "under_review", "resolved", "dismissed"]);
 export const contentStatusEnum = pgEnum("content_status", ["queued", "posted", "skipped"]);
+export const constitutionDraftStatusEnum = pgEnum("constitution_draft_status", ["PENDING", "APPLIED", "REJECTED"]);
 
 // Core tables
 export const accounts = pgTable("accounts", {
@@ -107,6 +108,8 @@ export const leagues = pgTable("leagues", {
     provider: "deepseek"
   }),
   digestFrequency: text("digest_frequency").default("off"),
+  constitution: jsonb("constitution"),
+  jobs: jsonb("jobs"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
@@ -511,10 +514,12 @@ export const constitutionDrafts = pgTable("constitution_drafts", {
   leagueId: uuid("league_id").notNull().references(() => leagues.id, { onDelete: "cascade" }),
   source: text("source").notNull(),
   proposed: jsonb("proposed").notNull(),
-  status: text("status").notNull().default("PENDING"),
+  status: constitutionDraftStatusEnum("status").notNull().default("PENDING"),
   createdAt: timestamp("created_at").defaultNow(),
   decidedAt: timestamp("decided_at"),
-});
+}, (table) => ({
+  idxLeagueStatus: { index: true, columns: [table.leagueId, table.status] },
+}));
 
 // Insert schemas
 export const insertAccountSchema = createInsertSchema(accounts).pick({
