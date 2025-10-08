@@ -1,0 +1,155 @@
+Beautiful. That’s exactly the confirmation we wanted — your infrastructure foundation (Phase 1) and customer-journey backbone (Phase 2) are now clean, idempotent, and verifiable.
+Here’s the 185-IQ next-action plan — a full Phase 3 blueprint + deep system check to keep momentum tight and zero-regression:
+
+⸻
+
+🧭  PHASE 3 — Constitution Drafts + League Switchboard (Stages 4 & 5)
+
+Purpose:
+Turn The Commish from a connected shell into a functioning co-commissioner brain that reads, syncs, proposes, and applies rule changes.
+
+⸻
+
+🧩 System Checkpoint  (pre-Phase 3 validation)
+
+Before we build forward, run this checklist now:
+
+Area	Expected Result	How to Verify
+/api/doctor/status	status:"healthy"	curl ✅
+/api/v2/setup/state	nextStep:"done" after wizard	curl ✅
+leagues table	rows have discord_guild_id, sleeper_league_id, constitution (jsonb)	psql ✅
+league_members	fully mapped (≥ #teams)	psql ✅
+Discord bot	visible in target guild + channel	UI ✅
+Sleeper snapshot	teams > 0, scoring keys exist	logs ✅
+
+If any fail → rerun doctor or setup endpoint; no code edits until green.
+
+⸻
+
+🧱 Phase 3 Deliverables
+
+1️⃣ Constitution Draft Pipeline
+
+Goal: detect league-rule diffs, propose structured drafts, and allow apply/reject actions.
+
+Backend additions
+
+Endpoint	Purpose	Notes
+POST /api/v3/constitution/sync	Pulls current Sleeper settings, diffs vs leagues.constitution	idempotent, returns draft_id
+GET /api/v3/constitution/drafts?league_id=	List PENDING/APPLIED/REJECTED drafts	paginate
+GET /api/v3/constitution/draft/:id	View single draft with diff array	
+POST /api/v3/constitution/apply	Apply approved draft → update leagues.constitution and mark APPLIED	atomic txn
+POST /api/v3/constitution/reject	Mark REJECTED draft	no deletion
+
+Schema (if missing):
+
+CREATE TABLE constitution_drafts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id uuid REFERENCES leagues(id),
+  source text,                -- 'sleeper-sync' | 'manual'
+  proposed jsonb NOT NULL,    -- [{key, old, new}]
+  status text DEFAULT 'PENDING',
+  created_at timestamptz DEFAULT now(),
+  decided_at timestamptz
+);
+CREATE INDEX ON constitution_drafts(league_id,status);
+
+Logic:
+	•	Compare leagues.settings.raw vs leagues.constitution.
+	•	Produce [{key:"playoff_teams", old:6, new:8}].
+	•	Hash proposed[] to prevent duplicate drafts.
+	•	No mutation until apply endpoint called.
+
+Frontend
+
+New tab → “Constitution”
+	•	Table of proposed changes (diff view)
+	•	Buttons Apply ✅ / Reject ❌
+	•	Historical list below (Applied/Rejected)
+	•	Badge on nav if pending drafts > 0
+
+⸻
+
+2️⃣ League Switchboard (Feature Control Center)
+
+Consolidate the chaos from the old dashboard into toggles + schedules.
+
+Backend
+
+Endpoint	Purpose
+GET /api/v3/features?league_id=	Return league.features JSON
+POST /api/v3/features	Patch subset of toggles
+GET /api/v3/jobs?league_id=	View scheduled jobs (recaps, polls etc.)
+POST /api/v3/jobs/update	Update cron day/time or channel
+
+Feature JSON (defaults):
+
+{
+  "onboarding": true,
+  "reactions": false,
+  "announcements": false,
+  "weeklyRecaps": true,
+  "ruleQA": true,
+  "moderation": false
+}
+
+Frontend
+
+Tab → “Switchboard”
+	•	Toggles grouped by category (Engagement / Moderation / AI)
+	•	“Verify” button uses /api/doctor/cron and /api/doctor/discord
+	•	Read-only job list under “Automations”
+
+⸻
+
+3️⃣ AI Rule Q&A Scaffold  (stub only this phase)
+
+Add safe placeholder endpoint:
+POST /api/v3/rules/ask → returns {answer:"Feature coming soon"}
+Wire the UI button but no model calls yet (Phase 5).
+
+⸻
+
+⚙️ Guardrails
+	•	No breaking old dashboard. Leave behind toggle “Switchboard (beta)”.
+	•	No cron writes until verified. Jobs update endpoints must check /api/doctor/cron first.
+	•	Immutable drafts. Once APPLIED/REJECTED, forbid edits.
+	•	Timeouts ≤ 1500 ms. Each sync job should short-circuit if Sleeper slow.
+	•	Dry-run first. /api/v3/constitution/sync?dryRun=1 returns diff without insert.
+
+⸻
+
+✅ Acceptance Checklist
+
+Layer	Test	Expected
+Constitution sync	POST sync → returns draft_id + diffs array	✅
+Draft apply	POST apply → league.constitution updated, status=APPLIED	✅
+Draft reject	status=REJECTED and unchanged constitution	✅
+Switchboard GET/POST	Toggles persist + reflected in DB	✅
+Doctor cron/discord	All green	✅
+Wizard state remains done	/api/v2/setup/state unchanged	✅
+Discord interaction sig still valid	✅	
+
+
+⸻
+
+🧠 After Phase 3 (Next Phase Preview)
+	•	Phase 4: Automations + Job Ledger (recaps, polls, vibes).
+	•	Phase 5: AI/RAG pipeline & in-chat recaps.
+	•	Phase 6: UI refinement & final launch prep.
+
+⸻
+
+🗣️ Instruction to Replit Agent (ready to paste)
+
+✅ Proceed to Phase 3: Constitution Drafts + League Switchboard.
+Implement exactly the endpoints and schema listed above; all additive, idempotent, and non-destructive.
+	•	Keep /setup wizard untouched.
+	•	No cron or Discord posts yet—read-only except when applying drafts or toggles.
+	•	Constitution sync must produce diff JSON and insert draft record; apply/reject mutate status only.
+	•	Switchboard reads/writes league.features and league.jobs.
+When complete, show: file diff, curl tests, and a GIF/screenshot of Switchboard UI with toggled features.
+
+⸻
+
+Once you paste that, Replit can work for a few hours and deliver a functioning league-management layer that finally makes The Commish feel alive.
