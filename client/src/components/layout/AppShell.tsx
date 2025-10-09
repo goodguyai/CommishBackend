@@ -15,6 +15,8 @@ import {
   Check,
   BookOpen,
   Zap,
+  Shield,
+  Palette,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useQuery } from '@tanstack/react-query';
@@ -30,6 +32,9 @@ import {
 
 const navigation = [
   { name: 'Dashboard', href: '/app', icon: LayoutDashboard },
+  { name: 'Reminders', href: '/app/reminders', icon: Bell },
+  { name: 'Moderation', href: '/app/moderation', icon: Shield },
+  { name: 'Content Studio', href: '/app/content-studio', icon: Palette },
   { name: 'Waivers', href: '/app/waivers', icon: Users },
   { name: 'Trades', href: '/app/trades', icon: TrendingUp },
   { name: 'Matchups', href: '/app/matchups', icon: Trophy },

@@ -33,6 +33,9 @@ import { AutomationReactions } from './pages/AutomationReactions';
 import { ConstitutionDrafts } from './pages/ConstitutionDrafts';
 import { Constitution } from './pages/Constitution';
 import { Switchboard } from './pages/Switchboard';
+import { RemindersPage } from './pages/Reminders';
+import { ModerationPage } from './pages/Moderation';
+import { ContentStudioPage } from './pages/ContentStudio';
 
 function AppRouter() {
   const [location] = useLocation();
@@ -62,6 +65,9 @@ function AppRouter() {
           <Route path="/app/constitution/drafts" component={ConstitutionDrafts} />
           <Route path="/app/constitution" component={Constitution} />
           <Route path="/app/switchboard" component={Switchboard} />
+          <Route path="/app/reminders" component={RemindersPage} />
+          <Route path="/app/moderation" component={ModerationPage} />
+          <Route path="/app/content-studio" component={ContentStudioPage} />
           <Route>
             <div className="text-center py-12">
               <h1 className="text-2xl font-bold text-text-primary mb-2">404</h1>
