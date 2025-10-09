@@ -466,48 +466,46 @@ export function ModerationPage() {
       </Tabs>
 
       {/* Dispute Resolution Dialog */}
-      <Dialog open={isDisputeDialogOpen} onOpenChange={setIsDisputeDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Resolve Dispute</DialogTitle>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="dispute-status">New Status</Label>
-              <Select value={disputeNewStatus} onValueChange={setDisputeNewStatus}>
-                <SelectTrigger id="dispute-status" data-testid="select-dispute-status">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="under_review">Under Review</SelectItem>
-                  <SelectItem value="resolved">Resolved</SelectItem>
-                  <SelectItem value="dismissed">Dismissed</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="resolution-notes">Resolution Notes</Label>
-              <Textarea
-                id="resolution-notes"
-                value={disputeResolutionNotes}
-                onChange={(e) => setDisputeResolutionNotes(e.target.value)}
-                placeholder="Enter resolution details..."
-                data-testid="textarea-resolution-notes"
-              />
-            </div>
+      <Dialog 
+        open={isDisputeDialogOpen} 
+        onClose={() => setIsDisputeDialogOpen(false)}
+        title="Resolve Dispute"
+      >
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="dispute-status">New Status</Label>
+            <Select value={disputeNewStatus} onValueChange={setDisputeNewStatus}>
+              <SelectTrigger id="dispute-status" data-testid="select-dispute-status">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="under_review">Under Review</SelectItem>
+                <SelectItem value="resolved">Resolved</SelectItem>
+                <SelectItem value="dismissed">Dismissed</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
-          <DialogFooter>
+          <div className="space-y-2">
+            <Label htmlFor="resolution-notes">Resolution Notes</Label>
+            <Textarea
+              id="resolution-notes"
+              value={disputeResolutionNotes}
+              onChange={(e) => setDisputeResolutionNotes(e.target.value)}
+              placeholder="Enter resolution details..."
+              data-testid="textarea-resolution-notes"
+            />
+          </div>
+
+          <div className="flex justify-end space-x-2 mt-4">
             <Button variant="ghost" onClick={() => setIsDisputeDialogOpen(false)} data-testid="button-cancel-dispute">
               Cancel
             </Button>
             <Button onClick={handleSaveDisputeResolution} data-testid="button-save-dispute">
               Save Resolution
             </Button>
-          </DialogFooter>
-        </DialogContent>
+          </div>
+        </div>
       </Dialog>
     </div>
   );
