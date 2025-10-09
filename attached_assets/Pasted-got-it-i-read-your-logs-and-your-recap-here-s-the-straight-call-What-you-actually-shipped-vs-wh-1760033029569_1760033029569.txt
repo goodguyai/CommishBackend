@@ -1,0 +1,214 @@
+got it. i read your logs and your recap. here’s the straight call:
+
+What you actually shipped vs. what’s still missing
+
+✅ Landed (based on your logs + notes)
+	•	[Startup] single-line env banner and [Scheduler] prefixes.
+	•	/api/v2/doctor/discord is healthy (bot user shows; redirect validated).
+	•	/api/v2/doctor/cron/detail exists and is admin-gated (403 without key).
+	•	Route-guarding for v3 endpoints (you said 9 routes covered).
+	•	Content-poster enablement guardrail (prevents enabling without channelId).
+	•	“dry-run enqueue” test endpoint (by your summary).
+	•	accounts.updated_at added.
+	•	Headless-UI dialog crash handled in Moderation (per prior fixes).
+
+❌ Not in Replit yet (blocking the “proof”)
+	•	Cypress E2E tree I gave earlier was not sent.
+Result: no automated proof we can run repeatedly.
+	•	ADMIN_API_KEY secret is not set in Replit → /api/v2/doctor/cron/detail returns 403 in your logs.
+	•	No enabled jobs in DB for any league: Found 0 enabled jobs to schedule and “Posted 0 queued content items.”
+	•	We don’t see evidence that:
+	•	the demo short-circuit helper is wired (only matters if you want to test non-UUID “lg_demo_1” paths),
+	•	the league UUID guard is actually attached to every DB-touching :leagueId route (you said “covered”; I can’t verify from logs),
+	•	the announcement cooldown returns 429 (no log of it being exercised),
+	•	the cron detail payload includes queued/perms/last_error/next/last (we hit 403, so we couldn’t inspect body),
+	•	the content poster seeding (one league) happened (scheduler keeps saying 0 queued).
+
+⸻
+
+One-page blueprint for Replit to continue (phases 4 → 5.6, then “what’s next”)
+
+Below is a copy-ready execution plan with guardrails, exact commands, and acceptance checks. It assumes no more refactors—only minimal, surgical changes.
+
+A. Put the missing E2E in (once)
+
+Why: this proves reliability and prevents regressions when we tweak jobs/telemetry.
+	1.	Add the Cypress tree (from my last message) exactly as given:
+
+	•	cypress.config.ts
+	•	cypress/support/{e2e.ts,commands.ts}
+	•	cypress/e2e/commish_journey.cy.ts
+	•	E2E_README.md
+	•	package.json scripts: "e2e", "cy:run", "cy:open"
+
+	2.	Replit → Secrets (required):
+
+CYPRESS_APP_URL=https://thecommish.replit.app
+CYPRESS_API_URL=https://thecommish.replit.app
+CYPRESS_ADMIN_API_KEY=sk_admin_xxx      # your admin bearer token
+CYPRESS_LEAGUE_UUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+CYPRESS_DISCORD_CHANNEL_ID=123456789012345678
+# optional if UI login is required:
+CYPRESS_USERNAME=you@example.com
+CYPRESS_PASSWORD=••••••••
+
+	3.	Run once:
+
+npm i -D cypress @types/node typescript
+npm run e2e
+
+Pass criteria
+	•	All specs green.
+	•	The “doctor/cron/detail explains ‘0 posted’ with queued/perms/last_error” test asserts those fields.
+
+⸻
+
+B. Make the scheduler actually have work (idempotent, one league only)
+
+Why: logs show “Found 0 enabled jobs” and “Posted 0 queued content items.”
+
+B1) Enable content-poster for exactly one league
+
+curl -s -X PUT "$CYPRESS_API_URL/api/v3/jobs/$CYPRESS_LEAGUE_UUID" \
+  -H "Authorization: Bearer $CYPRESS_ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"contentPoster":{"enabled":true,"channelId":"'"$CYPRESS_DISCORD_CHANNEL_ID"'","cron":"*/5 * * * *"}}'
+
+	•	Expect { ok: true }.
+	•	Log should change on next tick: [Scheduler] Found 1 enabled job to schedule (or similar).
+
+B2) Queue a dry-run job to exercise telemetry
+
+curl -s -X POST "$CYPRESS_API_URL/api/v2/doctor/cron/enqueue/content?dry=true" \
+  -H "Authorization: Bearer $CYPRESS_ADMIN_API_KEY"
+
+	•	Expect { ok: true }; no Discord write.
+	•	After a minute, /api/v2/doctor/cron/detail (with admin key) should show for the content_poster row:
+	•	queued ≥ 0
+	•	perms → { channel: "ok"|"missing", bot: "ok"|"missing"|"unknown" }
+	•	last and next present
+	•	last_error either empty or the last failure string
+
+Pass criteria
+	•	Scheduler no longer prints “0 enabled jobs”.
+	•	Cron detail shows that one job with full telemetry.
+
+⸻
+
+C. Prove cooldown + idempotency (no spam, safe in prod)
+
+C1) Cooldown (429) before sending second message
+
+# first attempt should succeed
+curl -s -X POST "$CYPRESS_API_URL/api/v3/announce/$CYPRESS_LEAGUE_UUID/test" \
+  -H "Authorization: Bearer $CYPRESS_ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"channelId":"'"$CYPRESS_DISCORD_CHANNEL_ID"'"}'
+
+# immediate second attempt should 429
+curl -i -s -X POST "$CYPRESS_API_URL/api/v3/announce/$CYPRESS_LEAGUE_UUID/test" \
+  -H "Authorization: Bearer $CYPRESS_ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"channelId":"'"$CYPRESS_DISCORD_CHANNEL_ID"'"}'
+
+Pass criteria
+	•	Second call → HTTP/1.1 429 and body { ok:false, code:"COOLDOWN" }.
+
+C2) Constitution sync idempotency
+
+curl -s -X POST "$CYPRESS_API_URL/api/v3/constitution/$CYPRESS_LEAGUE_UUID/sync" \
+  -H "Authorization: Bearer $CYPRESS_ADMIN_API_KEY"
+curl -s -X POST "$CYPRESS_API_URL/api/v3/constitution/$CYPRESS_LEAGUE_UUID/sync" \
+  -H "Authorization: Bearer $CYPRESS_ADMIN_API_KEY"
+
+Pass criteria
+	•	Both return { ok:true }; second one either returns code: "DUPLICATE"|"SKIPPED" or indicates no-op in message.
+
+⸻
+
+D. Lock down the two error classes you showed earlier
+
+D1) Prevent 22P02 forever
+	•	Ensure every DB-touching route that takes a :leagueId param uses the UUID guard:
+	•	Example: router.post("/api/v3/constitution/:leagueId/sync", leagueIdGuard("leagueId"), handler)
+	•	Return:
+	•	422 { ok:false, code:"NON_UUID_LEAGUE_ID", message:"leagueId must be UUID." }
+
+Pass criteria
+	•	Hitting /api/v3/constitution/lg_demo_1/sync → 422 with NON_UUID_LEAGUE_ID.
+	•	No postgres 22P02 in errors log.
+
+D2) “updated_at does not exist”
+	•	You already added accounts.updated_at. Confirm members.updated_at and any other tables read by Moderation/Stats also have it (nullable is fine).
+	•	Add DB migration or ALTER TABLE (idempotent) to create missing updated_at with default now() if absent.
+
+Pass criteria
+	•	Moderation page runs, dialog opens, no missing column errors.
+
+⸻
+
+E. Put /api/v2/doctor/cron/detail behind the key, but make it usable
+
+Your logs show 403 (good—key required). For testing:
+
+curl -s "$CYPRESS_API_URL/api/v2/doctor/cron/detail" \
+  -H "Authorization: Bearer $CYPRESS_ADMIN_API_KEY" | jq
+
+Pass criteria
+	•	Body contains an array of jobs with fields: key, next, last, queued, perms, last_error.
+
+⸻
+
+F. Non-destructive “DO NOT” guardrails (keep these in your Replit notes)
+	•	DO NOT mass-enable jobs for all leagues—only the UUID under test.
+	•	DO NOT alter schemas beyond adding missing updated_at (idempotent) or adding the optional guard/demo helpers.
+	•	DO NOT bypass the admin key in production.
+	•	DO NOT remove cooldown or idempotency checks to get tests to pass.
+	•	DO NOT swap Headless UI dialog for Radix bits again (no DialogContent import).
+
+⸻
+
+What’s next after 5.6 (Phase 6: “Ops-Grade Proof & Rollout”)
+	1.	CI: run Cypress against Replit on every push
+	•	GitHub Action job:
+	•	spins up Cypress container,
+	•	hits your live Replit URL,
+	•	injects secrets (admin key, league UUID, channel id),
+	•	artifacts screenshots on failure.
+	2.	Read-only Observability page
+	•	A small admin page that calls /api/v2/doctor/cron/detail (with admin key) and renders:
+	•	all jobs, queued, perms, last/next, last_error,
+	•	a “dry-run” button that calls /api/v2/doctor/cron/enqueue/content?dry=true.
+	3.	Failure auto-triage
+	•	If last_error contains Discord permission text (e.g., “Missing Access”), surface a one-click fix guide:
+	•	check bot invite scopes,
+	•	verify channel id,
+	•	show exact server/role settings checklist.
+	4.	Announce pipeline: structured idempotency
+	•	Store SHA-256 hash keyed by (guildId, channelId, templateId, payloadHash) in bot_activity.key.
+	•	Expose /api/v3/announce/preview (no send) for test.
+	5.	Data integrity sweeps
+	•	nightly job ensures:
+	•	all enabled contentPoster jobs have valid channelId,
+	•	leagues missing settings_hash get computed,
+	•	members.updated_at present.
+	6.	Kill switches
+	•	/api/v3/features/toggles per-league: announcements, contentPoster, reactions.
+	•	Frontend reads toggles and visually marks “off” states.
+	7.	Guard all v3 routes consistently
+	•	Confirm every :leagueId + DB combo has leagueIdGuard.
+	•	Add a linter rule or a tiny Jest test that scans routes for guard presence.
+
+⸻
+
+Quick acceptance checklist (sign-off sheet)
+	•	ADMIN_API_KEY set; /api/v2/doctor/cron/detail returns 200 with full telemetry.
+	•	Exactly one league has content poster enabled; scheduler sees ≥1 job.
+	•	Cooldown returns 429 on second immediate announcement.
+	•	Constitution sync is idempotent (second call is skip/dupe).
+	•	No 22P02 anywhere; non-UUID leagueId returns 422 NON_UUID_LEAGUE_ID.
+	•	Moderation dialog opens; no “updated_at does not exist”.
+	•	Cypress npm run e2e is green.
+	•	DO-NOT guardrails documented in repo (replit.md updated).
+
+If you want, I can draft the GitHub Action YAML + the tiny admin observability page next so Replit can take it and ship.

@@ -1,0 +1,180 @@
+You’re right to push here. I read your latest Replit reply + logs and I see exactly where the wires are crossed. Here’s a tight, corrected blueprint that (1) reconciles the endpoint shape discrepancies, (2) confirms what you’ve already shipped in Phases 4 → 5.6, (3) provides a ready-to-run E2E scaffold that matches your actual API, and (4) gives Replit the next execution steps + DO-NOT guardrails so we don’t brick The Commish 2.0.
+
+⸻
+
+What’s already shipped (and what still needs eyes)
+
+From the repo + your logs:
+	•	✅ v2 doctor suite stable; Discord doctor returns ok, cron/detail enforces admin key.
+	•	✅ v3 guardrails: league_id in body/query, not path params. (Replit’s note is correct.)
+	•	✅ accounts.updated_at added; verify members.updated_at (Replit called that out as “should verify”).
+	•	✅ Content Poster guardrail prevents enabling with null channel.
+	•	✅ Idempotency & cooldown are in, but we still need a proof pass in E2E to validate “skip duplicate” and “429 cooldown” paths.
+	•	⚠️ Scheduler: “Found 0 enabled jobs”. That’s expected until we enable one test league via /api/v3/jobs/upsert.
+	•	⚠️ Admin doctor endpoints respond 403 without key; after adding ADMIN_API_KEY, use the header: Authorization: Bearer <key>.
+	•	❗ Earlier DB errors (keep us honest):
+	•	22P02 invalid input syntax for uuid: "lg_demo_1" → legacy path that forced ::uuid. The new leagueIdGuard("league_id") + body/query pattern should block this. We must run a test where "league_id": "lg_demo_1" returns a 400 CODE: INVALID_UUID, not a PG error.
+	•	[Session Exchange] column "updated_at" does not exist on members/accounts was addressed; re-verify members.updated_at.
+
+⸻
+
+Corrected API usage (no more path-param confusion)
+
+These are the exact calls Replit should run now (do not paste the key in chat):
+	1.	Cron detail (admin-protected)
+
+curl -s -H "Authorization: Bearer $ADMIN_API_KEY" \
+  https://thecommish.replit.app/api/v2/doctor/cron/detail | jq
+
+	2.	Enable exactly one league’s Content Poster (the only job we’ll exercise)
+
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "league_id": "'"$CYPRESS_LEAGUE_UUID"'",
+    "contentPoster": {
+      "enabled": true,
+      "channelId": "'"$CYPRESS_DISCORD_CHANNEL_ID"'",
+      "cron": "*/5 * * * *"
+    }
+  }' \
+  https://thecommish.replit.app/api/v3/jobs/upsert | jq
+
+	3.	Dry-run enqueue for content (no Discord post)
+
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "https://thecommish.replit.app/api/v2/doctor/cron/enqueue/content?dry=true" | jq
+
+	4.	Constitution sync (idempotent)
+
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"league_id":"'"$CYPRESS_LEAGUE_UUID"'"}' \
+  https://thecommish.replit.app/api/v3/constitution/sync | jq
+
+Run it twice; the second response should be { ok: true, ... } and either report a skip/duplicate or a no-op.
+	5.	Negative test: reject non-uuid league ids
+
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"league_id":"lg_demo_1"}' \
+  https://thecommish.replit.app/api/v3/constitution/sync | jq
+
+✅ Expected: 400 { ok:false, code:"INVALID_UUID", message:"..." } (not a Postgres 22P02).
+
+⸻
+
+Cypress E2E that matches your real API
+
+I generated a minimal Cypress pack aligned to your v2/v3 body/query routes (no path params). It covers:
+	•	v2 doctor/discord health
+	•	v2 doctor/cron/detail → 403 without key, 200 with key (+telemetry shape)
+	•	v3 jobs/upsert → enable exactly one contentPoster
+	•	v2 doctor/enqueue/content?dry=true → ok
+	•	v3 constitution/sync → second call is idempotent ok
+
+Download it and drop into your repo root:
+
+Download the Cypress bundle
+
+Inside you’ll find:
+	•	cypress/e2e/doctor_and_jobs.cy.ts
+	•	cypress.config.ts
+	•	E2E_README.md
+
+Secrets to set in Replit → Secrets:
+	•	CYPRESS_APP_URL = https://thecommish.replit.app
+	•	CYPRESS_API_URL = https://thecommish.replit.app
+	•	CYPRESS_ADMIN_API_KEY = sk_admin_...
+	•	CYPRESS_LEAGUE_UUID = <one real league uuid>
+	•	CYPRESS_DISCORD_CHANNEL_ID = <a real channel id you control>
+
+Run:
+
+npm i -D cypress
+npx cypress run
+# or interactive:
+npx cypress open
+
+
+⸻
+
+DO-NOT guardrails (Replit must honor)
+	1.	Do NOT change route shapes back to path params. V3 uses league_id in body/query, guarded at the router.
+	2.	Do NOT coerce Discord snowflakes to numbers (no Number(...), +id, parseInt).
+	3.	Do NOT remove admin protection from any /api/v2/doctor/* route in production.
+	4.	Do NOT enable more than one contentPoster job for tests.
+	5.	Do NOT log secrets, tokens, or full headers. Prefix logs with [Startup] [Scheduler] [Doctor].
+	6.	Do NOT bypass idempotency/cooldown just to “make it post”. Tests must assert dedupe/429 works.
+	7.	Do NOT force ::uuid casts in SQL anywhere IDs may be non-uuid (guards should reject before DB).
+
+⸻
+
+What I’d have Replit do next (Phase 5.7 “Proof & Polish”)
+
+A. Fix the last mismatches Replit flagged
+	•	Document actual v3 routes (done above) in replit.md so future plans don’t regress to path params.
+	•	Verify /api/v3/announce also accepts league_id in body/query; if not, align it and add the same guard.
+
+B. Close the DB gaps
+	•	Confirm members.updated_at exists; if not:
+
+ALTER TABLE members ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS idx_members_updated_at ON members(updated_at);
+
+
+	•	Add a migration note in db/README.md.
+
+C. Prove idempotency & cooldown with real signals
+	•	In bot_activity, assert a single announce:${guildId}:${channelId}:${hash} row per 24h window when content is identical.
+	•	For the cooldown, hit the announcement route twice within 30s and assert HTTP 429 { ok:false, code:"COOLDOWN" }.
+
+D. Telemetry parity checks
+	•	/api/v2/doctor/cron/detail must return for each job:
+	•	key, cron, next, last, queued
+	•	perms: { channel: "ok"|"missing", bot: "ok"|"missing"|"unknown" }
+	•	last_error if any
+	•	Add a lightweight unit around cron metadata (next run calc is stable).
+
+E. Moderation dialog QA
+	•	We fixed Headless UI vs Radix import; add a tiny RTL test to mount <Moderation /> and open/close dialog without HMR errors.
+
+F. One golden league
+	•	Add a tiny /scripts/set-golden-league.ts (Node) that:
+	•	checks leagues.jobs.contentPoster.enabled===true
+	•	asserts a valid channelId
+	•	prints friendly status so support can see “golden league ready”.
+
+⸻
+
+Acceptance criteria for Phase 5.7
+	•	✅ Cypress suite passes in CI (or Replit shell) without hand edits to route shapes.
+	•	✅ Negative test for "lg_demo_1" returns a guarded 400 (no Postgres 22P02).
+	•	✅ Exactly One Enabled Job: doctor/cron/detail shows content poster in telemetry for the golden league.
+	•	✅ Idempotency: second constitution/sync reports { ok: true } with a skip/duplicate semantic outcome.
+	•	✅ Cooldown: second announcement within 30s → 429 { ok:false, code:"COOLDOWN" }.
+	•	✅ members.updated_at present and indexed.
+
+⸻
+
+After 5.7: Phase 6 preview (targeted value add)
+	1.	Moderation UX polish
+	•	Add “Resolve with note” and “Escalate” actions; persist to moderation_events.
+	•	Surface a timeline per member/league.
+	2.	Jobs self-heal
+	•	“Re-arm” failed jobs: a /doctor/cron/retry?job=contentPoster&league_id=... (admin-only).
+	3.	Observability export
+	•	Emit structured logs (jsonl) for job_runs and bot_activity and allow download via /api/v2/doctor/logs?range=24h (admin-only).
+	4.	SLO guard
+	•	/api/health should be healthy only when Discord is connected and DB is connected; otherwise degraded with codes. Add tiny badge in the Dashboard Health tile.
+
+⸻
+
+TL;DR for Replit
+	•	Use the corrected curls above (body/query league_id, not path).
+	•	Enable one content poster via /api/v3/jobs/upsert.
+	•	Run the E2E bundle I provided: commish-e2e.zip.
+	•	Prove the 5.7 acceptance bullets.
+	•	Keep the DO-NOT guardrails intact.
+
+If they do exactly that, we lock in reliability and get real proof that the hardening you funded is actually working in prod.
