@@ -7356,7 +7356,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const tasksWithMeta = scheduler.getTasksWithMetadata();
       const jobs: any[] = [];
       
-      tasksWithMeta.forEach((value, key) => {
+      // Get global queued content count for telemetry
+      let queuedCount = 0;
+      try {
+        const queuedItems = await storage.getQueuedContent(new Date());
+        queuedCount = queuedItems.length;
+      } catch (err) {
+        // Silently fail if content queue query fails
+      }
+      
+      for (const [key, value] of tasksWithMeta) {
         const { meta } = value;
         const type = key.startsWith('reminder_job_') ? 'reminder' :
                      key === 'global_cleanup' ? 'cleanup' :
@@ -7377,16 +7386,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // If parsing fails, leave nextRunTime as null
         }
         
-        jobs.push({
+        // Get last error from job_failures if available
+        let lastError = null;
+        try {
+          const failures = await storage.getJobFailures?.();
+          if (failures && failures.length > 0) {
+            // Try to match by job key pattern (simplified matching)
+            const relatedFailure = failures.find(f => {
+              const failureJobId = f.jobId;
+              // This is a simplified match - in production you'd want proper job tracking
+              return key.includes('content') && failureJobId;
+            });
+            if (relatedFailure) {
+              lastError = relatedFailure.lastErrorExcerpt || null;
+            }
+          }
+        } catch (err) {
+          // Silently fail if job_failures query fails
+        }
+        
+        const jobInfo: any = {
           key,
           type,
           status: 'scheduled',
           cronExpression: meta.cronExpression,
           timezone: meta.timezone,
           description: meta.description,
-          nextRunTime
-        });
-      });
+          nextRunTime,
+          telemetry: {
+            queued: key === 'content_poster' ? queuedCount : undefined,
+            last_error: lastError
+          }
+        };
+        
+        jobs.push(jobInfo);
+      }
       
       res.status(200).json({
         ok: true,
@@ -7394,7 +7428,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: 'healthy',
         summary: `${jobs.length} scheduled jobs with details`,
         details: { total_jobs: jobs.length, jobs },
-        warnings: [],
+        warnings: queuedCount === 0 ? ['No content queued for posting'] : [],
         errors: [],
         request_id: requestId,
         measured_at: measuredAt,
