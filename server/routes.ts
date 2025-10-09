@@ -4570,6 +4570,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         leagueId,
       });
       
+      // Check for rate limit violation and return 429
+      if (!result.ok && result.code === "COOLDOWN") {
+        return res.status(429).json(result);
+      }
+
       res.json(result);
     } catch (e: any) {
       console.error("[Announce Send]", e);

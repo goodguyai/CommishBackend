@@ -29,8 +29,8 @@ export async function post(params: {
   }
 
   // Cooldown guard per channel
-  if (!allow(`announce:${channelId}`, 1/60, 1)) { // 1 per minute
-    return { ok: false, code: "COOLDOWN", message: "Announcements are rate-limited" };
+  if (!allow(`announce:${channelId}`, 1/30, 1)) { // 1 per 30 seconds
+    return { ok: false, code: "COOLDOWN", message: "Announcements are rate-limited to 1 per 30 seconds" };
   }
 
   // Format message with mention if provided
