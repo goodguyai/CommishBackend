@@ -32,5 +32,3 @@ const must = (k: string, v?: string) => {
 // Check for at least one admin key (ADMIN_API_KEY or ADMIN_KEY for backwards compatibility)
 const adminKey = process.env.ADMIN_API_KEY || process.env.ADMIN_KEY;
 asrt(adminKey && adminKey.trim().length > 0, "Missing env var: ADMIN_API_KEY or ADMIN_KEY (at least one required)");
-
-console.log("✅ Environment validation passed");

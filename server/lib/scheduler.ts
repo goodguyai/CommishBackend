@@ -42,7 +42,7 @@ export class Scheduler extends EventEmitter {
     this.tasks.set(`digest_${leagueId}`, task);
     task.start();
     
-    console.log(`Scheduled weekly digest for league ${leagueId}: ${day} at ${time} (${timezone})`);
+    console.log(`[Scheduler] Scheduled weekly digest for league ${leagueId}: ${day} at ${time} (${timezone})`);
   }
 
   scheduleSyncJob(leagueId: string, intervalMinutes: number = 15) {
@@ -56,7 +56,7 @@ export class Scheduler extends EventEmitter {
     this.tasks.set(`sync_${leagueId}`, task);
     task.start();
     
-    console.log(`Scheduled sync job for league ${leagueId} every ${intervalMinutes} minutes`);
+    console.log(`[Scheduler] Scheduled sync job for league ${leagueId} every ${intervalMinutes} minutes`);
   }
 
   unschedule(taskKey: string) {
@@ -65,7 +65,7 @@ export class Scheduler extends EventEmitter {
       task.stop();
       task.destroy();
       this.tasks.delete(taskKey);
-      console.log(`Unscheduled task: ${taskKey}`);
+      console.log(`[Scheduler] Unscheduled task: ${taskKey}`);
     }
   }
 
@@ -94,7 +94,7 @@ export class Scheduler extends EventEmitter {
     this.tasks.set("global_cleanup", task);
     task.start();
     
-    console.log("Scheduled global cleanup job: daily at 3 AM UTC");
+    console.log("[Scheduler] Scheduled global cleanup job: daily at 3 AM UTC");
   }
 
   scheduleReminder(
@@ -111,7 +111,7 @@ export class Scheduler extends EventEmitter {
       
       // Skip if reminder time is in the past
       if (reminderTime <= new Date()) {
-        console.log(`Skipping past reminder for ${deadlineType} (${hoursBefore}h before)`);
+        console.log(`[Scheduler] Skipping past reminder for ${deadlineType} (${hoursBefore}h before)`);
         return;
       }
 
@@ -147,7 +147,7 @@ export class Scheduler extends EventEmitter {
       task.start();
       
       console.log(
-        `Scheduled ${deadlineType} reminder for league ${leagueId}: ${hoursBefore}h before (${reminderTime.toISOString()} ${timezone})`
+        `[Scheduler] Scheduled ${deadlineType} reminder for league ${leagueId}: ${hoursBefore}h before (${reminderTime.toISOString()} ${timezone})`
       );
     });
   }
@@ -186,7 +186,7 @@ export class Scheduler extends EventEmitter {
     this.tasks.set(`highlights_${leagueId}`, task);
     task.start();
     
-    console.log(`Scheduled highlights digest for league ${leagueId}: Sunday at 20:00 (${timezone})`);
+    console.log(`[Scheduler] Scheduled highlights digest for league ${leagueId}: Sunday at 20:00 (${timezone})`);
   }
 
   // Phase 3: Schedule rivalry card enqueuing (Monday 9 AM, league timezone)
@@ -212,7 +212,7 @@ export class Scheduler extends EventEmitter {
     this.tasks.set(`rivalry_${leagueId}`, task);
     task.start();
     
-    console.log(`Scheduled rivalry card for league ${leagueId}: Monday at 09:00 (${timezone})`);
+    console.log(`[Scheduler] Scheduled rivalry card for league ${leagueId}: Monday at 09:00 (${timezone})`);
   }
 
   // Phase 3: Schedule global content poster (every 5 minutes)
@@ -238,7 +238,7 @@ export class Scheduler extends EventEmitter {
     this.tasks.set("content_poster", task);
     task.start();
     
-    console.log("Scheduled content poster: every 5 minutes (UTC)");
+    console.log("[Scheduler] Scheduled content poster: every 5 minutes (UTC)");
   }
 
   unscheduleLeaguePhase3(leagueId: string) {
@@ -286,7 +286,7 @@ export class Scheduler extends EventEmitter {
     this.tasks.set(taskKey, task);
     task.start();
 
-    console.log(`Scheduled reminder job ${reminderId} for league ${leagueId}: ${cronExpression} (${timezone})`);
+    console.log(`[Scheduler] Scheduled reminder job ${reminderId} for league ${leagueId}: ${cronExpression} (${timezone})`);
   }
 
   unscheduleReminderJob(reminderId: string) {
@@ -314,15 +314,15 @@ export class Scheduler extends EventEmitter {
     this.tasks.set("sleeper_sync", task);
     task.start();
     
-    console.log("Scheduled Sleeper Settings Sync: every 6 hours (UTC)");
+    console.log("[Scheduler] Scheduled Sleeper Settings Sync: every 6 hours (UTC)");
   }
 
   // Load and schedule jobs from database
   async loadJobsFromDatabase() {
-    console.log("Loading jobs from database...");
+    console.log("[Scheduler] Loading jobs from database...");
     try {
       const jobs = await storage.getEnabledJobs();
-      console.log(`Found ${jobs.length} enabled jobs to schedule`);
+      console.log(`[Scheduler] Found ${jobs.length} enabled jobs to schedule`);
       
       for (const job of jobs) {
         await this.scheduleJob(job);
@@ -355,12 +355,12 @@ export class Scheduler extends EventEmitter {
     this.jobTaskMap.set(job.id, taskKey);
     task.start();
     
-    console.log(`Scheduled job ${job.id} (${job.kind}) for league ${job.leagueId}: ${job.cron} (UTC)`);
+    console.log(`[Scheduler] Scheduled job ${job.id} (${job.kind}) for league ${job.leagueId}: ${job.cron} (UTC)`);
   }
 
   // Generic job execution handler
   private async executeJob(job: Job) {
-    console.log(`Executing job ${job.id} (${job.kind}) for league ${job.leagueId}`);
+    console.log(`[Scheduler] Executing job ${job.id} (${job.kind}) for league ${job.leagueId}`);
     
     // Create job run entry
     let runId: string;
@@ -405,7 +405,7 @@ export class Scheduler extends EventEmitter {
         detail: { eventEmitted: eventName },
       });
 
-      console.log(`Job ${job.id} completed successfully`);
+      console.log(`[Scheduler] Job ${job.id} completed successfully`);
     } catch (error) {
       // Update job run as failed
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -426,7 +426,7 @@ export class Scheduler extends EventEmitter {
 
   // Refresh jobs from database (unschedule all, reload, reschedule)
   async refreshJobs() {
-    console.log("Refreshing jobs from database...");
+    console.log("[Scheduler] Refreshing jobs from database...");
     
     // Unschedule all job-based tasks (keep system tasks like global_cleanup)
     for (const [jobId, taskKey] of this.jobTaskMap.entries()) {

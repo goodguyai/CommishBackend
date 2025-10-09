@@ -97,10 +97,11 @@ export function validateEnvironment(): EnvConfig {
       throw new Error("Either ADMIN_KEY or ADMIN_API_KEY must be set");
     }
     
-    console.log("✅ Environment validation passed");
+    const dbHost = validatedEnv.DATABASE_URL.split('@')[1]?.split('/')[0] || 'configured';
+    console.log(`[Startup] Env ✓ • Discord ✓ • DB ✓ • LLM ✓`);
     console.log(`🤖 LLM: ${validatedEnv.LLM_MODEL} via ${validatedEnv.DEEPSEEK_BASE_URL}`);
     console.log(`🔍 Embeddings: ${validatedEnv.EMBED_MODEL} (${validatedEnv.EMBED_DIM}D) via ${validatedEnv.EMBEDDINGS_PROVIDER}`);
-    console.log(`💾 Database: ${validatedEnv.DATABASE_URL.split('@')[1]?.split('/')[0] || 'configured'}`);
+    console.log(`💾 Database: ${dbHost}`);
     console.log(`🎮 Discord: Client ${validatedEnv.DISCORD_CLIENT_ID} ready`);
     console.log(`🌐 App URL: ${validatedEnv.APP_BASE_URL}`);
     
