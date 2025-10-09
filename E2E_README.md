@@ -26,14 +26,12 @@ npm install -D cypress
 
 ### Headless Mode (CI/Shell)
 ```bash
-npm run e2e
-# or directly:
 npx cypress run
 ```
 
 ### Interactive Mode (Development)
 ```bash
-npm run cy:open
+npx cypress open
 ```
 
 ## Test Coverage
