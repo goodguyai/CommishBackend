@@ -1,0 +1,257 @@
+What’s wrong (ranked)
+
+🔴 Critical 1 — UUID vs Demo slug is leaking into DB (causes 22P02: string_to_uuid)
+	•	Evidence: your error log shows invalid input syntax for type uuid: "lg_demo_1".
+	•	In the repo, demo data uses a string id: client/src/mocks/fixtures.ts → id: "lg_demo_1".
+	•	Server code expects real uuid everywhere for league_id (schema + queries). If a demo league (slug) reaches a route that casts to uuid or binds to a uuid parameter, Postgres throws 22P02.
+
+Impact: breaks the setup flow and any page hitting members/stats/documents under a demo league or any code path that passed the slug to DB.
+
+Fix pattern (safe + surgical):
+	1.	Strict request validation on every route that touches league_id: z.string().uuid(); return 400 with {ok:false, code:"NON_UUID_LEAGUE_ID"} on failure.
+	2.	Hard wall for demo: if DEMO_MODE=true (or incoming id starts with lg_demo_), short-circuit before DB: serve from DemoService only; never pass to queries.
+	3.	No implicit casts: remove ::uuid casts on parameters unless request is already validated.
+	4.	Option B (later): add a dedicated league_slug text in DB and use that for demo fixtures—keep league_id uuid pristine.
+
+🔴 Critical 2 — Scheduler is idle (no enabled jobs)
+	•	Logs: [Scheduler] Found 0 enabled jobs to schedule and Posted 0 queued content items.
+	•	Even after adding contentPoster defaults, many leagues have enabled:false or channelId null.
+
+Fix pattern:
+	•	Seed a single known league (yours) with a valid channelId and enabled:true; leave others disabled until configured.
+	•	Add a doctor check that counts enabled jobs and prints mismatches (enabled:true + null channel).
+	•	Block posting if idempotency says duplicate or if channel lacks perms; surface that in /doctor/cron/detail.
+
+🔴 Critical 3 — Frontend crash loop from Dialog mismatch
+	•	You had DialogContent imports/components (Radix style) in a Headless-UI Dialog.
+	•	You fixed Moderation.tsx; also ensure the UI kit wrapper doesn’t export Radix-style shims that re-introduce it.
+	•	Confirm client/src/components/ui/Dialog.tsx is Headless-UI only, no dangling exports.
+
+🟠 High — updated_at columns missing (members / accounts)
+	•	Logs show [Session Exchange] ... column "updated_at" does not exist.
+	•	Add updated_at timestamptz NOT NULL DEFAULT now() and a trigger to auto-touch.
+
+🟠 High — Demo artifacts can slip into prod paths
+	•	server/services/demo.ts + client/src/mocks/fixtures.ts present.
+	•	If DEMO_MODE isn’t guarded in routes, demo slugs leak to DB code (see Critical 1).
+
+Fix pattern: tree-shake and gate:
+	•	On server: if (DEMO_MODE) use DemoService; else reject demo ids.
+	•	On client: only load fixtures behind import.meta.env.VITE_DEMO_MODE.
+
+🟡 Medium — Observability deltas
+	•	You added /api/v2/doctor/cron/detail and prefixes (great). Add two more checks that will directly explain “0 posted”:
+	•	Permission doctor: does bot have Send Messages in channelId? (store result)
+	•	Queue source doctor: show count of eligible content for next run (so “0 posted” is clearly “empty queue”, not “failed”).
+
+🟡 Medium — Error envelope & rate-limiting
+	•	You normalized errors and added 30s cooldown. Keep a single error map and unit tests so future changes don’t drift.
+
+⸻
+
+Exact diffs & SQL (ready to apply)
+
+1) Route guard for UUID vs demo slug (global middleware or per-route)
+
+// server/middleware/leagueIdGuard.ts
+import { z } from "zod";
+
+const Uuid = z.string().uuid();
+const DemoSlug = z.string().regex(/^lg_demo_/);
+
+export function assertLeagueId(req, res, next) {
+  const id = req.params.leagueId ?? req.body.leagueId ?? req.query.leagueId;
+  if (!id) return res.status(400).json({ ok:false, code:"MISSING_LEAGUE_ID", message:"leagueId required" });
+
+  // hard wall: never let demo slugs hit DB
+  if (process.env.DEMO_MODE === "true" && DemoSlug.safeParse(id).success) {
+    (req as any).demoLeagueId = id;
+    (req as any).isDemo = true;
+    return next(); // callers must short-circuit to DemoService
+  }
+
+  if (!Uuid.safeParse(id).success) {
+    return res.status(400).json({ ok:false, code:"NON_UUID_LEAGUE_ID", message:"leagueId must be uuid in production" });
+  }
+
+  (req as any).leagueId = id;
+  return next();
+}
+
+Wire it only on routes that touch DB:
+
+// server/routes.ts (example)
+import { assertLeagueId } from "./middleware/leagueIdGuard";
+
+app.get("/api/v3/constitution/:leagueId", assertLeagueId, handler);
+app.post("/api/v3/jobs/:leagueId/run", assertLeagueId, handler);
+// ...repeat for members, stats, docs, etc.
+
+In each handler, if (req as any).isDemo === true, return from DemoService and do not touch DB.
+
+2) Remove risky Postgres casts
+
+Search for ::uuid and parameterized uuid() usage—replace with validated variables:
+
+-- BAD
+WHERE league_id = $1::uuid;
+
+-- GOOD (after request validation)
+WHERE league_id = $1;
+
+3) Guard DemoService server-side
+
+// server/services/demo.ts
+export function isDemoId(id: string) { return /^lg_demo_/.test(id); }
+
+// in any route using demo
+if (process.env.DEMO_MODE === "true" && isDemoId(req.params.leagueId)) {
+  return res.json({ ok:true, data: DemoService.getLeague(...)}); // no DB
+}
+
+4) Migrations: add/update updated_at + trigger
+
+-- 001_add_updated_at.sql  (idempotent)
+DO $$ BEGIN
+  ALTER TABLE members  ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+  ALTER TABLE accounts ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+-- single update trigger
+CREATE OR REPLACE FUNCTION touch_updated_at() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = now(); RETURN NEW; END; $$ LANGUAGE plpgsql;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname='members_touch_updated_at'
+  ) THEN
+    CREATE TRIGGER members_touch_updated_at BEFORE UPDATE ON members
+    FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname='accounts_touch_updated_at'
+  ) THEN
+    CREATE TRIGGER accounts_touch_updated_at BEFORE UPDATE ON accounts
+    FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+  END IF;
+END $$;
+
+5) Content poster enablement (one league only)
+
+-- replace :league_uuid and :channel_id
+UPDATE leagues
+SET jobs = jsonb_set(
+  COALESCE(jobs, '{}'::jsonb),
+  '{contentPoster}',
+  jsonb_build_object(
+    'enabled', true,
+    'channelId', ':channel_id',
+    'cron', '*/5 * * * *'
+  ),
+  true
+)
+WHERE id = ':league_uuid'::uuid;
+
+6) Doctor boosts
+
+Add two quick fields to /api/v2/doctor/cron/detail:
+
+// server/routes.ts (inside cron/detail handler)
+{
+  key: 'content_poster',
+  queued: await countEligibleContent(),      // new helper
+  perms: await discord.canSend(channelId),   // returns boolean + reason
+  lastError: lastRun?.error_excerpt ?? null,
+}
+
+7) Client: Headless-UI dialog only
+	•	Delete any Radix-style exports from client/src/components/ui/Dialog.tsx (DialogContent, DialogHeader, DialogTitle, etc.).
+	•	Ensure every usage matches Headless-UI (<Dialog> <Dialog.Panel>…).
+
+⸻
+
+Minimal, safe e2e path (what to actually test)
+	1.	Auth: sign in → land on simplified Dashboard (Today | This Week | Health), no red screen.
+	2.	Wizard: connect Discord, connect Sleeper, assign members. Ensure no UUID errors.
+	3.	Constitution: sync → a draft row appears (idempotency skips identical runs).
+	4.	Automations: enable contentPoster for your league; set real Discord channelId; run “Test Post”.
+	5.	Doctor: /api/v2/doctor/cron/detail shows:
+	•	content_poster queued > 0 or clear reason perms:false / queued:0.
+	•	next run, last run, last error.
+	6.	Posting: one announcement appears; repeat within 30s → get HTTP 429 + {code:"COOLDOWN"}.
+	7.	Moderation: open /app/moderation → Dialog opens/closes without errors.
+	8.	Errors: induce a fail (bad channel) → API returns {ok:false, code, message} and doctor shows the failure.
+
+⸻
+
+Paste-this Plan for Replit (with DO-NOT guardrails)
+
+Preface:
+
+We’re in Pre-Phase-5 hygiene for The Commish 2.0. Execute exactly as written. Do not refactor unrelated code, change database column types, or touch auth/session middleware beyond what’s specified. Do not auto-migrate demo IDs into UUIDs. Do not delete routes, tables, or files unless this order says so.
+
+Work Order (apply in order):
+	1.	Add leagueId guard
+	•	Create server/middleware/leagueIdGuard.ts (as shown above).
+	•	Wire it only on routes that touch DB by leagueId.
+	•	Behavior:
+	•	In DEMO_MODE=true and lg_demo_* id → mark req.isDemo=true and short-circuit handlers to DemoService (no DB).
+	•	Otherwise, require uuid; on failure return 400 {ok:false, code:"NON_UUID_LEAGUE_ID"}.
+	2.	Remove unsafe UUID casts
+	•	Search for ::uuid and remove them where request is now validated.
+	•	No implicit casts; rely on parameter typing.
+	3.	Doctor enhancements
+	•	Extend /api/v2/doctor/cron/detail to include queued count and perms (boolean + reason) for content_poster.
+	4.	Enable one league for posting
+	•	Run the SQL above to set jobs.contentPoster.enabled=true + real channelId for one known league_id.
+	•	Leave other leagues disabled if channelId is null.
+	5.	Fix updated_at
+	•	Apply the migration block above for members and accounts.
+	•	Verify triggers exist.
+	6.	Dialog purity
+	•	In client/src/components/ui/Dialog.tsx, export only Headless-UI parts.
+	•	Remove Radix-style exports.
+	•	Ensure all pages (Moderation, etc.) import the Headless-UI version.
+	7.	Demo hard wall
+	•	In any handler that supports demo, if req.isDemo === true return demo data without touching DB; otherwise reject lg_demo_* with the error envelope.
+	•	Ensure DEMO_MODE gating is respected in production.
+	8.	No refactors, no scope creep
+	•	Do not change table types; do not move files; do not introduce new dependencies besides what’s listed.
+
+Verification script:
+
+# 1) Routes refuse bad leagueId
+curl -sS -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "$APP_URL/api/v3/constitution/lg_demo_1" | jq   # expect ok:false NON_UUID_LEAGUE_ID (if not DEMO_MODE)
+
+# 2) Demo path (when DEMO_MODE=true)
+curl -sS -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "$APP_URL/api/v3/constitution/lg_demo_1?demo=1" | jq  # returns fixture without DB
+
+# 3) Doctor shows reasons
+curl -sS -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "$APP_URL/api/v2/doctor/cron/detail" | jq
+
+# 4) Post once (should succeed)
+curl -sS -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "$APP_URL/api/v3/announce/:league_uuid/test" | jq
+
+# 5) Post again within 30s (should 429)
+curl -i -sS -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "$APP_URL/api/v3/announce/:league_uuid/test"
+
+# 6) Moderation page loads (manual e2e): /app/moderation (no DialogContent crash)
+
+Deliverables to report back:
+	•	Screenshot/json of /doctor/cron/detail including queued, perms, nextRun, lastRun.
+	•	One successful announcement message and a verified 429 cooldown.
+	•	A failing call with {ok:false, code, message} proving error envelope.
+	•	Confirmation that routes no longer emit 22P02 when demo ids are used (demo short-circuit) and that UUID validation works.
+
+⸻
+
+Why this is the right move
+	•	It eliminates the 22P02 root cause without risky schema changes (we keep league_id as uuid; we don’t mutate prod data to match demo).
+	•	It makes the “0 posts” message actionable (now you’ll see “queued=0” or “perms=false” instead of mystery).
+	•	It hardens the UX and the API against demo/prod crossover, the most common drift in bot products.
+	•	It finishes the Phase-5 brief you wanted: reliability, idempotency, observability—no rewrites.
