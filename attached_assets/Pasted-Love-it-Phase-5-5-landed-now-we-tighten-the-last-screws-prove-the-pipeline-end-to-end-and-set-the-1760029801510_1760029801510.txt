@@ -1,0 +1,169 @@
+Love it. Phase 5.5 landed—now we tighten the last screws, prove the pipeline end-to-end, and set the table for 2.0 feature work.
+
+Copy/paste the block below to Replit. It’s surgical, has DO-NOT guardrails, and includes acceptance checks so we know we’re truly green.
+
+⸻
+
+The Commish — Phase 5.6 “Proof & Polish” (post–Demo/Prod Hardening)
+
+Goal: turn the new guards/telemetry into a verified, observable E2E flow: queue → scheduler → Discord (or dry-run) → ledger. Eliminate any remaining drift (“0 enabled jobs”, UUID cast remnants, and route version mismatch) with minimal edits.
+
+🔎 Verification-first (read-only)
+
+Run and paste outputs:
+
+# 1) Confirm which routes were guarded (v2 vs v3)
+rg -n "leagueIdGuard" server | sort
+
+# 2) Search for any lingering ::uuid casts
+rg -n "::\s*uuid" server | sort
+
+# 3) Doctor cron detail payload shape
+curl -sS -H "Authorization: Bearer $ADMIN_API_KEY" "$APP_URL/api/v2/doctor/cron/detail" | jq
+
+# 4) accounts.updated_at presence + trigger
+psql "$DATABASE_URL" -c "
+  SELECT column_name FROM information_schema.columns
+  WHERE table_name='accounts' AND column_name='updated_at';
+";
+psql "$DATABASE_URL" -c "\\dS+ public.accounts" | sed -n '1,120p'
+
+Expectations
+	•	Guard is applied to v3 write/read routes (/api/v3/constitution/*, /api/v3/jobs/*, /api/v3/announce/*) not just v2.
+	•	No ::uuid casts remain in code.
+	•	doctor/cron/detail includes for content_poster: {key, next, last, queued, perms, last_error}.
+	•	accounts.updated_at column exists and updates on write.
+
+If any deviance, fix per the tasks below.
+
+⸻
+
+🎯 Tasks (surgical)
+
+1) Route coverage parity (v3)
+
+Issue: Your summary lists several v2 paths under “Protected Routes”. Our prod surface is v3 for constitution/jobs/features.
+
+Action:
+	•	Ensure leagueIdGuard wraps:
+	•	PUT /api/v3/jobs/:leagueId
+	•	GET /api/v3/jobs/:leagueId
+	•	POST /api/v3/announce/:leagueId/* (or equivalent)
+	•	POST /api/v3/constitution/:leagueId/drafts/apply
+	•	POST /api/v3/constitution/:leagueId/drafts/reject
+	•	any /api/v3/constitution/:leagueId/* reads that hit DB
+	•	Keep demo short-circuit only on read-only endpoints; never on writes.
+
+Acceptance: rg shows guard on these v3 files; E2E spec below passes with a non-UUID → 422 NON_UUID_LEAGUE_ID.
+
+⸻
+
+2) Remove last ::uuid casts (if any)
+
+Action: Replace DB text casts with parameter binding that relies on the guard.
+Acceptance: rg -n "::\s*uuid" returns no hits.
+
+⸻
+
+3) Doctor telemetry completeness (queued + perms + last_error)
+
+Action:
+	•	queued: count from bot_activity (or job_runs) for job_key='content_post' AND status='QUEUED'.
+	•	perms:
+	•	"channel":"missing" if channelId null/empty, else "ok".
+	•	"bot":"missing" if we have a stored denial/403 on last attempt; else "ok" (or "unknown" if we can’t verify).
+	•	last_error: pull from job_runs most recent failed run and surface a short excerpt (we do not introduce a job_failures table—reuse job_runs).
+
+Acceptance: /api/v2/doctor/cron/detail (or v3 if you’ve namespaced it) returns the five fields; jq output posted.
+
+⸻
+
+4) Make the “0 enabled jobs” diagnosable AND fixable without code
+
+Action: Add a single-league dry-run enqueue route (admin-gated):
+
+POST /api/v2/doctor/cron/enqueue/content?leagueId=:uuid&dry=true
+
+Behavior:
+	•	When dry=true, write a QUEUED record to bot_activity with a dry_run:true flag but do not post to Discord; mark as SUCCEEDED with transport:'dry'.
+	•	When dry=false, push one real content_post job into the queue for that league.
+
+Acceptance:
+	•	Calling the endpoint increases queued in cron detail.
+	•	Subsequent scheduler tick reduces queued or marks dry_run posted.
+
+DO-NOT: no global enable; no blanket changes—one league at a time.
+
+⸻
+
+5) ContentPoster enablement guardrail
+
+Action: Ensure leagues.jobs.contentPoster.enabled can never be true if channelId is null/empty. On PUT:
+	•	If enabled:true && !channelId → respond 422 {ok:false, code:"MISSING_CHANNEL", message:"channelId required when enabling contentPoster"} and do not flip the flag.
+
+Acceptance: Attempt to enable without channelId returns 422 and the flag remains false.
+
+⸻
+
+6) Accounts updated_at trigger (skip if already good)
+
+Action: If audit shows missing or not updating, add/update the trigger to stamp updated_at on updates.
+Acceptance: Update a row and verify timestamp changes.
+
+⸻
+
+🧪 E2E Proof (small, deterministic)
+
+Pre-req env
+
+APP_URL=https://thecommish.replit.app
+ADMIN_API_KEY=sk_admin_***
+LEAGUE_UUID=<real league uuid>
+DISCORD_TEST_CHANNEL=<snowflake>   # or run in dry mode
+
+Script
+
+set -e
+
+# 1) Guard rejects non-uuid
+curl -sS -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "$APP_URL/api/v3/jobs/not-a-uuid" | jq '.code' | grep NON_UUID_LEAGUE_ID
+
+# 2) Guard accepts uuid
+curl -sS -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "$APP_URL/api/v3/jobs/$LEAGUE_UUID" | jq '.ok' | grep true
+
+# 3) Enqueue ONE dry-run item for this league
+curl -sS -XPOST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "$APP_URL/api/v2/doctor/cron/enqueue/content?leagueId=$LEAGUE_UUID&dry=true" | jq '.ok' | grep true
+
+# 4) Doctor shows queued >= 1
+curl -sS -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "$APP_URL/api/v2/doctor/cron/detail" | jq '.jobs[] | select(.key=="content_poster") | .queued' | awk '{s+=$1} END{if(s<1) exit 1}'
+
+# 5) Wait one tick, then queued should go down OR job_runs shows dry success
+sleep 10
+curl -sS -H "Authorization: Bearer $ADMIN_API_KEY" \
+  "$APP_URL/api/v2/doctor/cron/detail" | jq '.jobs[] | select(.key=="content_poster") | {queued,last_error,perms}'
+
+Pass condition: All checks succeed; perms.channel is ok (or missing with a clear reason); if Discord is connected and dry=false, one real post is observed (or a 429 from cooldown is fine on the second call).
+
+⸻
+
+DO-NOT guardrails
+	•	Do not refactor or rename route trees; add only minimal endpoints/middleware.
+	•	Do not add new tables (reuse job_runs, bot_activity).
+	•	Do not enable jobs for all leagues; changes stay per-league.
+	•	Do not bypass guards in tests; all tests must hit the real middleware.
+
+⸻
+
+Deliverables to return
+	1.	rg outputs proving v3 coverage and zero ::uuid casts
+	2.	doctor/cron/detail JSON with {queued, perms, last_error, next, last}
+	3.	E2E script output (or Cypress logs) showing:
+	•	422 on non-UUID
+	•	OK on UUID
+	•	queued increments then drains or marks dry success
+
+If anything fails, paste the failing command + JSON and I’ll hand you the exact patch hunk.

@@ -7355,7 +7355,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     try {
       const tasksWithMeta = scheduler.getTasksWithMetadata();
-      const jobs: any[] = [];
+      const scheduledJobs: any[] = [];
       
       // Get global queued content count for telemetry
       let queuedCount = 0;
@@ -7366,7 +7366,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Silently fail if content queue query fails
       }
       
-      for (const [key, value] of tasksWithMeta) {
+      // Get content_poster job configs for perms check
+      let contentPosterJobs: any[] = [];
+      try {
+        const allJobs = await db.select().from(jobs).where(eq(jobs.kind, 'content_post'));
+        contentPosterJobs = allJobs;
+      } catch (err) {
+        // Silently fail if jobs query fails
+      }
+      
+      for (const [key, value] of Array.from(tasksWithMeta)) {
         const { meta } = value;
         const type = key.startsWith('reminder_job_') ? 'reminder' :
                      key === 'global_cleanup' ? 'cleanup' :
@@ -7393,7 +7402,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const failures = await storage.getJobFailures?.();
           if (failures && failures.length > 0) {
             // Try to match by job key pattern (simplified matching)
-            const relatedFailure = failures.find(f => {
+            const relatedFailure = failures.find((f: any) => {
               const failureJobId = f.jobId;
               // This is a simplified match - in production you'd want proper job tracking
               return key.includes('content') && failureJobId;
@@ -7406,6 +7415,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Silently fail if job_failures query fails
         }
         
+        // Build perms object for content_poster
+        let perms: any = undefined;
+        if (key === 'content_poster') {
+          const hasChannel = contentPosterJobs.some(j => j.channelId && j.channelId.trim().length > 0);
+          const channelStatus = hasChannel ? "ok" : "missing";
+          
+          // Check for recent Discord permission errors in job_runs
+          let botStatus = "unknown";
+          try {
+            const recentRuns = await db.select()
+              .from(jobRuns)
+              .orderBy(sql`${jobRuns.startedAt} DESC`)
+              .limit(10);
+            
+            const hasPermError = recentRuns.some(run => {
+              const detail = run.detail as any;
+              return detail?.error && (
+                detail.error.includes('403') || 
+                detail.error.includes('Missing Permissions') ||
+                detail.error.includes('Missing Access')
+              );
+            });
+            
+            botStatus = hasPermError ? "missing" : "ok";
+          } catch (err) {
+            // Keep unknown if query fails
+          }
+          
+          perms = { channel: channelStatus, bot: botStatus };
+        }
+        
         const jobInfo: any = {
           key,
           type,
@@ -7416,19 +7456,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           nextRunTime,
           telemetry: {
             queued: key === 'content_poster' ? queuedCount : undefined,
-            last_error: lastError
+            last_error: lastError,
+            perms: perms
           }
         };
         
-        jobs.push(jobInfo);
+        scheduledJobs.push(jobInfo);
       }
       
       res.status(200).json({
         ok: true,
         service: 'doctor:cron:detail',
         status: 'healthy',
-        summary: `${jobs.length} scheduled jobs with details`,
-        details: { total_jobs: jobs.length, jobs },
+        summary: `${scheduledJobs.length} scheduled jobs with details`,
+        details: { total_jobs: scheduledJobs.length, jobs: scheduledJobs },
         warnings: queuedCount === 0 ? ['No content queued for posting'] : [],
         errors: [],
         request_id: requestId,
@@ -7447,6 +7488,101 @@ export async function registerRoutes(app: Express): Promise<Server> {
         request_id: requestId,
         measured_at: measuredAt,
         elapsed_ms: 0
+      });
+    }
+  });
+
+  // POST /api/v2/doctor/cron/enqueue/content - Enqueue test content item
+  app.post('/api/v2/doctor/cron/enqueue/content', requireAdminKeyInProduction, leagueIdGuard(), async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    try {
+      const { leagueId } = req.query;
+      const dry = req.query.dry === 'true';
+      
+      if (!leagueId || typeof leagueId !== 'string') {
+        return res.status(400).json({
+          ok: false,
+          code: "MISSING_LEAGUE_ID",
+          message: "leagueId query parameter required",
+          request_id: requestId
+        });
+      }
+      
+      const league = await storage.getLeague(leagueId);
+      if (!league) {
+        return res.status(404).json({
+          ok: false,
+          code: "LEAGUE_NOT_FOUND",
+          message: "League not found",
+          request_id: requestId
+        });
+      }
+      
+      // Get the content_post job config for this league
+      const jobsList = await db.select().from(jobs).where(
+        sql`${jobs.leagueId} = ${leagueId} AND ${jobs.kind} = 'content_post'`
+      );
+      const jobConfig = jobsList[0];
+      
+      if (!jobConfig) {
+        return res.status(404).json({
+          ok: false,
+          code: "JOB_NOT_CONFIGURED",
+          message: "Content poster job not configured for this league",
+          request_id: requestId
+        });
+      }
+      
+      const channelId = jobConfig.channelId || "";
+      if (!channelId && !dry) {
+        return res.status(400).json({
+          ok: false,
+          code: "MISSING_CHANNEL",
+          message: "Job has no channelId configured. Use dry=true for testing.",
+          request_id: requestId
+        });
+      }
+      
+      // Create test content queue item
+      const contentService = new ContentService();
+      const scheduledAt = new Date();
+      
+      const queueItem = await contentService.enqueue({
+        leagueId,
+        channelId: channelId || "dry_run_channel",
+        scheduledAt,
+        template: dry ? "🧪 DRY RUN: Test content enqueued at {{timestamp}}" : "Test content posted at {{timestamp}}",
+        payload: {
+          timestamp: scheduledAt.toISOString(),
+          dry_run: dry,
+          test: true
+        }
+      });
+      
+      // If dry run, immediately mark as posted with dry transport
+      if (dry) {
+        await storage.updateContentQueueStatus(queueItem.id, "posted", "dry_run");
+      }
+      
+      res.json({
+        ok: true,
+        queue_item: {
+          id: queueItem.id,
+          league_id: leagueId,
+          scheduled_at: scheduledAt.toISOString(),
+          dry_run: dry,
+          status: dry ? "posted" : "queued"
+        },
+        request_id: requestId
+      });
+    } catch (error: any) {
+      console.error("[Enqueue Content]", error);
+      res.status(500).json({
+        ok: false,
+        code: "ENQUEUE_FAILED",
+        message: error.message || "Failed to enqueue content",
+        request_id: requestId
       });
     }
   });
@@ -7840,7 +7976,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // === PHASE 3 V3 API ENDPOINTS ===
 
   // A. POST /api/v3/constitution/sync
-  app.post("/api/v3/constitution/sync", requireSupabaseAuth, async (req, res) => {
+  app.post("/api/v3/constitution/sync", requireSupabaseAuth, leagueIdGuard("league_id"), async (req, res) => {
     const requestId = generateRequestId();
     
     try {
@@ -7911,7 +8047,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // B. GET /api/v3/constitution/drafts?league_id=
-  app.get("/api/v3/constitution/drafts", requireSupabaseAuth, async (req, res) => {
+  app.get("/api/v3/constitution/drafts", requireSupabaseAuth, leagueIdGuard("league_id"), async (req, res) => {
     const requestId = generateRequestId();
     
     try {
@@ -7987,7 +8123,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // D. POST /api/v3/constitution/apply
-  app.post("/api/v3/constitution/apply", requireSupabaseAuth, async (req, res) => {
+  app.post("/api/v3/constitution/apply", requireSupabaseAuth, leagueIdGuard("league_id"), async (req, res) => {
     const requestId = generateRequestId();
     
     try {
@@ -8046,7 +8182,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // E. POST /api/v3/constitution/reject
-  app.post("/api/v3/constitution/reject", requireSupabaseAuth, async (req, res) => {
+  app.post("/api/v3/constitution/reject", requireSupabaseAuth, leagueIdGuard("league_id"), async (req, res) => {
     const requestId = generateRequestId();
     
     try {
@@ -8156,7 +8292,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // G. POST /api/v3/features
-  app.post("/api/v3/features", requireSupabaseAuth, async (req, res) => {
+  app.post("/api/v3/features", requireSupabaseAuth, leagueIdGuard("league_id"), async (req, res) => {
     const requestId = generateRequestId();
     
     try {
@@ -8282,7 +8418,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // I. GET /api/v3/jobs?league_id=
-  app.get("/api/v3/jobs", requireSupabaseAuth, async (req, res) => {
+  app.get("/api/v3/jobs", requireSupabaseAuth, leagueIdGuard("league_id"), async (req, res) => {
     const requestId = nanoid(8);
     
     try {
@@ -8331,7 +8467,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // I. POST /api/v3/jobs/upsert
-  app.post("/api/v3/jobs/upsert", requireSupabaseAuth, async (req, res) => {
+  app.post("/api/v3/jobs/upsert", requireSupabaseAuth, leagueIdGuard("league_id"), async (req, res) => {
     const requestId = nanoid(8);
     
     try {
@@ -8366,6 +8502,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             request_id: requestId
           });
         }
+      }
+      
+      // Guardrail: prevent enabling content_post without channelId
+      if (kind === 'content_post' && enabled === true && (!channel_id || channel_id.trim().length === 0)) {
+        return res.status(422).json({
+          ok: false,
+          code: "MISSING_CHANNEL",
+          message: "channelId required when enabling contentPoster",
+          request_id: requestId
+        });
       }
       
       const existingJobs = await db.select().from(jobs).where(
@@ -8675,7 +8821,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // L. GET /api/v3/jobs/history?league_id=&kind=
-  app.get("/api/v3/jobs/history", requireSupabaseAuth, async (req, res) => {
+  app.get("/api/v3/jobs/history", requireSupabaseAuth, leagueIdGuard("league_id"), async (req, res) => {
     const requestId = nanoid(8);
     
     try {
@@ -8753,7 +8899,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // M. GET /api/v3/jobs/failures?league_id=
-  app.get("/api/v3/jobs/failures", requireSupabaseAuth, async (req, res) => {
+  app.get("/api/v3/jobs/failures", requireSupabaseAuth, leagueIdGuard("league_id"), async (req, res) => {
     const requestId = nanoid(8);
     
     try {
