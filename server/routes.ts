@@ -8,6 +8,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { eq, sql, and } from "drizzle-orm";
 import { validate as validateCron } from "node-cron";
+import { CronExpressionParser } from 'cron-parser';
 import { storage } from "./storage";
 import { env, getEnv } from "./services/env";
 import { verifyDiscordSignature, generateRequestId } from "./lib/crypto";
@@ -7341,6 +7342,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/v2/doctor/cron/detail - Enhanced cron jobs diagnostic showing detailed schedules
+  app.get('/api/v2/doctor/cron/detail', requireAdminKeyInProduction, async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const measuredAt = new Date().toISOString();
+    
+    try {
+      const tasksWithMeta = scheduler.getTasksWithMetadata();
+      const jobs: any[] = [];
+      
+      tasksWithMeta.forEach((value, key) => {
+        const { meta } = value;
+        const type = key.startsWith('reminder_job_') ? 'reminder' :
+                     key === 'global_cleanup' ? 'cleanup' :
+                     key === 'content_poster' ? 'poster' :
+                     key === 'sleeper_sync' ? 'sync' : 'other';
+        
+        // Calculate next run time using cron-parser
+        let nextRunTime = null;
+        try {
+          if (meta.cronExpression && meta.cronExpression !== 'unknown') {
+            const interval = CronExpressionParser.parse(meta.cronExpression, {
+              currentDate: new Date(),
+              tz: meta.timezone || 'UTC'
+            });
+            nextRunTime = interval.next().toISOString();
+          }
+        } catch (err) {
+          // If parsing fails, leave nextRunTime as null
+        }
+        
+        jobs.push({
+          key,
+          type,
+          status: 'scheduled',
+          cronExpression: meta.cronExpression,
+          timezone: meta.timezone,
+          description: meta.description,
+          nextRunTime
+        });
+      });
+      
+      res.status(200).json({
+        ok: true,
+        service: 'doctor:cron:detail',
+        status: 'healthy',
+        summary: `${jobs.length} scheduled jobs with details`,
+        details: { total_jobs: jobs.length, jobs },
+        warnings: [],
+        errors: [],
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: Date.now() - Date.parse(measuredAt)
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        service: 'doctor:cron:detail',
+        status: 'down',
+        summary: 'Cron detail check failed',
+        details: {},
+        warnings: [],
+        errors: [error instanceof Error ? error.message : String(error)],
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: 0
+      });
+    }
+  });
+
   // GET /api/v2/doctor/cron - Cron jobs health check
   app.get('/api/v2/doctor/cron', requireAdminKeyInProduction, async (req, res) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -7375,6 +7445,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
         request_id: requestId,
         measured_at: measuredAt,
         elapsed_ms: 0,
+      });
+    }
+  });
+
+  // GET /api/v2/doctor/cleanup - Preview cleanup operations before execution
+  app.get('/api/v2/doctor/cleanup', requireAdminKeyInProduction, async (req, res) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const measuredAt = new Date().toISOString();
+    const dry = req.query.dry !== 'false';
+    
+    try {
+      const details: any = { dry_run: dry };
+      
+      const oldActivityCount = await db.execute(sql`
+        SELECT COUNT(*) as count FROM bot_activity 
+        WHERE created_at < NOW() - INTERVAL '7 days'
+      `);
+      details.old_activity = parseInt(oldActivityCount[0]?.count || '0');
+      
+      const totalItems = details.old_activity;
+      
+      if (!dry && totalItems > 0) {
+        if (details.old_activity > 0) {
+          await db.execute(sql`
+            DELETE FROM bot_activity 
+            WHERE created_at < NOW() - INTERVAL '7 days'
+          `);
+        }
+        
+        details.cleaned = true;
+      }
+      
+      const summary = dry 
+        ? `Found ${totalItems} items to cleanup (dry run)` 
+        : `Cleaned up ${totalItems} items`;
+      
+      res.status(200).json({
+        ok: true,
+        service: 'doctor:cleanup',
+        status: 'healthy',
+        summary,
+        details,
+        warnings: [],
+        errors: [],
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: Date.now() - Date.parse(measuredAt)
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        service: 'doctor:cleanup',
+        status: 'down',
+        summary: 'Cleanup check failed',
+        details: {},
+        warnings: [],
+        errors: [error instanceof Error ? error.message : String(error)],
+        request_id: requestId,
+        measured_at: measuredAt,
+        elapsed_ms: 0
       });
     }
   });

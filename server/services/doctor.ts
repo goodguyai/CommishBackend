@@ -238,15 +238,18 @@ export async function checkCron(): Promise<HealthCheckResult> {
   };
 
   try {
-    const tasks = scheduler.getTasks();
-    details.total_jobs = tasks.size;
+    const tasksWithMetadata = scheduler.getTasksWithMetadata();
+    details.total_jobs = tasksWithMetadata.size;
 
-    const jobsList: Array<{ key: string; status: string }> = [];
+    const jobsList: Array<{ key: string; status: string; cronExpression?: string; timezone?: string; description?: string }> = [];
     
-    tasks.forEach((task, key) => {
+    tasksWithMetadata.forEach((data, key) => {
       jobsList.push({
         key,
-        status: "scheduled"
+        status: "scheduled",
+        cronExpression: data.meta.cronExpression,
+        timezone: data.meta.timezone,
+        description: data.meta.description
       });
     });
 

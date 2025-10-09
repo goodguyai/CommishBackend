@@ -6,6 +6,7 @@ import type { Job } from "@shared/schema";
 export class Scheduler extends EventEmitter {
   private tasks: Map<string, ScheduledTask> = new Map();
   private jobTaskMap: Map<string, string> = new Map(); // Maps job.id to task key
+  private taskMeta: Map<string, { cronExpression: string; timezone?: string; description?: string }> = new Map();
 
   scheduleWeeklyDigest(
     leagueId: string, 
@@ -27,10 +28,10 @@ export class Scheduler extends EventEmitter {
 
     // Parse time (HH:MM format)
     const [hour, minute] = time.split(':').map(Number);
-    const cronTime = `${minute || 0} ${hour || 9} * * ${cronDay}`;
+    const cronExpression = `${minute || 0} ${hour || 9} * * ${cronDay}`;
 
     const task = cron.createTask(
-      cronTime,
+      cronExpression,
       () => {
         this.emit("digest_due", { leagueId, timezone });
       },
@@ -39,21 +40,34 @@ export class Scheduler extends EventEmitter {
       }
     );
 
-    this.tasks.set(`digest_${leagueId}`, task);
+    const taskKey = `digest_${leagueId}`;
+    this.tasks.set(taskKey, task);
+    this.taskMeta.set(taskKey, {
+      cronExpression,
+      timezone,
+      description: `Weekly digest for league ${leagueId}: ${day} at ${time}`
+    });
     task.start();
     
     console.log(`[Scheduler] Scheduled weekly digest for league ${leagueId}: ${day} at ${time} (${timezone})`);
   }
 
   scheduleSyncJob(leagueId: string, intervalMinutes: number = 15) {
+    const cronExpression = `*/${intervalMinutes} * * * *`;
+    
     const task = cron.createTask(
-      `*/${intervalMinutes} * * * *`,
+      cronExpression,
       () => {
         this.emit("sync_due", { leagueId });
       }
     );
 
-    this.tasks.set(`sync_${leagueId}`, task);
+    const taskKey = `sync_${leagueId}`;
+    this.tasks.set(taskKey, task);
+    this.taskMeta.set(taskKey, {
+      cronExpression,
+      description: `Sync job for league ${leagueId} every ${intervalMinutes} minutes`
+    });
     task.start();
     
     console.log(`[Scheduler] Scheduled sync job for league ${leagueId} every ${intervalMinutes} minutes`);
@@ -65,6 +79,7 @@ export class Scheduler extends EventEmitter {
       task.stop();
       task.destroy();
       this.tasks.delete(taskKey);
+      this.taskMeta.delete(taskKey);
       console.log(`[Scheduler] Unscheduled task: ${taskKey}`);
     }
   }
@@ -80,18 +95,26 @@ export class Scheduler extends EventEmitter {
       this.unschedule("global_cleanup");
     }
 
+    const cronExpression = "0 3 * * *";
+    const timezone = "UTC";
+
     // Run daily at 3 AM UTC to clean up expired wizard sessions
     const task = cron.createTask(
-      "0 3 * * *",
+      cronExpression,
       () => {
         this.emit("cleanup_due");
       },
       {
-        timezone: "UTC"
+        timezone
       }
     );
 
     this.tasks.set("global_cleanup", task);
+    this.taskMeta.set("global_cleanup", {
+      cronExpression,
+      timezone,
+      description: "Daily cleanup at 3 AM UTC"
+    });
     task.start();
     
     console.log("[Scheduler] Scheduled global cleanup job: daily at 3 AM UTC");
@@ -119,10 +142,11 @@ export class Scheduler extends EventEmitter {
       // Note: cron doesn't support specific dates, so we use a different approach
       // We'll schedule it to run every minute and check if it's time
       const taskKey = `reminder_${leagueId}_${deadlineId}_${hoursBefore}h`;
+      const cronExpression = "* * * * *"; // Check every minute
       
       // Create a one-time check task that runs every minute
       const task = cron.createTask(
-        "* * * * *", // Check every minute
+        cronExpression,
         () => {
           const now = new Date();
           // Check if we've reached the reminder time (within 1-minute window)
@@ -144,6 +168,11 @@ export class Scheduler extends EventEmitter {
       );
 
       this.tasks.set(taskKey, task);
+      this.taskMeta.set(taskKey, {
+        cronExpression,
+        timezone,
+        description: `${deadlineType} reminder for league ${leagueId}: ${hoursBefore}h before (${reminderTime.toISOString()})`
+      });
       task.start();
       
       console.log(
@@ -170,10 +199,10 @@ export class Scheduler extends EventEmitter {
     getCurrentWeek: () => number = () => 1
   ) {
     // Sunday at 8 PM in league timezone
-    const cronTime = "0 20 * * 0";
+    const cronExpression = "0 20 * * 0";
 
     const task = cron.createTask(
-      cronTime,
+      cronExpression,
       () => {
         const week = getCurrentWeek();
         this.emit("highlights_due", { leagueId, week, timezone });
@@ -183,7 +212,13 @@ export class Scheduler extends EventEmitter {
       }
     );
 
-    this.tasks.set(`highlights_${leagueId}`, task);
+    const taskKey = `highlights_${leagueId}`;
+    this.tasks.set(taskKey, task);
+    this.taskMeta.set(taskKey, {
+      cronExpression,
+      timezone,
+      description: `Highlights digest for league ${leagueId}: Sunday at 20:00`
+    });
     task.start();
     
     console.log(`[Scheduler] Scheduled highlights digest for league ${leagueId}: Sunday at 20:00 (${timezone})`);
@@ -196,10 +231,10 @@ export class Scheduler extends EventEmitter {
     getCurrentWeek: () => number = () => 1
   ) {
     // Monday at 9 AM in league timezone
-    const cronTime = "0 9 * * 1";
+    const cronExpression = "0 9 * * 1";
 
     const task = cron.createTask(
-      cronTime,
+      cronExpression,
       () => {
         const week = getCurrentWeek();
         this.emit("rivalry_due", { leagueId, week, timezone });
@@ -209,7 +244,13 @@ export class Scheduler extends EventEmitter {
       }
     );
 
-    this.tasks.set(`rivalry_${leagueId}`, task);
+    const taskKey = `rivalry_${leagueId}`;
+    this.tasks.set(taskKey, task);
+    this.taskMeta.set(taskKey, {
+      cronExpression,
+      timezone,
+      description: `Rivalry card for league ${leagueId}: Monday at 09:00`
+    });
     task.start();
     
     console.log(`[Scheduler] Scheduled rivalry card for league ${leagueId}: Monday at 09:00 (${timezone})`);
@@ -222,20 +263,25 @@ export class Scheduler extends EventEmitter {
       this.unschedule("content_poster");
     }
 
-    // Every 5 minutes
-    const cronTime = "*/5 * * * *";
+    const cronExpression = "*/5 * * * *";
+    const timezone = "UTC";
 
     const task = cron.createTask(
-      cronTime,
+      cronExpression,
       () => {
         this.emit("content_poster_due");
       },
       {
-        timezone: "UTC"
+        timezone
       }
     );
 
     this.tasks.set("content_poster", task);
+    this.taskMeta.set("content_poster", {
+      cronExpression,
+      timezone,
+      description: "Content poster every 5 minutes"
+    });
     task.start();
     
     console.log("[Scheduler] Scheduled content poster: every 5 minutes (UTC)");
@@ -284,6 +330,11 @@ export class Scheduler extends EventEmitter {
     );
 
     this.tasks.set(taskKey, task);
+    this.taskMeta.set(taskKey, {
+      cronExpression,
+      timezone,
+      description: `Reminder job ${reminderId} for league ${leagueId}`
+    });
     task.start();
 
     console.log(`[Scheduler] Scheduled reminder job ${reminderId} for league ${leagueId}: ${cronExpression} (${timezone})`);
@@ -300,18 +351,26 @@ export class Scheduler extends EventEmitter {
       this.unschedule("sleeper_sync");
     }
 
+    const cronExpression = "0 */6 * * *";
+    const timezone = "UTC";
+
     // Run every 6 hours at the top of the hour (0 */6 * * *)
     const task = cron.createTask(
-      "0 */6 * * *",
+      cronExpression,
       () => {
         this.emit("sleeper_sync_due");
       },
       {
-        timezone: "UTC"
+        timezone
       }
     );
 
     this.tasks.set("sleeper_sync", task);
+    this.taskMeta.set("sleeper_sync", {
+      cronExpression,
+      timezone,
+      description: "Sleeper sync every 6 hours"
+    });
     task.start();
     
     console.log("[Scheduler] Scheduled Sleeper Settings Sync: every 6 hours (UTC)");
@@ -341,17 +400,25 @@ export class Scheduler extends EventEmitter {
       this.unschedule(taskKey);
     }
 
+    const cronExpression = job.cron;
+    const timezone = "UTC";
+
     const task = cron.createTask(
-      job.cron,
+      cronExpression,
       async () => {
         await this.executeJob(job);
       },
       {
-        timezone: "UTC"
+        timezone
       }
     );
 
     this.tasks.set(taskKey, task);
+    this.taskMeta.set(taskKey, {
+      cronExpression,
+      timezone,
+      description: `Job ${job.id} (${job.kind}) for league ${job.leagueId}`
+    });
     this.jobTaskMap.set(job.id, taskKey);
     task.start();
     
@@ -436,6 +503,17 @@ export class Scheduler extends EventEmitter {
     
     // Reload jobs from database
     await this.loadJobsFromDatabase();
+  }
+
+  getTasksWithMetadata(): Map<string, { task: ScheduledTask; meta: { cronExpression: string; timezone?: string; description?: string } }> {
+    const result = new Map();
+    this.tasks.forEach((task, key) => {
+      result.set(key, {
+        task,
+        meta: this.taskMeta.get(key) || { cronExpression: 'unknown', description: 'No metadata' }
+      });
+    });
+    return result;
   }
 
   getTasks(): Map<string, ScheduledTask> {
