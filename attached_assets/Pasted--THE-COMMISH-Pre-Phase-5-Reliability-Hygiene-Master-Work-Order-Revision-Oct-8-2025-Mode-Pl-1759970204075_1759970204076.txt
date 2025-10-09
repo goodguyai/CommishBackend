@@ -1,0 +1,196 @@
+🧭 THE COMMISH — Pre-Phase-5 Reliability & Hygiene Master Work Order
+
+Revision: Oct 8, 2025
+Mode: Planning → Build (feature branch)
+Scope: Reliability & hygiene hardening prior to Phase 5 features
+Source of truth: This work order. Do not infer beyond scope.
+
+0) Context (Read Carefully)
+	•	Phases 1–4 are in place:
+	•	/doctor suite (status, discord, sleeper, database, cron, secrets)
+	•	Wizard (Stages 1–3) with Supabase auth (req.supabaseUser fix), assignments bootstrap/commit
+	•	Constitution Drafts (+ endpoints), Switchboard Automations, jobs ledger groundwork
+	•	Live logs show healthy startup + schedulers running, but periodic job output is empty (“Posted 0 queued content items”). That’s an observability + queue wiring issue, not a runtime crash.
+	•	We must stabilize Discord ID handling, idempotency, error envelopes, and scheduler queue visibility before any further feature work.
+
+⸻
+
+1) 🚫 NON-NEGOTIABLE GUARDRAILS (DO NOT DO THESE)
+
+Do NOT:
+	1.	Add a global body parser that touches Discord /interactions raw body. (Ed25519 verification requires exact raw bytes.)
+	2.	Change or remove existing routes or namespaces. New endpoints must live under /api/doctor/*, /api/v2/*, /api/v3/* only.
+	3.	Delete or rename DB tables/columns. All migrations must be idempotent and backward-compatible.
+	4.	Coerce Discord snowflakes (guild/channel/user IDs) to numbers. They must remain strings end-to-end. No Number(), parseInt(), unary +.
+	5.	Log secrets or tokens. Mask; doctor endpoints are read-only and admin-key-gated in production.
+	6.	Rewrite the installer wizard. Only touch items called out below.
+	7.	Change .replit or process ports. Keep server on port 5000.
+	8.	Refactor “for cleanliness.” Only change what’s specified. Minimal diff > “nice refactor.”
+	9.	Overwrite or bypass error envelope format. All errors must be { ok:false, code:"UPPER_SNAKE", message:"..." }.
+
+⸻
+
+2) Change Budget (What You May Modify/Create)
+	•	Create:
+	•	server/services/* small utilities (rate limit, retry, idempotency) if not present
+	•	server/services/jobs.ts (read-only queue diagnostics)
+	•	server/services/announceGuard.ts (rate limit + idempotency wrappers)
+	•	/api/doctor/cron/detail and /api/doctor/cleanup?dry=true routes (READ-ONLY)
+	•	Edit (minimal & localized):
+	•	Affected announcement send path to add idempotency + cooldown
+	•	Sleeper sync → constitution draft creation path to add hash dedupe
+	•	Error responses to normalize envelope
+	•	Log prefixes and duplicate “env passed” elimination
+	•	Dashboard IA to 3 tiles (Today | This Week | Health); move heavy tiles to Switchboard/Constitution (no feature loss)
+	•	DB: Add tables/columns only if missing; no destructive changes.
+
+⸻
+
+3) Known Issues to Fix (Evidence-Driven)
+	1.	Discord snowflake coercion → crashes & 400s (we saw "YOUR_GUILD_ID"/number coercions in earlier runs).
+	2.	Idempotency gaps → double-posts & duplicate constitution drafts on identical Sleeper payloads.
+	3.	Inconsistent error envelopes → hard to debug (mixed shapes).
+	4.	Scheduler “0 queued” → queue writer/reader silent or unseeded.
+	5.	Duplicate startup logs → “✅ Environment validation passed” appears twice; noisy.
+	6.	Dashboard overload → critical actions buried; we must de-clutter now (no feature loss).
+	7.	Secrets drift risk → VITE_SUPABASE_URL was mis-set to a JWT previously; keep parity checks.
+
+⸻
+
+4) Tasks (Do in Order) — with Acceptance Gates
+
+TIER 1 — CRITICAL RELIABILITY
+
+Task 1 — Discord Snowflake Audit & Fix
+	•	Scan:
+rg -n "(Number\\(.*Id|parseInt.*Id|\\+.*Id)" server client | grep -i "guild\\|channel\\|user" || echo "OK: none"
+	•	Replace any numeric coercion with string-only handling. Validate input: if a non-snowflake sneaks in, return
+400 { ok:false, code:"INVALID_SNOWFLAKE", message:"Discord ID must be a string snowflake" }.
+	•	Acceptance: The scan returns no matches. /api/doctor/discord succeeds for real guild+channel.
+
+Task 2 — Idempotency Keys (Announcements + Drafts)
+	•	Announcements: make posting idempotent via key
+announce:${guildId}:${channelId}:${sha256(text + ":" + (mention||""))} persisted in bot_activity.key.
+On duplicate in last 24h → skip and return { ok:true, skipped:true }.
+	•	Constitution drafts: compute settings_hash (stable JSON canonicalization + SHA256). If same league + same hash in last 24h → don’t insert new draft; log { skipped:true, reason:"DRAFT_DUPLICATE" }.
+	•	Acceptance: Back-to-back identical announcements → second returns skipped:true with no double post. A repeated Sleeper sync with unchanged settings does not create a new draft.
+
+Task 3 — Error Envelope Normalization
+	•	Normalize all error responses to { ok:false, code:"UPPER_SNAKE", message:"..." }.
+	•	Audit: rg -n "res\\.status\\(\\d+\\)\\.json\\(" server | wc -l before/after (show the count), and show 3 spot checks.
+	•	Acceptance: 5 forced error cases across /api/v2 + /api/v3 show normalized envelopes, incl. 429 { code:"COOLDOWN" }.
+
+TIER 2 — HYGIENE COMPLETION
+
+Task 4 — Log Cleanup & Prefixes
+	•	Ensure only one startup line:
+[Startup] Env OK • Discord ✓ • DB ✓ • Cron ✓ • LLM ✓
+	•	Prefix periodic logs: [Scheduler], health: [Doctor].
+	•	Acceptance: One startup line per cold boot; no duplicate “env passed”.
+
+Task 5 — Doctor Enhancements (READ-ONLY)
+	•	Add: /api/doctor/cron/detail → { key, next, last, queued, last_error } for each job.
+	•	Add: /api/doctor/cleanup?dry=true → preview items pending cleanup; no writes in dry mode.
+	•	Acceptance:
+	•	curl $APP/api/doctor/cron/detail | jq returns non-empty jobs with timestamps.
+	•	curl $APP/api/doctor/cleanup?dry=true | jq returns a list or empty; DB state unchanged.
+
+Task 6 — Content Poster Defaults (Seeding)
+	•	For every existing league missing a content poster config, set:
+leagues.jobs.contentPoster = { enabled:true, channelId:<existing default or league.discord_channel_id>, cron:"*/5 * * * *" }
+	•	Idempotent seeder; prints what it changed.
+	•	Acceptance: After seeding, /api/doctor/cron/detail shows content_poster scheduled with a valid channel. The next run logs a clear “skip (no content)” or a post; never vague “0 queued” without a reason.
+
+Task 7 — Dashboard IA Simplification (No feature loss)
+	•	Dashboard shows only:
+	•	Today (next deadlines/events today)
+	•	This Week (upcoming digest/recap window)
+	•	System Health (link out to /doctor + wizard step states)
+	•	Move advanced tiles to Switchboard (automations, schedules) and Constitution (drafts/index health).
+	•	Acceptance: Dashboard renders 3 tiles; displaced features work in their new tabs.
+
+TIER 3 — POLISH
+
+Task 8 — Announcement Rate Limiting (Per-channel cooldown)
+	•	Add conservative per-channel cooldown (30s default). On cooldown, return 429 { ok:false, code:"COOLDOWN", message:"…" }.
+	•	Acceptance: Two announce calls within 30s → 429; third after 30s → success.
+
+Task 9 — Schema Validation (Add if missing)
+	•	Ensure jobs_run exists with timestamptz and indexes; ensure a place to store settings_hash (either in leagues or a new per-league settings snapshot table).
+	•	Acceptance: DB introspection shows both; a Sleeper sync writes/updates settings_hash and participates in draft dedupe.
+
+⸻
+
+5) Cross-Checks (Secrets & Env Parity)
+	•	VITE_SUPABASE_URL must equal SUPABASE_URL (URL, not JWT).
+	•	VITE_SUPABASE_ANON_KEY must be the public anon JWT.
+	•	/api/doctor/secrets masks secrets, confirms presence; no values printed in logs.
+
+⸻
+
+6) Verification Script (Paste Outputs in Report)
+
+# Doctor health
+curl -sS $APP_BASE_URL/api/doctor/status | jq
+curl -sS $APP_BASE_URL/api/doctor/cron | jq
+curl -sS $APP_BASE_URL/api/doctor/cron/detail | jq
+curl -sS "$APP_BASE_URL/api/doctor/cleanup?dry=true" | jq
+
+# Snowflake audit must be clean:
+rg -n "(Number\\(.*Id|parseInt.*Id|\\+.*Id)" server client | grep -i "guild\\|channel\\|user" || echo "OK: no numeric coercions"
+
+# Error envelope spot-checks (force 3 different error conditions)
+# (1) Announce cooldown → 429
+curl -sS -XPOST $APP_BASE_URL/api/announce/send \
+  -H "Content-Type: application/json" \
+  -d '{"guildId":"<G>","channelId":"<C>","text":"rate-limit-test"}' | jq
+curl -sS -XPOST $APP_BASE_URL/api/announce/send \
+  -H "Content-Type: application/json" \
+  -d '{"guildId":"<G>","channelId":"<C>","text":"rate-limit-test"}' | jq
+
+# (2) Announce idempotency → skipped:true
+curl -sS -XPOST $APP_BASE_URL/api/announce/send \
+  -H "Content-Type: application/json" \
+  -d '{"guildId":"<G>","channelId":"<C>","text":"exact same body"}' | jq
+curl -sS -XPOST $APP_BASE_URL/api/announce/send \
+  -H "Content-Type: application/json" \
+  -d '{"guildId":"<G>","channelId":"<C>","text":"exact same body"}' | jq
+
+# (3) Draft dedupe (trigger two identical Sleeper syncs)
+# Expect second call to report skipped duplicate; show /api/v3/constitution/drafts list count unchanged
+
+# Dashboard check (manual): confirm only three tiles appear; advanced modules moved.
+
+
+⸻
+
+7) Deliverables Checklist (What You Must Return)
+	•	Branch: phase5-reliability with 9 commits (one per task).
+	•	Report:
+	1.	outputs of the Verification Script above
+	2.	list of touched files (by path)
+	3.	before/after count of res.status().json( occurrences
+	4.	a one-paragraph “Phase 5 Reliability Complete” statement
+	•	Assurances: Confirmation that no Discord raw-body signature code was touched and all new doctor endpoints are read-only & admin-key-gated in production.
+
+⸻
+
+8) Backout Plan (In Case Something Regresses)
+	•	All changes are additive, idempotent, and behind existing flows. If a regression occurs:
+	•	Revert individual commit for the failing task (they’re isolated by design).
+	•	Disable announcement cooldown by setting ANNOUNCE_COOLDOWN_SEC=0 (if a temporary unblock is needed).
+	•	Disable content poster seeding by flipping the seeder feature flag off and re-running; it’s idempotent.
+	•	Doctor endpoints are read-only; safe to keep.
+
+⸻
+
+9) What Comes After (Phase 5 Summary You’ll Queue Next)
+
+Rename Phase 5 in notes to “Reliability & Hygiene Hardening.” Observability is already present; this phase makes the behavior trustworthy:
+	•	Snowflake correctness = fewer Discord 400/500s.
+	•	Idempotency = no double posts, no duplicate drafts.
+	•	Consistent errors = debuggable failures.
+	•	Scheduler visibility = explainable “why nothing posted.”
+	•	Dashboard simplification = reduced cognitive load → higher completion of setup.
+
+Once this returns green, we immediately proceed to Phase 6: “League Persona & Engagement Automations” (welcome, /status, weekly recap scheduling, tasteful reactions) on top of this hardened base.

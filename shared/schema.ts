@@ -118,6 +118,7 @@ export const leagues = pgTable("leagues", {
     moderation: false
   }),
   jobs: jsonb("jobs"),
+  settingsHash: text("settings_hash"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({

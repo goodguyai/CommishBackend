@@ -149,13 +149,16 @@ type MarkStatus = "PENDING" | "SUCCESS" | "FAILED";
 
 export async function hasSucceeded(key: string): Promise<boolean> {
   try {
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    
     const existing = await db
       .select()
       .from(botActivity)
       .where(
         and(
           eq(botActivity.key, key),
-          eq(botActivity.status, 'SUCCESS')
+          eq(botActivity.status, 'SUCCESS'),
+          gte(botActivity.createdAt, twentyFourHoursAgo)
         )
       )
       .limit(1);

@@ -1,0 +1,303 @@
+Got it—here’s a tight but complete “pre-Phase-5” audit + work order you can drop straight into Replit. I’m basing this on (a) the master plan we wrote, (b) what Replit already implemented in Phases 1–3 (/doctor suite, 3-step wizard, v3 constitution/switchboard), (c) your logs, and (d) the most common drift points I’ve seen in this codebase. Where I can’t read your private ZIPs directly here, I give exact, copy-paste checks so the agent can verify and fix fast.
+
+⸻
+
+The Commish — Pre-Phase-5 Audit & Hygiene Work Order
+
+0) Where we are vs. the Master Plan
+
+Completed
+	•	Phase 1: /api/doctor/* health checks (status, discord, sleeper, database, cron, secrets).
+	•	Phase 2: Resumable Setup Wizard (Stages 1–3) with auth bug fixed (req.supabaseUser?.id).
+	•	Phase 3: Constitution Drafts + League Switchboard:
+	•	New /api/v3/* endpoints for drafts (list/apply/reject) and features/jobs.
+	•	Frontend tabs wired with React Query & toasts.
+	•	New constitution, features, jobs (jsonb) columns on leagues.
+	•	constitution_drafts table added.
+
+Outstanding / at risk
+	•	Mock vs real dashboard sources still mixed.
+	•	Discord “snowflake” hardening across all call sites.
+	•	Sleeper → Constitution mapping breadth & idempotency hash.
+	•	Assignment (Stage 3) UI & chat fallback completeness.
+	•	Scheduler observability (job ledger, last run, next run, error).
+	•	Events/ops ledger consistency (idempotency keys everywhere).
+	•	Page IA: dashboard still doing too much vs “Switchboard + Setup”.
+
+⸻
+
+1) Duplicate/Dead Code & Contract Drift (quick wins)
+
+Run these in the workspace so the agent can auto-clean with minimal risk.
+
+1.1 Mock API handlers still referenced
+	•	Symptom: dashboard loads with “broken modules” or empty tiles.
+	•	Action: confirm all mock calls removed/guarded.
+
+rg -n "/api/mock" client server | sed -n '1,120p'
+
+Expected outcome
+	•	Keep demo mode behind an explicit league.featureFlags.demo === true.
+	•	In beta mode, no /api/mock/* calls.
+	•	If placeholders remain in the dashboard, switch them to the real adapters we added in Phase 3 or hide tiles until data is ready.
+
+1.2 Legacy v1/v2/v3 route overlap
+	•	Symptom: two endpoints return different shapes for the same concept.
+	•	Action: inventory & reconcile.
+
+rg -n "app\.(get|post|put|patch|delete)\(" server | sort
+
+Decision rule
+	•	Keep: /api/doctor/*, /api/v2/setup/*, /api/v3/constitution/*, /api/v3/switchboard/*.
+	•	Deprecate (soft): earlier ad-hoc /api/* routes that duplicate the above. Add 410 Gone to any truly legacy endpoint and a console warning the first time it’s hit.
+
+1.3 Discord snowflake misuse (“YOUR_GUILD_ID” / number coercion)
+	•	Symptom: NUMBER_TYPE_COERCE errors.
+	•	Action: grep for coercions:
+
+rg -n "(Number\(|\+guildId|\+channelId|YOUR_GUILD_ID)" server client
+
+Fix pattern
+	•	Treat all Discord IDs as opaque strings end-to-end.
+	•	Never cast to numbers; never default to placeholders.
+	•	In /api/v2/discord/channels, return 400 with {code:"MISSING_GUILD_ID"} if absent.
+
+1.4 Env drift (the “blank screen” class of bugs)
+	•	Symptom: Vite URL/Key swapped.
+	•	Action: verify frontend vs backend mapping via /api/doctor/secrets output and .env:
+
+VITE_SUPABASE_URL      === SUPABASE_URL
+VITE_SUPABASE_ANON_KEY === (Supabase anon key JWT)
+
+
+⸻
+
+2) Database hygiene (minimal, idempotent)
+
+2.1 Columns baseline (idempotent)
+	•	Goal: standardize the few jsonb columns we rely on in Phases 3–6.
+
+-- run once; all IF NOT EXISTS
+ALTER TABLE IF EXISTS leagues
+  ADD COLUMN IF NOT EXISTS features    jsonb DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS constitution jsonb DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS jobs        jsonb DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS constitution_drafts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id uuid NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+  source text NOT NULL,
+  proposed jsonb NOT NULL,
+  status text NOT NULL DEFAULT 'PENDING',
+  created_at timestamptz DEFAULT now(),
+  decided_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS constitution_drafts_league_idx ON constitution_drafts(league_id);
+
+-- Ops ledger for idempotency/observability (if not already)
+CREATE TABLE IF NOT EXISTS bot_activity (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  league_id uuid REFERENCES leagues(id) ON DELETE SET NULL,
+  guild_id text,
+  channel_id text,
+  kind text NOT NULL,
+  key text,           -- idempotency key
+  status text NOT NULL, -- PENDING|SUCCESS|FAILED
+  detail jsonb DEFAULT '{}'::jsonb,
+  request_id text,
+  created_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS bot_activity_key_idx ON bot_activity(key);
+
+Why: gives us a consistent config store (leagues.features, leagues.jobs), ops ledger (bot_activity), and drafts system (constitution_drafts) used by Phase 3+.
+
+2.2 Unique/Foreign-key sanity (light)
+	•	Ensure one active mapping per league → guild/channel (if you keep a mapping table).
+	•	Add ON DELETE SET NULL for non-critical fkeys to avoid cascading surprises.
+
+⸻
+
+3) Backend hygiene (contracts, errors, idempotency)
+
+3.1 Error envelopes
+	•	Goal: every failing route returns { ok:false, code, message? }.
+	•	Action: scan and normalize.
+
+rg -n "res\.status\(\d+\)\.json\(" server | sed -n '1,120p'
+
+Keep
+	•	MISSING_GUILD_ID, BOT_NOT_IN_GUILD, MISSING_PERMISSION,
+	•	SLEEPER_NOT_CONNECTED, LEAGUE_NOT_READY,
+	•	DRAFT_NOT_FOUND, CONFLICT, BAD_REQUEST, UNAUTHORIZED.
+
+3.2 Idempotency use (announcements, recaps, sync)
+	•	Goal: no duplicate posts in Discord; no duplicate drafts on unchanged Sleeper settings.
+	•	Action:
+	•	Wrap outbound Discord posts with a key (e.g., announce:${guildId}:${channelId}:${sha256(body)}) and check bot_activity before posting.
+	•	Store a settings hash (leagues.settings_hash) after an applied draft; skip creating a new draft when unchanged.
+
+3.3 Rate limiting (tiny)
+	•	Per-channel cooldown for announcements & reaction policy.
+	•	Reject with 429 + {code:"COOLDOWN"} rather than failing silently.
+
+3.4 Discord interaction raw-body guard (don’t regress)
+	•	Enforce route-scoped raw parser only for /api/discord/interactions.
+	•	Add a unit test that fails if a global express.json() is added before the raw route.
+
+⸻
+
+4) Frontend hygiene (IA, state, mocks)
+
+4.1 Information Architecture (now)
+	•	Setup (Wizard): the three steps Replit added (Account, Discord, Sleeper) are good. Keep Assignments and Constitution as steps 3 & 4 if you want one linear flow, or as tabs in Switchboard. Either way, resumable.
+	•	Switchboard (Phase 3): keep toggles + jobs there.
+	•	Dashboard: strip to Overview only (Today | This Week | Health). Everything else belongs to Switchboard or Constitution.
+
+4.2 Data sources
+	•	Gate rendering by mode:
+	•	Demo: allow mock data.
+	•	Beta: never call /api/mock/*.
+	•	Show “Not configured” cards with CTA to Setup instead of erroring tiles.
+
+4.3 React Query keys & invalidation
+	•	Standardize keys (e.g., ['league', leagueId], ['drafts', leagueId], ['features', leagueId]).
+	•	Invalidate after apply/reject draft and features/jobs update.
+
+⸻
+
+5) Sleeper ↔ Constitution pipeline (Phase 3 hardening)
+
+What to confirm now (quick checks)
+	•	There is a mapping table/function from common Sleeper settings to constitution paths (you added this in Phase 3).
+	•	Apply/Reject sets APPLIED/REJECTED + timestamps.
+	•	Idempotency: compute a hash of the settings snapshot; don’t keep creating identical drafts.
+
+Why: ensures Sleeper is authoritative but reversible, with human approval.
+
+⸻
+
+6) Assignments (Stage 3) completeness check
+
+What should exist
+	•	UI with auto-suggest matches (Discord vs Sleeper usernames); allow manual fix.
+	•	/assign @user TEAM slash command inside Discord.
+	•	league_members table linking discord_user_id <→ sleeper_user_id (and team).
+
+Acceptance
+	•	/whoami in chat reflects the mapping.
+	•	Wizard cannot finish if assignments are <100% (with “Skip for now” allowed but flagged).
+
+⸻
+
+7) Observability (already started, finish before Phase 5)
+	•	/api/doctor/cron returns next run & last result for each job.
+	•	bot_activity captures SUCCESS/FAILED for: announcements, recaps, sleeper sync.
+	•	Add a tiny Jobs page (admin or league) showing: last run, next run, status, last error.
+
+Why: reduces “it didn’t post” tickets to 1-click diagnosis.
+
+⸻
+
+8) Minimal removals (safe deletions)
+	•	Remove stale mock handlers not shielded by demo mode.
+	•	Deprecate old v1/v2 endpoints that duplicate v3 with 410 Gone and a log once.
+	•	Delete any Discord REST helpers that auto-cast IDs.
+
+Principle: less surface area = fewer regressions.
+
+⸻
+
+9) Verification script (drop-in)
+
+Have Replit run these after the cleanup:
+
+# 1) Env
+curl -sS https://thecommish.replit.app/api/doctor/secrets | jq '.status,.details'
+# 2) Discord
+curl -sS https://thecommish.replit.app/api/doctor/discord | jq
+# 3) Database
+curl -sS https://thecommish.replit.app/api/doctor/database | jq
+# 4) Cron
+curl -sS https://thecommish.replit.app/api/doctor/cron | jq
+# 5) Constitution drafts (requires auth)
+#   -> from app console via fetch('/api/v3/constitution/drafts?...')
+
+
+⸻
+
+10) What to hand Replit (actionable items)
+	1.	Purge & Guard
+
+	•	Replace any /api/mock/* calls in beta mode with real adapters or hide tiles.
+	•	Enforce Discord string IDs everywhere; kill placeholders.
+	•	Normalize error envelopes across routes.
+
+	2.	DB Baseline
+
+	•	Ensure leagues.features, leagues.jobs, leagues.constitution exist (jsonb).
+	•	Ensure constitution_drafts, bot_activity exist with indexes.
+
+	3.	Idempotency
+
+	•	Wrap announcement/recap posts; add Sleeper settings hash to avoid duplicate drafts.
+
+	4.	Wizard & IA
+
+	•	Verify wizard resume states; add “Assignments” completion gate.
+	•	Move power-user cards off Dashboard into Switchboard/Constitution.
+
+	5.	Ops
+
+	•	/api/doctor/cron shows next/last run; add minimal Jobs page.
+	•	Ensure every job writes to bot_activity.
+
+⸻
+
+Phase 5 Summary (what we build next)
+
+Name: Scheduler & Job Observability (League-scoped Reliability)
+
+Goal: Make all time-based features visible, reliable, and controllable by commissioners. No more “ghost jobs.”
+
+Scope
+	•	Backend
+	•	A unified job registry (digest/recap, reminders, sleeper sync, cleanup).
+	•	leagues.jobs JSON contract:
+	•	recap: {enabled, dayOfWeek, hour, channelId}
+	•	reminders: {waivers:{enabled, cron, channelId}, lineup:{...}}
+	•	sleeperSync: {enabled, cron}
+	•	Write a job ledger (reuse bot_activity or a light jobs_run table) with:
+	•	job_key, league_id, scheduled_at, started_at, finished_at, status, error_excerpt.
+	•	/api/v3/jobs (GET/PUT) per league for the Switchboard.
+	•	All jobs idempotent; Discord posts guarded by key.
+	•	Frontend (Switchboard → Automations tab)
+	•	Cards for: Weekly Recap, Waiver Reminder, Lineup Reminder, Sleeper Sync.
+	•	Each card: enable toggle, schedule (cron controls or presets), channel selector.
+	•	“Last run / next run / last error” strip.
+	•	Test Post button (does a one-off dry-run with idempotency).
+	•	Observability
+	•	/api/doctor/cron: include per-league schedules snapshot.
+	•	Minimal “Jobs” page showing recent runs with filters by league/job.
+
+Acceptance Criteria
+	1.	I can enable “Weekly Recap on Tuesdays 9am to #announcements” and see the next run populate.
+	2.	“Test Post” sends a single message with idempotency (no doubles on retries).
+	3.	When a job fails (e.g., missing permission), the Switchboard shows last error with an actionable hint (permission doctor link).
+	4.	/api/doctor/cron and the “Jobs” page both reflect the last 5 runs with status.
+
+Out of scope (Phase 6+)
+	•	AI upgrade of recaps to long-form w/ highlights & memes.
+	•	Cross-platform chat adapters (Slack/WhatsApp).
+
+⸻
+
+Why these actions (teach-the-auditorium rationale)
+	•	Reduce entropy: killing mock/legacy overlaps stops “works on one page, fails elsewhere.”
+	•	Idempotency + ledger: production bots live/die on double-post prevention and breadcrumb trails.
+	•	IA simplification: Wizard for setup, Switchboard for operations, Dashboard just for “what matters now”—this changes the feel of reliability.
+	•	Explicit contracts (leagues.jobs, error envelopes) let FE and BE move in lockstep without guessing.
+	•	Smallest safe change: we’re not rewriting; we’re pinning the runtime with a few stable tables, a handful of routes, and clear states.
+
+⸻
+
+If you want, I can convert this into a one-click “Replit Work Order.md” with the exact shell commands, file edit diffs, and post-deploy validation script—but the above is everything the agent needs to cleanly finish pre-Phase-5 and then implement Phase 5 without thrash.

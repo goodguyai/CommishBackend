@@ -1,14 +1,44 @@
 import { db } from "../db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, gte } from "drizzle-orm";
 import { diffSleeperToConstitution, applyChanges } from "./sleeperMapping";
 import { withRetry } from "../lib/retry";
 import { constitutionDrafts, leagues } from "@shared/schema";
+import { createHash } from "crypto";
 
 export async function buildDraftFromSleeper(leagueId: string, sleeperSettings: any) {
-  const leagueRecords = await db.select({ constitution: leagues.constitution })
+  // Compute hash of Sleeper settings for idempotency
+  const settingsJson = JSON.stringify(sleeperSettings, Object.keys(sleeperSettings).sort());
+  const settingsHash = createHash('sha256').update(settingsJson).digest('hex');
+  
+  // Check if this exact settings hash was already processed in last 24h
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const existingDrafts = await db.select()
+    .from(constitutionDrafts)
+    .where(
+      and(
+        eq(constitutionDrafts.leagueId, leagueId),
+        gte(constitutionDrafts.createdAt, twentyFourHoursAgo)
+      )
+    )
+    .limit(1);
+  
+  const leagueRecords = await db.select({ 
+    constitution: leagues.constitution,
+    settingsHash: leagues.settingsHash 
+  })
     .from(leagues)
     .where(eq(leagues.id, leagueId))
     .limit(1);
+  
+  // Skip if settings hash matches current stored hash
+  if (leagueRecords[0]?.settingsHash === settingsHash) {
+    console.log(`[Draft] Skipped duplicate due to idempotency - settings unchanged`);
+    return { 
+      skipped: true, 
+      reason: "DRAFT_DUPLICATE", 
+      message: "Settings unchanged from last sync" 
+    };
+  }
   
   const constitution = leagueRecords[0]?.constitution ?? {};
   const proposed = diffSleeperToConstitution(sleeperSettings, constitution);
@@ -26,6 +56,11 @@ export async function buildDraftFromSleeper(leagueId: string, sleeperSettings: a
       status: constitutionDrafts.status,
       createdAt: constitutionDrafts.createdAt,
     });
+  
+  // Store the settings hash for future deduplication
+  await db.update(leagues)
+    .set({ settingsHash })
+    .where(eq(leagues.id, leagueId));
   
   return {
     ...inserted[0],

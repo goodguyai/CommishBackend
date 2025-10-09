@@ -1,0 +1,97 @@
+🧭 Context Update for Replit Agent
+This supersedes and merges the Pre-Phase-5 Hygiene Blueprint and the Idempotency & Reliability Hardening Plan.
+You’ve already completed Phases 1-4 (observability, scheduler, jobs) and partially delivered Phase 5 features.
+Now finalize all hygiene and reliability gaps before moving on.
+
+🎯 OBJECTIVE
+Unify the environment by finishing the Pre-Phase-5 hygiene tasks that remain open (log cleanup, cron detail, cleanup doctor) and executing the new Phase 5 reliability tasks (snowflake fixes, idempotency keys, error envelopes, dashboard IA cleanup).  
+Do not refactor or delete beyond this scope.
+
+---
+
+## PHASE 5 CONSOLIDATED WORK ORDER
+
+### Tier 1 (Critical Reliability)
+1. **Discord Snowflake String Safety**
+   - Audit and fix numeric coercions:  
+     `rg -n "(Number\(.*Id|parseInt.*Id|\+.*Id)" server client | grep -i "guild\|channel\|user"`
+   - All IDs must remain strings; throw 400 on invalid formats.
+
+2. **Idempotency Keys**
+   - Extend `bot_activity.key` usage for:
+     - Announcements → `announce:${guildId}:${channelId}:${sha256(body)}`
+     - Constitution drafts → hash of Sleeper settings (snapshot hash column in leagues)
+   - Skip duplicates if hash exists within 24 h. Log “Skipped duplicate due to idempotency key.”
+
+3. **Error Envelope Normalization**
+   - All API errors return uniform JSON:
+     ```json
+     { "ok": false, "code": "<CODE>", "message": "<human-readable>" }
+     ```
+   - Audit: `rg -n "res\.status\(\d+\)\.json\(" server | head -50`
+   - Apply consistently to /api/v2 and /api/v3.
+
+---
+
+### Tier 2 (Hygiene Completion)
+4. **Log Sanitation**
+   - Deduplicate “✅ Environment validation passed.”  
+   - Prefix logs: [Startup], [Scheduler], [Doctor].
+
+5. **Doctor Enhancements**
+   - Add `/api/doctor/cron/detail` with job queue lengths, next run, last run, last error.  
+   - Add `/api/doctor/cleanup?dry=true` (returns JSON preview of pending cleanup).  
+
+6. **Content Poster Seeding**
+   - Ensure `leagues.jobs.contentPoster.enabled=true`.  
+   - Seed defaults for existing leagues if missing.
+
+7. **Dashboard IA Cleanup**
+   - Simplify Dashboard → only:
+       • Today  
+       • This Week  
+       • System Health  
+   - Move advanced tiles to Switchboard or Constitution tabs.
+
+---
+
+### Tier 3 (Polish / Validation)
+8. **Rate Limit Announcements**
+   - Add per-channel cooldown (30 s default).  
+   - Return HTTP 429 + `{ok:false,code:"COOLDOWN"}` when triggered.
+
+9. **Schema Validation**
+   - Ensure `jobs_run` exists and timestamps are `timestamptz UTC`.
+   - Confirm `settings_hash` column in leagues.
+
+---
+
+## 📊 VERIFICATION SCRIPT
+
+curl -sS https://thecommish.replit.app/api/doctor/status | jq
+curl -sS https://thecommish.replit.app/api/doctor/cron/detail | jq
+curl -sS https://thecommish.replit.app/api/doctor/cleanup?dry=true | jq
+
+Expected: All services ok:true and job counts > 0.  
+Logs must show no duplicate announcements and consistent error envelopes.
+
+---
+
+✅ SUCCESS CRITERIA
+- No numeric Discord IDs left in repo  
+- Uniform error responses  
+- Announcements + drafts idempotent  
+- Rate limit works (429 on spam)  
+- Dashboard simplified  
+- Doctor endpoints healthy  
+
+Once you verify green checks for all items, report “Phase 5 Reliability Complete.”  
+We will then proceed to Phase 6 (League Persona & Engagement Automation).
+
+
+⸻
+
+💡 Why This Merged Plan Works
+	1.	It includes both earlier messages (your Pre-Phase-5 Blueprint and the planning-mode instructions) — so Replit still has context.
+	2.	It aligns with the latest Replit log confirming Phases 1-4 and observability completion.
+	3.	It ensures the last open reliability items (snowflakes, idempotency, envelopes, dashboard) are finished before any new product features.

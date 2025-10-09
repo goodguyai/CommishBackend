@@ -2,6 +2,7 @@ import { withRetry } from "../lib/retry";
 import { allow } from "../lib/rateLimiter";
 import { hasSucceeded, mark } from "./idempotency";
 import { discordService } from "./discord";
+import { createHash } from "crypto";
 
 export async function preview(text: string) {
   // Could run LLM tone-check here; for now just echo
@@ -17,7 +18,11 @@ export async function post(params: {
   requestId?: string;
 }) {
   const { guildId, channelId, text, mention, leagueId, requestId } = params;
-  const idemKey = `announce:${guildId}:${channelId}:${text}:${mention ?? ""}`;
+  
+  // Create idempotency key with SHA-256 hash of content
+  const contentToHash = `${text}:${mention ?? ""}`;
+  const contentHash = createHash('sha256').update(contentToHash).digest('hex');
+  const idemKey = `announce:${guildId}:${channelId}:${contentHash}`;
   
   if (await hasSucceeded(idemKey)) {
     return { ok: true, skipped: true };
