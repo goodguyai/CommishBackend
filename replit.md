@@ -38,6 +38,59 @@ The frontend uses React with TypeScript, Vite, and shadcn/ui components built on
 - **AI Recaps**: Automated weekly recap generation using league matchup data and standings.
 - **UUID Guards (Phase 5.5-5.6)**: Middleware-based UUID validation preventing 22P02 PostgreSQL errors, with demo mode hard-wall separation and 422 error responses for invalid league IDs. Guards protect 8 v2/legacy routes (leagueId param) and 9 v3 routes (league_id param) including constitution sync/drafts/apply/reject, features, and jobs endpoints. Doctor telemetry includes perms object (channel/bot status), dry-run enqueue endpoint for testing, and guardrails preventing contentPoster enablement without channelId.
 
+## API Structure & Routing
+
+### v3 API Routes (Body/Query Parameters)
+All v3 routes use `league_id` in **request body or query parameters**, not path parameters. This design choice enables consistent UUID validation via middleware without path-based routing complexity.
+
+**Constitution Management:**
+- `POST /api/v3/constitution/sync` - Sync Sleeper settings to constitution (body: `league_id`)
+- `GET /api/v3/constitution/drafts?league_id=` - List pending constitution drafts
+- `GET /api/v3/constitution/draft/:id` - Get specific draft by ID
+- `POST /api/v3/constitution/apply` - Apply pending draft (body: `league_id`, `draft_id`)
+- `POST /api/v3/constitution/reject` - Reject pending draft (body: `league_id`, `draft_id`)
+
+**Feature & Job Management:**
+- `GET /api/v3/features?league_id=` - Get league features
+- `POST /api/v3/features` - Update league features (body: `league_id`, `features`)
+- `GET /api/v3/jobs?league_id=` - List all jobs for league
+- `POST /api/v3/jobs/upsert` - Create/update job (body: `league_id`, job config)
+- `POST /api/v3/jobs/run-now` - Manually trigger job execution (body: `job_id`)
+- `GET /api/v3/jobs/history?league_id=&kind=` - Job execution history
+- `GET /api/v3/jobs/failures?league_id=` - Job failure details
+
+**AI & Analytics:**
+- `POST /api/v3/rules/ask` - AI-powered constitution Q&A (body: `league_id`, `question`)
+- `GET /api/v3/reactions/stats?league_id=` - Reaction statistics
+
+### v2 Doctor & Admin Routes (Admin Key Required)
+- `GET /api/v2/doctor/discord` - Discord bot health check (public)
+- `GET /api/v2/doctor/cron/detail` - Cron job telemetry with perms object (requires `Authorization: Bearer <ADMIN_API_KEY>`)
+- `POST /api/v2/doctor/cron/enqueue/content?dry=true|false` - Test content poster (requires admin key)
+
+### Legacy Announcement Routes
+- `POST /api/announce/preview` - Preview announcement without sending
+- `POST /api/announce/send` - Send announcement with cooldown protection (body: `leagueId`, `guildId`, `channelId`, `text`)
+
+### Example API Usage
+```bash
+# Enable content poster for one league
+curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"league_id":"uuid-here","contentPoster":{"enabled":true,"channelId":"123","cron":"*/5 * * * *"}}' \
+  https://thecommish.replit.app/api/v3/jobs/upsert
+
+# Get cron telemetry
+curl -H "Authorization: Bearer $ADMIN_API_KEY" \
+  https://thecommish.replit.app/api/v2/doctor/cron/detail
+
+# Sync constitution (idempotent)
+curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"league_id":"uuid-here"}' \
+  https://thecommish.replit.app/api/v3/constitution/sync
+```
+
 ## External Dependencies
 
 ### Database & Storage
