@@ -1,5 +1,9 @@
 import type { IStorage } from "../storage";
 
+// Demo mode detection helpers
+export const isDemo = () => String(process.env.DEMO_MODE || "").toLowerCase() === "true";
+export const isDemoId = (id: string) => /^lg_demo_/.test(id);
+
 export class DemoService {
   constructor(private store: IStorage) {}
 
