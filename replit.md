@@ -36,7 +36,7 @@ The frontend uses React with TypeScript, Vite, and shadcn/ui components built on
 - **Controlled Announcements**: Guardrailed @everyone announcements with cooldowns and role-based permissions.
 - **AI Q&A**: DeepSeek function-calling with RAG for intelligent rule explanations and setting lookups.
 - **AI Recaps**: Automated weekly recap generation using league matchup data and standings.
-- **UUID Guards (Phase 5.5)**: Middleware-based UUID validation preventing 22P02 PostgreSQL errors, with demo mode hard-wall separation and 422 error responses for invalid league IDs.
+- **UUID Guards (Phase 5.5-5.6)**: Middleware-based UUID validation preventing 22P02 PostgreSQL errors, with demo mode hard-wall separation and 422 error responses for invalid league IDs. Guards protect 8 v2/legacy routes (leagueId param) and 9 v3 routes (league_id param) including constitution sync/drafts/apply/reject, features, and jobs endpoints. Doctor telemetry includes perms object (channel/bot status), dry-run enqueue endpoint for testing, and guardrails preventing contentPoster enablement without channelId.
 
 ## External Dependencies
 
