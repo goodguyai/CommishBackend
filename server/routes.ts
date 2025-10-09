@@ -7733,6 +7733,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // === END DOCTOR HEALTH CHECK ENDPOINTS ===
 
+  // === ADMIN SEEDER ENDPOINTS ===
+
+  // POST /api/v2/admin/seed-content-poster - Initialize contentPoster for leagues
+  app.post('/api/v2/admin/seed-content-poster', requireAdminKeyInProduction, async (req, res) => {
+    try {
+      const allLeagues = await storage.getAllLeagues();
+      
+      const updatedLeagues = [];
+      let alreadyConfigured = 0;
+      
+      for (const league of allLeagues) {
+        const jobs = league.jobs || {};
+        
+        // Skip if already has contentPoster config
+        if (jobs.contentPoster) {
+          alreadyConfigured++;
+          continue;
+        }
+        
+        // Set default contentPoster config
+        jobs.contentPoster = {
+          enabled: !!league.channelId,  // Only enable if channelId exists
+          channelId: league.channelId,
+          cron: "*/5 * * * *"
+        };
+        
+        // Update league
+        await storage.updateLeague(league.id, { jobs });
+        
+        updatedLeagues.push({
+          id: league.id,
+          name: league.name,
+          channel_id: league.channelId
+        });
+        
+        // Log with enable/disable status
+        if (!league.channelId) {
+          console.log(`[Seeder] Set contentPoster for league ${league.name} (${league.id}) - disabled (no channel)`);
+        } else {
+          console.log(`[Seeder] Set contentPoster for league ${league.name} (${league.id}) - enabled`);
+        }
+      }
+      
+      res.json({
+        ok: true,
+        message: "Content poster defaults seeded",
+        stats: {
+          total_leagues: allLeagues.length,
+          updated: updatedLeagues.length,
+          already_configured: alreadyConfigured
+        },
+        updated_leagues: updatedLeagues
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        code: "SEEDER_FAILED",
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // === END ADMIN SEEDER ENDPOINTS ===
+
   // === PHASE 3 V3 API ENDPOINTS ===
 
   // A. POST /api/v3/constitution/sync
