@@ -1003,7 +1003,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     req.session.save((err) => {
       if (err) {
         console.error('[CSRF] Session save error:', err);
-        return res.status(500).json({ error: 'Failed to create session' });
+        return res.status(500).json({ ok: false, code: "CREATE_SESSION_FAILED", message: "Failed to create session" });
       }
       res.json({ token: req.session.csrfToken });
     });
@@ -1041,7 +1041,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Admin authentication
     const adminKey = req.headers["x-admin-key"];
     if (!env.app.adminKey || adminKey !== env.app.adminKey) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Unauthorized" });
     }
     try {
       const { guildId } = req.body;
@@ -1081,10 +1081,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     } catch (error) {
       console.error("Command registration failed:", error);
-      res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      res.status(500).json({ ok: false, code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : String(error),
+       });
     }
   });
 
@@ -1109,7 +1107,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         client_id: env.discord.clientId
       });
     } catch (error) {
-      res.status(500).json({ error: String(error) });
+      res.status(500).json({ ok: false, code: "INTERNAL_ERROR", message: String(error) });
     }
   });
 
@@ -1117,15 +1115,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // These endpoints used insecure in-memory sessions and have been replaced by /api/v2/* endpoints
   
   app.get("/api/discord/user-auth-url", (req, res) => {
-    res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/discord/auth-url instead" });
+    res.status(410).json({ ok: false, code: "DEPRECATED", message: "Use /api/v2/discord/auth-url instead" });
   });
 
   app.get("/api/discord/me", (req, res) => {
-    res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/setup/discord-session instead" });
+    res.status(410).json({ ok: false, code: "DEPRECATED", message: "Use /api/v2/setup/discord-session instead" });
   });
 
   app.get("/api/discord/my-guilds", async (req, res) => {
-    res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/setup/discord-session instead" });
+    res.status(410).json({ ok: false, code: "DEPRECATED", message: "Use /api/v2/setup/discord-session instead" });
   });
 
   // Discord Bot Installation
@@ -1134,14 +1132,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { guildId } = req.query;
       
       if (!guildId || typeof guildId !== 'string') {
-        return res.status(400).json({ error: "guildId is required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "guildId is required" });
       }
 
       const botInstallUrl = discordService.generateBotInstallUrl(guildId);
       res.json({ url: botInstallUrl });
     } catch (error) {
       console.error("Error generating bot install URL:", error);
-      res.status(500).json({ error: "Failed to generate bot install URL" });
+      res.status(500).json({ ok: false, code: "GENERATE_BOT_INSTALL_URL_FAILED", message: "Failed to generate bot install URL" });
     }
   });
 
@@ -1151,14 +1149,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { guildId } = req.query;
       
       if (!guildId || typeof guildId !== 'string') {
-        return res.status(400).json({ error: "guildId is required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "guildId is required" });
       }
 
       const status = await discordService.getGuildStatus(guildId);
       res.json(status);
     } catch (error) {
       console.error("Error checking guild status:", error);
-      res.status(500).json({ error: "Failed to check guild status" });
+      res.status(500).json({ ok: false, code: "CHECK_GUILD_STATUS_FAILED", message: "Failed to check guild status" });
     }
   });
 
@@ -1168,19 +1166,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { guildId } = req.query;
       
       if (!guildId || typeof guildId !== 'string') {
-        return res.status(400).json({ error: "guildId is required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "guildId is required" });
       }
 
       const channels = await discordService.getGuildChannels(guildId);
       res.json({ channels });
     } catch (error) {
       console.error("Error fetching channels:", error);
-      res.status(500).json({ error: "Failed to fetch channels" });
+      res.status(500).json({ ok: false, code: "FETCH_CHANNELS_FAILED", message: "Failed to fetch channels" });
     }
   });
 
   app.post("/api/setup/discord", async (req, res) => {
-    res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/setup/discord instead" });
+    res.status(410).json({ ok: false, code: "DEPRECATED", message: "Use /api/v2/setup/discord instead" });
   });
 
   // === SLEEPER SETUP ENDPOINTS ===
@@ -1191,13 +1189,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { username, season } = req.query;
       
       if (!username || !season || typeof username !== 'string' || typeof season !== 'string') {
-        return res.status(400).json({ error: "username and season are required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "username and season are required" });
       }
 
       // Get Sleeper user
       const user = await sleeperService.getUser(username);
       if (!user) {
-        return res.status(404).json({ error: "Sleeper user not found" });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "Sleeper user not found" });
       }
 
       // Get leagues for this user
@@ -1214,32 +1212,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Error fetching Sleeper leagues:", error);
-      res.status(500).json({ error: "Failed to fetch Sleeper leagues" });
+      res.status(500).json({ ok: false, code: "FETCH_SLEEPER_LEAGUES_FAILED", message: "Failed to fetch Sleeper leagues" });
     }
   });
 
   app.post("/api/setup/sleeper", async (req, res) => {
-    res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/setup/sleeper instead" });
+    res.status(410).json({ ok: false, code: "DEPRECATED", message: "Use /api/v2/setup/sleeper instead" });
   });
 
   app.post("/api/setup/discord/set-home-channel", async (req, res) => {
-    res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/setup/discord instead" });
+    res.status(410).json({ ok: false, code: "DEPRECATED", message: "Use /api/v2/setup/discord instead" });
   });
 
   app.post("/api/setup/sleeper/find", async (req, res) => {
-    res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/sleeper/leagues instead" });
+    res.status(410).json({ ok: false, code: "DEPRECATED", message: "Use /api/v2/sleeper/leagues instead" });
   });
 
   app.post("/api/setup/sleeper/select", async (req, res) => {
-    res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/setup/sleeper instead" });
+    res.status(410).json({ ok: false, code: "DEPRECATED", message: "Use /api/v2/setup/sleeper instead" });
   });
 
   app.post("/api/setup/finish", async (req, res) => {
-    res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/setup/activate instead" });
+    res.status(410).json({ ok: false, code: "DEPRECATED", message: "Use /api/v2/setup/activate instead" });
   });
 
   app.get("/api/setup/status", async (req, res) => {
-    res.status(410).json({ error: "DEPRECATED", message: "Use /api/v2/setup/discord-session instead" });
+    res.status(410).json({ ok: false, code: "DEPRECATED", message: "Use /api/v2/setup/discord-session instead" });
   });
 
   // === PHASE 2 API ENDPOINTS (v2) ===
@@ -1284,7 +1282,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Auth check (admin key OR commissioner)
       const auth = await checkAuthV2(req, leagueId, true);
       if (!auth.authorized) {
-        return res.status(401).json({ error: auth.error || "Unauthorized" });
+        return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: auth.error || "Unauthorized" });
       }
 
       // Score message
@@ -1343,7 +1341,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Vibes score error:", error);
-      res.status(500).json({ error: "Failed to score message", code: "VIBES_SCORE_FAILED" });
+      res.status(500).json({ ok: false, code: "VIBES_SCORE_FAILED", message: "Failed to score message" });
     }
   });
 
@@ -1353,7 +1351,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body
       const validation = modFreezeSchema.safeParse(req.body);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid request body", details: validation.error.issues  });
       }
 
       const { leagueId, channelId, minutes, reason } = validation.data;
@@ -1361,7 +1359,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Auth check (commissioner required)
       const auth = await checkAuthV2(req, leagueId, true);
       if (!auth.authorized) {
-        return res.status(401).json({ error: auth.error || "Unauthorized" });
+        return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: auth.error || "Unauthorized" });
       }
 
       // Freeze thread
@@ -1387,7 +1385,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Mod freeze error:", error);
-      res.status(500).json({ error: "Failed to freeze thread", code: "MOD_FREEZE_FAILED" });
+      res.status(500).json({ ok: false, code: "MOD_FREEZE_FAILED", message: "Failed to freeze thread" });
     }
   });
 
@@ -1397,7 +1395,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body
       const validation = modClarifyRuleSchema.safeParse(req.body);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid request body", details: validation.error.issues  });
       }
 
       const { leagueId, channelId, question } = validation.data;
@@ -1405,7 +1403,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Auth check (commissioner required)
       const auth = await checkAuthV2(req, leagueId, true);
       if (!auth.authorized) {
-        return res.status(401).json({ error: auth.error || "Unauthorized" });
+        return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: auth.error || "Unauthorized" });
       }
 
       // Clarify rule
@@ -1429,7 +1427,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Mod clarify rule error:", error);
-      res.status(500).json({ error: "Failed to clarify rule", code: "MOD_CLARIFY_FAILED" });
+      res.status(500).json({ ok: false, code: "MOD_CLARIFY_FAILED", message: "Failed to clarify rule" });
     }
   });
 
@@ -1439,7 +1437,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { leagueId, status } = req.query;
 
       if (!leagueId || typeof leagueId !== 'string') {
-        return res.status(400).json({ error: "leagueId query parameter is required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "leagueId query parameter is required" });
       }
 
       // Get disputes for league
@@ -1454,7 +1452,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ disputes });
     } catch (error) {
       console.error("List disputes error:", error);
-      res.status(500).json({ error: "Failed to list disputes", code: "DISPUTES_LIST_FAILED" });
+      res.status(500).json({ ok: false, code: "DISPUTES_LIST_FAILED", message: "Failed to list disputes" });
     }
   });
 
@@ -1491,7 +1489,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(dispute);
     } catch (error) {
       console.error("Create dispute error:", error);
-      res.status(500).json({ error: "Failed to create dispute", code: "DISPUTE_CREATE_FAILED" });
+      res.status(500).json({ ok: false, code: "DISPUTE_CREATE_FAILED", message: "Failed to create dispute" });
     }
   });
 
@@ -1503,7 +1501,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body
       const validation = updateDisputeSchema.safeParse(req.body);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid request body", details: validation.error.issues  });
       }
 
       const { status, resolution } = validation.data;
@@ -1511,7 +1509,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get existing dispute
       const existingDispute = await storage.getDispute(disputeId);
       if (!existingDispute) {
-        return res.status(404).json({ error: "Dispute not found" });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "Dispute not found" });
       }
 
       // Update dispute
@@ -1535,7 +1533,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(updatedDispute);
     } catch (error) {
       console.error("Update dispute error:", error);
-      res.status(500).json({ error: "Failed to update dispute", code: "DISPUTE_UPDATE_FAILED" });
+      res.status(500).json({ ok: false, code: "DISPUTE_UPDATE_FAILED", message: "Failed to update dispute" });
     }
   });
 
@@ -1548,10 +1546,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const evaluation = await storage.getTradeEvaluation(leagueId, tradeId);
       
       if (!evaluation) {
-        return res.status(404).json({ 
-          error: "Trade evaluation not found",
-          message: "This trade has not been evaluated yet. Use POST /api/v2/trades/evaluate to create an evaluation."
-        });
+        return res.status(404).json({ ok: false, code: "Trade evaluation not found", message: "This trade has not been evaluated yet. Use POST /api/v2/trades/evaluate to create an evaluation." });
       }
 
       res.json({
@@ -1561,7 +1556,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Get trade evaluation error:", error);
-      res.status(500).json({ error: "Failed to get trade evaluation", code: "TRADE_EVAL_GET_FAILED" });
+      res.status(500).json({ ok: false, code: "TRADE_EVAL_GET_FAILED", message: "Failed to get trade evaluation" });
     }
   });
 
@@ -1571,7 +1566,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body
       const validation = evaluateTradeSchema.safeParse(req.body);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid request body", details: validation.error.issues  });
       }
 
       const { leagueId, tradeId, proposal } = validation.data;
@@ -1597,7 +1592,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Trade evaluate error:", error);
-      res.status(500).json({ error: "Failed to evaluate trade", code: "TRADE_EVALUATE_FAILED" });
+      res.status(500).json({ ok: false, code: "TRADE_EVALUATE_FAILED", message: "Failed to evaluate trade" });
     }
   });
 
@@ -2324,7 +2319,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body
       const validation = computeHighlightsSchema.safeParse(req.body);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid request body", details: validation.error.issues  });
       }
 
       let { leagueId, week } = validation.data;
@@ -2332,13 +2327,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Auth check (admin key OR commissioner)
       const auth = await checkAuthV2(req, leagueId, true);
       if (!auth.authorized) {
-        return res.status(403).json({ error: auth.error || "Unauthorized", code: "AUTH_REQUIRED" });
+        return res.status(403).json({ ok: false, code: "AUTH_REQUIRED", message: auth.error || "Unauthorized" });
       }
 
       // Verify league exists
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
 
       // If week not provided, use current week from Sleeper
@@ -2365,7 +2360,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Compute highlights error:", error);
-      res.status(500).json({ error: "Failed to compute highlights", code: "HIGHLIGHTS_COMPUTE_FAILED" });
+      res.status(500).json({ ok: false, code: "HIGHLIGHTS_COMPUTE_FAILED", message: "Failed to compute highlights" });
     }
   });
 
@@ -2375,7 +2370,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate query params
       const validation = getHighlightsSchema.safeParse(req.query);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid query parameters", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid query parameters", details: validation.error.issues  });
       }
 
       const { leagueId, week } = validation.data;
@@ -2383,7 +2378,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Verify league exists
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
 
       // Get highlights
@@ -2398,7 +2393,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ highlights });
     } catch (error) {
       console.error("Get highlights error:", error);
-      res.status(500).json({ error: "Failed to get highlights", code: "HIGHLIGHTS_GET_FAILED" });
+      res.status(500).json({ ok: false, code: "HIGHLIGHTS_GET_FAILED", message: "Failed to get highlights" });
     }
   });
 
@@ -2408,7 +2403,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body
       const validation = updateRivalriesSchema.safeParse(req.body);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid request body", details: validation.error.issues  });
       }
 
       let { leagueId, week } = validation.data;
@@ -2416,13 +2411,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Auth check (admin key OR commissioner)
       const auth = await checkAuthV2(req, leagueId, true);
       if (!auth.authorized) {
-        return res.status(403).json({ error: auth.error || "Unauthorized", code: "AUTH_REQUIRED" });
+        return res.status(403).json({ ok: false, code: "AUTH_REQUIRED", message: auth.error || "Unauthorized" });
       }
 
       // Verify league exists
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
 
       // If week not provided, use current week from Sleeper
@@ -2445,7 +2440,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Update rivalries error:", error);
-      res.status(500).json({ error: "Failed to update rivalries", code: "RIVALRIES_UPDATE_FAILED" });
+      res.status(500).json({ ok: false, code: "RIVALRIES_UPDATE_FAILED", message: "Failed to update rivalries" });
     }
   });
 
@@ -2455,7 +2450,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate query params
       const validation = getRivalriesSchema.safeParse(req.query);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid query parameters", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid query parameters", details: validation.error.issues  });
       }
 
       const { leagueId } = validation.data;
@@ -2463,7 +2458,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Verify league exists
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
 
       // Get all rivalries for the league
@@ -2472,7 +2467,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ rivalries });
     } catch (error) {
       console.error("Get rivalries error:", error);
-      res.status(500).json({ error: "Failed to get rivalries", code: "RIVALRIES_GET_FAILED" });
+      res.status(500).json({ ok: false, code: "RIVALRIES_GET_FAILED", message: "Failed to get rivalries" });
     }
   });
 
@@ -2484,7 +2479,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body
       const validation = createReminderSchemaV2.safeParse(req.body);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid request body", details: validation.error.issues  });
       }
 
       const { leagueId, type, cron, message, channelId } = validation.data;
@@ -2492,7 +2487,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Verify league exists
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
 
       // Auto-generate cron and message for preset types
@@ -2516,7 +2511,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Use league's channelId if not specified
       const targetChannelId = channelId || league.channelId;
       if (!targetChannelId) {
-        return res.status(400).json({ error: "Channel ID required", code: "CHANNEL_REQUIRED" });
+        return res.status(400).json({ ok: false, code: "CHANNEL_REQUIRED", message: "Channel ID required" });
       }
 
       // Check for existing reminder of same type (idempotency)
@@ -2544,7 +2539,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json({ id: reminderId });
     } catch (error) {
       console.error("Create reminder error:", error);
-      res.status(500).json({ error: "Failed to create reminder", code: "REMINDER_CREATE_FAILED" });
+      res.status(500).json({ ok: false, code: "REMINDER_CREATE_FAILED", message: "Failed to create reminder" });
     }
   });
 
@@ -2554,7 +2549,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate query params
       const validation = getRemindersSchemaV2.safeParse(req.query);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid query parameters", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid query parameters", details: validation.error.issues  });
       }
 
       const { leagueId } = validation.data;
@@ -2562,7 +2557,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Verify league exists
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
 
       // Get all reminders for the league
@@ -2581,7 +2576,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ reminders: remindersWithNextRun });
     } catch (error) {
       console.error("Get reminders error:", error);
-      res.status(500).json({ error: "Failed to get reminders", code: "REMINDERS_GET_FAILED" });
+      res.status(500).json({ ok: false, code: "REMINDERS_GET_FAILED", message: "Failed to get reminders" });
     }
   });
 
@@ -2599,7 +2594,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(204).send();
     } catch (error) {
       console.error("Delete reminder error:", error);
-      res.status(500).json({ error: "Failed to delete reminder", code: "REMINDER_DELETE_FAILED" });
+      res.status(500).json({ ok: false, code: "REMINDER_DELETE_FAILED", message: "Failed to delete reminder" });
     }
   });
 
@@ -2609,7 +2604,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body
       const validation = enqueueContentSchema.safeParse(req.body);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid request body", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid request body", details: validation.error.issues  });
       }
 
       const { leagueId, channelId, scheduledAt, template, payload } = validation.data;
@@ -2617,13 +2612,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Auth check (admin key OR commissioner)
       const auth = await checkAuthV2(req, leagueId, true);
       if (!auth.authorized) {
-        return res.status(403).json({ error: auth.error || "Unauthorized", code: "AUTH_REQUIRED" });
+        return res.status(403).json({ ok: false, code: "AUTH_REQUIRED", message: auth.error || "Unauthorized" });
       }
 
       // Verify league exists
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
 
       // Enqueue content
@@ -2645,7 +2640,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(queuedItem);
     } catch (error) {
       console.error("Enqueue content error:", error);
-      res.status(500).json({ error: "Failed to enqueue content", code: "CONTENT_ENQUEUE_FAILED" });
+      res.status(500).json({ ok: false, code: "CONTENT_ENQUEUE_FAILED", message: "Failed to enqueue content" });
     }
   });
 
@@ -2655,7 +2650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate query params
       const validation = getContentQueueSchema.safeParse(req.query);
       if (!validation.success) {
-        return res.status(400).json({ error: "Invalid query parameters", details: validation.error.issues });
+        return res.status(400).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid query parameters", details: validation.error.issues  });
       }
 
       const { leagueId, status } = validation.data;
@@ -2663,7 +2658,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Verify league exists
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: "League not found", code: "LEAGUE_NOT_FOUND" });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
 
       // Get content queue items
@@ -2672,7 +2667,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ queue });
     } catch (error) {
       console.error("Get content queue error:", error);
-      res.status(500).json({ error: "Failed to get content queue", code: "CONTENT_QUEUE_GET_FAILED" });
+      res.status(500).json({ ok: false, code: "CONTENT_QUEUE_GET_FAILED", message: "Failed to get content queue" });
     }
   });
 
@@ -2682,7 +2677,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Admin authentication
       const adminKey = req.headers["x-admin-key"];
       if (!env.app.adminKey || adminKey !== env.app.adminKey) {
-        return res.status(401).json({ error: "Unauthorized", code: "UNAUTHORIZED" });
+        return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Unauthorized" });
       }
 
       // Post queued content
@@ -2696,7 +2691,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ posted });
     } catch (error) {
       console.error("Run content poster error:", error);
-      res.status(500).json({ error: "Failed to run content poster", code: "CONTENT_RUN_FAILED" });
+      res.status(500).json({ ok: false, code: "CONTENT_RUN_FAILED", message: "Failed to run content poster" });
     }
   });
 
@@ -3002,7 +2997,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ cta, hasSession: !!user, hasLeague: false });
     } catch (e) {
       console.error("[Modes]", e);
-      res.status(500).json({ error: "MODES_FAILED" });
+      res.status(500).json({ ok: false, code: "MODES_FAILED", message: "MODES_FAILED" });
     }
   });
 
@@ -3026,7 +3021,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ ok: true, leagueId });
     } catch (e) {
       console.error("[Demo Activate]", e);
-      res.status(500).json({ error: "DEMO_ACTIVATE_FAILED" });
+      res.status(500).json({ ok: false, code: "DEMO_ACTIVATE_FAILED", message: "DEMO_ACTIVATE_FAILED" });
     }
   });
 
@@ -3043,7 +3038,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/app/beta/activate", async (req, res) => {
     const Body = z.object({ inviteCode: z.string().optional() });
     const body = Body.safeParse(req.body);
-    if (!body.success) return res.status(400).json({ error: "BAD_REQUEST" });
+    if (!body.success) return res.status(400).json({ ok: false, code: "BAD_REQUEST", message: "BAD_REQUEST" });
 
     try {
       let user = await auth.getSessionUser(req);
@@ -3055,7 +3050,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       if (!user) {
-        return res.status(401).json({ error: "AUTH_REQUIRED" });
+        return res.status(401).json({ ok: false, code: "AUTH_REQUIRED", message: "AUTH_REQUIRED" });
       }
 
       await auth.ensureAccount(req, user);
@@ -3069,7 +3064,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ ok: true, next: "/setup" });
     } catch (e) {
       console.error("[Beta Activate]", e);
-      res.status(500).json({ error: "BETA_ACTIVATE_FAILED" });
+      res.status(500).json({ ok: false, code: "BETA_ACTIVATE_FAILED", message: "BETA_ACTIVATE_FAILED" });
     }
   });
 
@@ -3225,7 +3220,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         username: discord?.username,
       });
     } catch (e) {
-      return res.status(500).json({ error: "DEBUG_OAUTH", detail: String(e) });
+      return res.status(500).json({ ok: false, code: "DEBUG_OAUTH", message: "Error occurred", detail: String(e)  });
     }
   });
 
@@ -3235,12 +3230,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const discord = req.session?.discord;
       
       if (!discord?.access_token) {
-        return res.status(401).json({ error: "NO_USER_TOKEN", message: "No Discord access token in session" });
+        return res.status(401).json({ ok: false, code: "NO_USER_TOKEN", message: "No Discord access token in session" });
       }
 
       // Check if token is expired
       if (discord.expires_at && Date.now() > discord.expires_at) {
-        return res.status(401).json({ error: "TOKEN_EXPIRED", message: "Discord token expired, please re-authenticate" });
+        return res.status(401).json({ ok: false, code: "TOKEN_EXPIRED", message: "Discord token expired, please re-authenticate" });
       }
 
       console.log('[Discord Guilds] Fetching guilds with user token...');
@@ -3295,7 +3290,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (e) {
       console.error('[Discord Guilds]', e);
-      return res.status(500).json({ error: "GUILDS_FETCH_FAILED", message: String(e) });
+      return res.status(500).json({ ok: false, code: "GUILDS_FETCH_FAILED", message: String(e) });
     }
   });
 
@@ -3304,7 +3299,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { guildId } = req.query;
       if (!guildId || typeof guildId !== 'string') {
-        return res.status(400).json({ error: 'MISSING_GUILD_ID', message: 'guildId query parameter required' });
+        return res.status(400).json({ ok: false, code: "MISSING_GUILD_ID", message: "guildId query parameter required" });
       }
 
       const url = new URL('https://discord.com/api/oauth2/authorize');
@@ -3320,7 +3315,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ url: url.toString() });
     } catch (e) {
       console.error('[Bot Install URL]', e);
-      res.status(500).json({ error: 'INSTALL_URL_FAILED', message: 'Failed to generate install URL' });
+      res.status(500).json({ ok: false, code: "INSTALL_URL_FAILED", message: "Failed to generate install URL" });
     }
   });
 
@@ -3329,12 +3324,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { guildId } = req.query;
       if (!guildId || typeof guildId !== 'string') {
-        return res.status(400).json({ error: "MISSING_GUILD_ID", message: "guildId query parameter required" });
+        return res.status(400).json({ ok: false, code: "MISSING_GUILD_ID", message: "guildId query parameter required" });
       }
 
       // Validate guildId is a valid Discord snowflake
       if (!/^\d{10,20}$/.test(guildId)) {
-        return res.status(400).json({ error: "BAD_GUILD_ID", message: "guildId must be a Discord snowflake (10-20 digits)" });
+        return res.status(400).json({ ok: false, code: "BAD_GUILD_ID", message: "guildId must be a Discord snowflake (10-20 digits)" });
       }
 
       console.log(`[Discord Channels] Fetching channels for guild ${guildId}`);
@@ -3346,10 +3341,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Bot not in guild or missing permissions
       if (response.status === 403 || response.status === 404) {
         console.log(`[Discord Channels] Bot not in guild ${guildId} (status: ${response.status})`);
-        return res.status(409).json({ 
-          error: "BOT_NOT_IN_GUILD", 
-          message: "Bot is not installed in this server" 
-        });
+        return res.status(409).json({ ok: false, code: "BOT_NOT_IN_GUILD", message: "Bot is not installed in this server" });
       }
 
       if (!response.ok) {
@@ -3378,7 +3370,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ channels: textChannels });
     } catch (e) {
       console.error("[Discord Channels]", e);
-      res.status(500).json({ error: "CHANNELS_FETCH_FAILED", message: String(e) });
+      res.status(500).json({ ok: false, code: "CHANNELS_FETCH_FAILED", message: String(e) });
     }
   });
 
@@ -4187,7 +4179,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (e) {
       console.error("[Dashboard Stats]", e);
-      res.status(500).json({ error: "STATS_FAILED", message: "Failed to fetch stats" });
+      res.status(500).json({ ok: false, code: "STATS_FAILED", message: "Failed to fetch stats" });
     }
   });
 
@@ -4209,7 +4201,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ discord: disc || null, sleeper: sleep || null });
     } catch (e) {
       console.error("[Dashboard Integrations]", e);
-      res.status(500).json({ error: "INTEGRATIONS_FAILED", message: "Failed to fetch integrations" });
+      res.status(500).json({ ok: false, code: "INTEGRATIONS_FAILED", message: "Failed to fetch integrations" });
     }
   });
 
@@ -4229,7 +4221,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ items: (result as unknown as any[]) || [] });
     } catch (e) {
       console.error("[Dashboard Activity]", e);
-      res.status(500).json({ error: "ACTIVITY_FAILED", message: "Failed to fetch activity" });
+      res.status(500).json({ ok: false, code: "ACTIVITY_FAILED", message: "Failed to fetch activity" });
     }
   });
 
@@ -5043,7 +5035,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (e) {
       console.error("[Me]", e);
-      res.status(500).json({ error: "ME_FAILED" });
+      res.status(500).json({ ok: false, code: "ME_FAILED", message: "ME_FAILED" });
     }
   });
 
@@ -5364,7 +5356,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Dashboard stats error:", error);
-      res.status(500).json({ error: "Failed to fetch dashboard stats" });
+      res.status(500).json({ ok: false, code: "FETCH_DASHBOARD_STATS_FAILED", message: "Failed to fetch dashboard stats" });
     }
   });
 
@@ -5384,7 +5376,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Discord integration status error:", error);
-      res.status(500).json({ error: "Failed to fetch Discord status" });
+      res.status(500).json({ ok: false, code: "FETCH_DISCORD_STATUS_FAILED", message: "Failed to fetch Discord status" });
     }
   });
 
@@ -5416,7 +5408,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Sleeper integration status error:", error);
-      res.status(500).json({ error: "Failed to fetch Sleeper status" });
+      res.status(500).json({ ok: false, code: "FETCH_SLEEPER_STATUS_FAILED", message: "Failed to fetch Sleeper status" });
     }
   });
 
@@ -5437,7 +5429,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(commands);
     } catch (error) {
       console.error("Slash commands error:", error);
-      res.status(500).json({ error: "Failed to fetch slash commands" });
+      res.status(500).json({ ok: false, code: "FETCH_SLASH_COMMANDS_FAILED", message: "Failed to fetch slash commands" });
     }
   });
 
@@ -5488,7 +5480,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("RAG status error:", error);
-      res.status(500).json({ error: "Failed to fetch RAG status" });
+      res.status(500).json({ ok: false, code: "FETCH_RAG_STATUS_FAILED", message: "Failed to fetch RAG status" });
     }
   });
 
@@ -5519,7 +5511,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("AI status error:", error);
-      res.status(500).json({ error: "Failed to fetch AI status" });
+      res.status(500).json({ ok: false, code: "FETCH_AI_STATUS_FAILED", message: "Failed to fetch AI status" });
     }
   });
 
@@ -5542,7 +5534,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(activities);
     } catch (error) {
       console.error("Activity log error:", error);
-      res.status(500).json({ error: "Failed to fetch activity" });
+      res.status(500).json({ ok: false, code: "FETCH_ACTIVITY_FAILED", message: "Failed to fetch activity" });
     }
   });
 
@@ -5551,7 +5543,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { code, redirectUri } = req.body;
       
       if (!code || !redirectUri) {
-        return res.status(400).json({ error: "code and redirectUri are required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "code and redirectUri are required" });
       }
 
       const tokenData = await discordService.exchangeCodeForToken(code, redirectUri);
@@ -5577,7 +5569,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Discord OAuth callback failed:", error);
-      res.status(500).json({ error: "OAuth callback failed" });
+      res.status(500).json({ ok: false, code: "INTERNAL_ERROR", message: "OAuth callback failed" });
     }
   });
 
@@ -5592,13 +5584,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const publicKey = env.discord.publicKey;
 
       if (!signature || !timestamp) {
-        return res.status(401).json({ error: "Missing required headers" });
+        return res.status(401).json({ ok: false, code: "REQUIRED_FIELD", message: "Missing required headers" });
       }
 
       const body = req.body.toString('utf8');
       
       if (!verifyDiscordSignature(signature, timestamp, body, publicKey)) {
-        return res.status(401).json({ error: "Invalid signature" });
+        return res.status(401).json({ ok: false, code: "INVALID_REQUEST", message: "Invalid signature" });
       }
 
       const interaction = JSON.parse(body);
@@ -5767,7 +5759,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      res.status(400).json({ error: "Unsupported interaction type" });
+      res.status(400).json({ ok: false, code: "BAD_REQUEST", message: "Unsupported interaction type" });
     } catch (error) {
       const latency = Date.now() - startTime;
       console.error(`Interaction failed after ${latency}ms:`, error);
@@ -5805,7 +5797,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ leagues: allLeagues });
     } catch (error) {
       console.error("Demo leagues error:", error);
-      res.status(500).json({ error: "Failed to fetch leagues" });
+      res.status(500).json({ ok: false, code: "FETCH_LEAGUES_FAILED", message: "Failed to fetch leagues" });
     }
   });
 
@@ -5816,13 +5808,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const league = await storage.getLeague(leagueId);
       
       if (!league) {
-        return res.status(404).json({ error: "League not found" });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
       
       res.json({ league });
     } catch (error) {
       console.error("Demo league detail error:", error);
-      res.status(500).json({ error: "Failed to fetch league" });
+      res.status(500).json({ ok: false, code: "FETCH_LEAGUE_FAILED", message: "Failed to fetch league" });
     }
   });
 
@@ -5831,14 +5823,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { accountId } = req.query;
       
       if (!accountId || typeof accountId !== "string") {
-        return res.status(400).json({ error: "accountId is required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "accountId is required" });
       }
 
       const leagues = await storage.getLeaguesByAccount(accountId);
       res.json(leagues);
     } catch (error) {
       console.error("Failed to get leagues:", error);
-      res.status(500).json({ error: "Failed to get leagues" });
+      res.status(500).json({ ok: false, code: "GET_LEAGUES_FAILED", message: "Failed to get leagues" });
     }
   });
 
@@ -5886,7 +5878,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ id: leagueId, league });
     } catch (error) {
       console.error("Failed to create league:", error);
-      res.status(500).json({ error: "Failed to create league" });
+      res.status(500).json({ ok: false, code: "CREATE_LEAGUE_FAILED", message: "Failed to create league" });
     }
   });
 
@@ -5896,13 +5888,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const league = await storage.getLeague(leagueId);
       
       if (!league) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
 
       res.json(league);
     } catch (error) {
       console.error("Failed to get league:", error);
-      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get league" } });
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get league" });
     }
   });
 
@@ -5920,7 +5912,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
 
       // Update league
@@ -5946,7 +5938,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         requestId,
         latency,
       });
-      res.status(500).json({ error: { code: "UPDATE_FAILED", message: "Failed to update league" } });
+      res.status(500).json({ ok: false, code: "UPDATE_FAILED", message: "Failed to update league" });
     }
   });
 
@@ -5957,13 +5949,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const league = await storage.getLeague(leagueId);
       
       if (!league) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
 
       res.json(league);
     } catch (error) {
       console.error("Failed to get league:", error);
-      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get league" } });
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get league" });
     }
   });
 
@@ -5981,7 +5973,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
 
       await storage.updateLeague(leagueId, updateData);
@@ -6006,7 +5998,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         requestId,
         latency,
       });
-      res.status(500).json({ error: { code: "UPDATE_FAILED", message: "Failed to update league" } });
+      res.status(500).json({ ok: false, code: "UPDATE_FAILED", message: "Failed to update league" });
     }
   });
 
@@ -6018,7 +6010,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(league);
     } catch (error) {
       console.error("Failed to get Sleeper league:", error);
-      res.status(500).json({ error: "Failed to get league data" });
+      res.status(500).json({ ok: false, code: "GET_LEAGUE_DATA_FAILED", message: "Failed to get league data" });
     }
   });
 
@@ -6058,7 +6050,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Failed to sync Sleeper data:", error);
-      res.status(500).json({ error: "Failed to sync league data" });
+      res.status(500).json({ ok: false, code: "SYNC_LEAGUE_DATA_FAILED", message: "Failed to sync league data" });
     }
   });
 
@@ -6070,7 +6062,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { leagueId } = req.query;
       
       if (!leagueId || typeof leagueId !== 'string') {
-        return res.status(400).json({ error: "leagueId query parameter is required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "leagueId query parameter is required" });
       }
 
       const documents = await storage.getDocumentsWithMetadata(leagueId);
@@ -6078,7 +6070,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ documents });
     } catch (error) {
       console.error("Failed to get documents:", error);
-      res.status(500).json({ error: "Failed to get documents" });
+      res.status(500).json({ ok: false, code: "GET_DOCUMENTS_FAILED", message: "Failed to get documents" });
     }
   });
 
@@ -6089,11 +6081,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const document = await storage.getDocument(docId);
       if (!document) {
-        return res.status(404).json({ error: "Document not found" });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "Document not found" });
       }
 
       if (!document.content) {
-        return res.status(400).json({ error: "Document has no content to reindex" });
+        return res.status(400).json({ ok: false, code: "BAD_REQUEST", message: "Document has no content to reindex" });
       }
 
       // Clear existing rules for this document
@@ -6126,7 +6118,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Failed to reindex document:", error);
-      res.status(500).json({ error: "Failed to reindex document" });
+      res.status(500).json({ ok: false, code: "REINDEX_DOCUMENT_FAILED", message: "Failed to reindex document" });
     }
   });
 
@@ -6136,7 +6128,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { content, version, type, title } = req.body;
       
       if (!content || !version) {
-        return res.status(400).json({ error: "content and version are required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "content and version are required" });
       }
 
       const result = await ragService.indexDocument(leagueId, content, version, type, title);
@@ -6146,7 +6138,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(result);
     } catch (error) {
       console.error("Failed to index document:", error);
-      res.status(500).json({ error: "Failed to index document" });
+      res.status(500).json({ ok: false, code: "INDEX_DOCUMENT_FAILED", message: "Failed to index document" });
     }
   });
 
@@ -6156,7 +6148,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { query, limit, threshold, includePassages } = req.body;
       
       if (!query) {
-        return res.status(400).json({ error: "query is required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "query is required" });
       }
 
       const results = await ragService.searchSimilarRules(
@@ -6170,7 +6162,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(results);
     } catch (error) {
       console.error("Failed to search rules:", error);
-      res.status(500).json({ error: "Failed to search rules" });
+      res.status(500).json({ ok: false, code: "SEARCH_RULES_FAILED", message: "Failed to search rules" });
     }
   });
 
@@ -6181,7 +6173,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(stats);
     } catch (error) {
       console.error("Failed to get RAG stats:", error);
-      res.status(500).json({ error: "Failed to get stats" });
+      res.status(500).json({ ok: false, code: "GET_STATS_FAILED", message: "Failed to get stats" });
     }
   });
 
@@ -6190,24 +6182,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Validate X-Admin-Key header
     const adminKey = req.headers['x-admin-key'];
     if (!adminKey || adminKey !== env.app.adminKey) {
-      return res.status(401).json({ error: "Unauthorized - valid X-Admin-Key required" });
+      return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Unauthorized - valid X-Admin-Key required" });
     }
 
     try {
       const { leagueId } = req.query;
       
       if (!leagueId) {
-        return res.status(400).json({ error: "leagueId is required" });
+        return res.status(400).json({ ok: false, code: "REQUIRED_FIELD", message: "leagueId is required" });
       }
 
       const league = await storage.getLeague(leagueId as string);
       if (!league) {
-        return res.status(404).json({ error: "League not found" });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
 
       // Generate real digest using Sleeper data
       if (!league.sleeperLeagueId) {
-        return res.status(400).json({ error: "League not configured with Sleeper ID" });
+        return res.status(400).json({ ok: false, code: "BAD_REQUEST", message: "League not configured with Sleeper ID" });
       }
 
       let digestContent;
@@ -6246,7 +6238,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Failed to generate digest:", error);
-      res.status(500).json({ error: "Failed to generate digest" });
+      res.status(500).json({ ok: false, code: "GENERATE_DIGEST_FAILED", message: "Failed to generate digest" });
     }
   });
 
@@ -6321,7 +6313,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(events);
     } catch (error) {
       console.error("Failed to get events:", error);
-      res.status(500).json({ error: "Failed to get events" });
+      res.status(500).json({ ok: false, code: "GET_EVENTS_FAILED", message: "Failed to get events" });
     }
   });
 
@@ -6331,18 +6323,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { accountId, guildId } = req.body;
       
       if (!guildId) {
-        return res.status(400).json({ error: { code: "MISSING_GUILD", message: "Guild ID is required" } });
+        return res.status(400).json({ ok: false, code: "MISSING_GUILD", message: "Guild ID is required" });
       }
 
       // Get league by guild ID
       const league = await storage.getLeagueByGuildId(guildId);
       if (!league) {
-        return res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found for this guild" } });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found for this guild" });
       }
 
       // Verify it has channel configured
       if (!league.channelId) {
-        return res.status(400).json({ error: { code: "NO_CHANNEL", message: "No channel configured. Complete Discord setup first." } });
+        return res.status(400).json({ ok: false, code: "NO_CHANNEL", message: "No channel configured. Complete Discord setup first." });
       }
 
       // Update league timestamp
@@ -6364,7 +6356,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Failed to activate league:", error);
-      res.status(500).json({ error: { code: "ACTIVATION_FAILED", message: "Failed to activate league" } });
+      res.status(500).json({ ok: false, code: "ACTIVATION_FAILED", message: "Failed to activate league" });
     }
   });
 
@@ -6372,14 +6364,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/discord/register-commands", async (req, res) => {
     const adminKey = req.headers["x-admin-key"];
     if (!env.app.adminKey || adminKey !== env.app.adminKey) {
-      return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Admin key required" } });
+      return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Admin key required" });
     }
 
     try {
       const { guildId } = req.query;
       
       if (!guildId || typeof guildId !== 'string') {
-        return res.status(400).json({ error: { code: "MISSING_GUILD", message: "Guild ID required in query" } });
+        return res.status(400).json({ ok: false, code: "MISSING_GUILD", message: "Guild ID required in query" });
       }
 
       const commands = discordService.getSlashCommands();
@@ -6393,7 +6385,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Failed to register commands:", error);
-      res.status(500).json({ error: { code: "REGISTRATION_FAILED", message: "Failed to register commands" } });
+      res.status(500).json({ ok: false, code: "REGISTRATION_FAILED", message: "Failed to register commands" });
     }
   });
 
@@ -6401,19 +6393,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/discord/post-test", async (req, res) => {
     const adminKey = req.headers["x-admin-key"];
     if (!env.app.adminKey || adminKey !== env.app.adminKey) {
-      return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Admin key required" } });
+      return res.status(401).json({ ok: false, code: "UNAUTHORIZED", message: "Admin key required" });
     }
 
     try {
       const { guildId } = req.query;
       
       if (!guildId || typeof guildId !== 'string') {
-        return res.status(400).json({ error: { code: "MISSING_GUILD", message: "Guild ID required in query" } });
+        return res.status(400).json({ ok: false, code: "MISSING_GUILD", message: "Guild ID required in query" });
       }
 
       const league = await storage.getLeagueByGuildId(guildId);
       if (!league || !league.channelId) {
-        return res.status(404).json({ error: { code: "NO_CHANNEL", message: "No channel configured for this guild" } });
+        return res.status(404).json({ ok: false, code: "NO_CHANNEL", message: "No channel configured for this guild" });
       }
 
       const embed = {
@@ -6437,7 +6429,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Failed to post test message:", error);
-      res.status(500).json({ error: { code: "POST_FAILED", message: "Failed to post test message" } });
+      res.status(500).json({ ok: false, code: "POST_FAILED", message: "Failed to post test message" });
     }
   });
 
@@ -6447,12 +6439,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { leagueId } = req.query;
       
       if (!leagueId || typeof leagueId !== 'string') {
-        return res.status(400).json({ error: { code: "MISSING_LEAGUE", message: "League ID required" } });
+        return res.status(400).json({ ok: false, code: "MISSING_LEAGUE", message: "League ID required" });
       }
 
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
 
       // Get all owner mappings for this league
@@ -6461,7 +6453,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(mappings);
     } catch (error) {
       console.error("Failed to get owners:", error);
-      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get owners" } });
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get owners" });
     }
   });
 
@@ -6471,12 +6463,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { leagueId } = req.query;
       
       if (!leagueId || typeof leagueId !== 'string') {
-        return res.status(400).json({ error: { code: "MISSING_LEAGUE", message: "League ID required" } });
+        return res.status(400).json({ ok: false, code: "MISSING_LEAGUE", message: "League ID required" });
       }
 
       const league = await storage.getLeague(leagueId);
       if (!league || !league.sleeperLeagueId) {
-        return res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found or not configured" } });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found or not configured" });
       }
 
       // Get Discord members, Sleeper rosters, and existing mappings in parallel
@@ -6508,7 +6500,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Failed to get owner mapping data:", error);
-      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get owner mapping data" } });
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get owner mapping data" });
     }
   });
 
@@ -6518,12 +6510,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { leagueId, pairs } = req.body;
       
       if (!leagueId || !pairs || !Array.isArray(pairs)) {
-        return res.status(400).json({ error: { code: "INVALID_INPUT", message: "leagueId and pairs array required" } });
+        return res.status(400).json({ ok: false, code: "INVALID_INPUT", message: "leagueId and pairs array required" });
       }
 
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
       }
 
       // Validate and upsert each mapping
@@ -6558,7 +6550,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Failed to map owners:", error);
-      res.status(500).json({ error: { code: "MAPPING_FAILED", message: "Failed to map owners" } });
+      res.status(500).json({ ok: false, code: "MAPPING_FAILED", message: "Failed to map owners" });
     }
   });
 
@@ -6571,7 +6563,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
+        res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
         await storage.createEvent({
           type: "ERROR_OCCURRED",
           leagueId,
@@ -6586,7 +6578,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ polls });
     } catch (error) {
       console.error("Failed to get polls:", error);
-      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get polls" } });
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get polls" });
       await storage.createEvent({
         type: "ERROR_OCCURRED",
         payload: { error: String(error), endpoint: "/api/polls/:leagueId" },
@@ -6604,24 +6596,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { leagueId, question, options, expiresAt, createdBy } = req.body;
 
       if (!leagueId || !question || !options || !Array.isArray(options) || options.length < 2 || !createdBy) {
-        return res.status(400).json({ 
-          error: { 
-            code: "INVALID_INPUT", 
-            message: "leagueId, question, options (min 2), and createdBy are required" 
-          } 
-        });
+        return res.status(400).json({ ok: false, code: "INVALID_INPUT", message: "leagueId, question, options (min 2), and createdBy are required" });
       }
 
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
+        res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
         return;
       }
 
       if (!league.channelId) {
-        return res.status(400).json({ 
-          error: { code: "NO_CHANNEL", message: "League has no Discord channel configured" } 
-        });
+        return res.status(400).json({ ok: false, code: "NO_CHANNEL", message: "League has no Discord channel configured" });
       }
 
       // Create the poll in database
@@ -6681,7 +6666,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     } catch (error) {
       console.error("Failed to create poll:", error);
-      res.status(500).json({ error: { code: "CREATE_FAILED", message: "Failed to create poll" } });
+      res.status(500).json({ ok: false, code: "CREATE_FAILED", message: "Failed to create poll" });
       await storage.createEvent({
         type: "ERROR_OCCURRED",
         payload: { error: String(error), endpoint: "/api/polls" },
@@ -6699,24 +6684,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { leagueId, question, options, expiresAt, createdBy } = req.body;
 
       if (!leagueId || !question || !options || !Array.isArray(options) || options.length < 2 || !createdBy) {
-        return res.status(400).json({ 
-          error: { 
-            code: "INVALID_INPUT", 
-            message: "leagueId, question, options (min 2), and createdBy are required" 
-          } 
-        });
+        return res.status(400).json({ ok: false, code: "INVALID_INPUT", message: "leagueId, question, options (min 2), and createdBy are required" });
       }
 
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        res.status(404).json({ error: { code: "LEAGUE_NOT_FOUND", message: "League not found" } });
+        res.status(404).json({ ok: false, code: "LEAGUE_NOT_FOUND", message: "League not found" });
         return;
       }
 
       if (!league.channelId) {
-        return res.status(400).json({ 
-          error: { code: "NO_CHANNEL", message: "League has no Discord channel configured" } 
-        });
+        return res.status(400).json({ ok: false, code: "NO_CHANNEL", message: "League has no Discord channel configured" });
       }
 
       const pollId = await storage.createPoll({
@@ -6771,7 +6749,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     } catch (error) {
       console.error("Failed to create poll:", error);
-      res.status(500).json({ error: { code: "CREATE_FAILED", message: "Failed to create poll" } });
+      res.status(500).json({ ok: false, code: "CREATE_FAILED", message: "Failed to create poll" });
       await storage.createEvent({
         type: "ERROR_OCCURRED",
         payload: { error: String(error), endpoint: "/api/v2/polls" },
@@ -6792,14 +6770,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
 
       const members = await storage.getLeagueMembers(leagueId);
       res.json({ members });
     } catch (error) {
       console.error("Failed to get members:", error);
-      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get members" } });
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get members" });
     }
   });
 
@@ -6810,7 +6788,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
 
       const memberData = insertMemberSchema.parse({ ...req.body, leagueId });
@@ -6820,10 +6798,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json({ id: memberId, member });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid member data", details: error.errors } });
+        return res.status(400).json({ ok: false, code: "VALIDATION_ERROR", message: "Invalid member data", details: error.errors  });
       }
       console.error("Failed to create/update member:", error);
-      res.status(500).json({ error: { code: "CREATE_FAILED", message: "Failed to create/update member" } });
+      res.status(500).json({ ok: false, code: "CREATE_FAILED", message: "Failed to create/update member" });
     }
   });
 
@@ -6836,15 +6814,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (leagueId && typeof leagueId === "string") {
         const member = await storage.getMemberByDiscordId(leagueId, discordUserId);
         if (!member) {
-          return res.status(404).json({ error: { code: "NOT_FOUND", message: "Member not found" } });
+          return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "Member not found" });
         }
         return res.json({ member });
       }
 
-      return res.status(400).json({ error: { code: "MISSING_LEAGUE_ID", message: "leagueId query parameter is required" } });
+      return res.status(400).json({ ok: false, code: "MISSING_LEAGUE_ID", message: "leagueId query parameter is required" });
     } catch (error) {
       console.error("Failed to get member by Discord ID:", error);
-      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get member" } });
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get member" });
     }
   });
 
@@ -6857,14 +6835,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
 
       const reminders = await storage.getReminders(leagueId);
       res.json({ reminders });
     } catch (error) {
       console.error("Failed to get reminders:", error);
-      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get reminders" } });
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get reminders" });
     }
   });
 
@@ -6875,7 +6853,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
 
       const reminderData = insertReminderSchema.parse({ ...req.body, leagueId });
@@ -6884,10 +6862,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json({ id: reminderId });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid reminder data", details: error.errors } });
+        return res.status(400).json({ ok: false, code: "VALIDATION_ERROR", message: "Invalid reminder data", details: error.errors  });
       }
       console.error("Failed to create reminder:", error);
-      res.status(500).json({ error: { code: "CREATE_FAILED", message: "Failed to create reminder" } });
+      res.status(500).json({ ok: false, code: "CREATE_FAILED", message: "Failed to create reminder" });
     }
   });
 
@@ -6902,10 +6880,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid reminder data", details: error.errors } });
+        return res.status(400).json({ ok: false, code: "VALIDATION_ERROR", message: "Invalid reminder data", details: error.errors  });
       }
       console.error("Failed to update reminder:", error);
-      res.status(500).json({ error: { code: "UPDATE_FAILED", message: "Failed to update reminder" } });
+      res.status(500).json({ ok: false, code: "UPDATE_FAILED", message: "Failed to update reminder" });
     }
   });
 
@@ -6918,7 +6896,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(204).send();
     } catch (error) {
       console.error("Failed to delete reminder:", error);
-      res.status(500).json({ error: { code: "DELETE_FAILED", message: "Failed to delete reminder" } });
+      res.status(500).json({ ok: false, code: "DELETE_FAILED", message: "Failed to delete reminder" });
     }
   });
 
@@ -6931,11 +6909,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const poll = await storage.getPoll(pollId);
       if (!poll) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "Poll not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "Poll not found" });
       }
 
       if (poll.status !== "open") {
-        return res.status(400).json({ error: { code: "POLL_CLOSED", message: "Poll is not open for voting" } });
+        return res.status(400).json({ ok: false, code: "POLL_CLOSED", message: "Poll is not open for voting" });
       }
 
       const voteData = insertVoteSchema.parse({ ...req.body, pollId });
@@ -6945,16 +6923,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(201).json({ id: voteId });
       } catch (voteError: any) {
         if (voteError.message?.includes("unique") || voteError.code === "23505") {
-          return res.status(400).json({ error: { code: "ALREADY_VOTED", message: "User has already voted in this poll" } });
+          return res.status(400).json({ ok: false, code: "ALREADY_VOTED", message: "User has already voted in this poll" });
         }
         throw voteError;
       }
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid vote data", details: error.errors } });
+        return res.status(400).json({ ok: false, code: "VALIDATION_ERROR", message: "Invalid vote data", details: error.errors  });
       }
       console.error("Failed to create vote:", error);
-      res.status(500).json({ error: { code: "CREATE_FAILED", message: "Failed to create vote" } });
+      res.status(500).json({ ok: false, code: "CREATE_FAILED", message: "Failed to create vote" });
     }
   });
 
@@ -6965,14 +6943,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const poll = await storage.getPoll(pollId);
       if (!poll) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "Poll not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "Poll not found" });
       }
 
       const votes = await storage.getVotes(pollId);
       res.json({ votes });
     } catch (error) {
       console.error("Failed to get votes:", error);
-      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get votes" } });
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get votes" });
     }
   });
 
@@ -6983,14 +6961,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const poll = await storage.getPoll(pollId);
       if (!poll) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "Poll not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "Poll not found" });
       }
 
       const counts = await storage.getVoteCounts(pollId);
       res.json({ counts });
     } catch (error) {
       console.error("Failed to get vote counts:", error);
-      res.status(500).json({ error: { code: "FETCH_FAILED", message: "Failed to get vote counts" } });
+      res.status(500).json({ ok: false, code: "FETCH_FAILED", message: "Failed to get vote counts" });
     }
   });
 
@@ -7001,19 +6979,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { status } = req.body;
 
       if (!status || !["open", "closed"].includes(status)) {
-        return res.status(400).json({ error: { code: "INVALID_STATUS", message: "Status must be 'open' or 'closed'" } });
+        return res.status(400).json({ ok: false, code: "INVALID_STATUS", message: "Status must be 'open' or 'closed'" });
       }
 
       const poll = await storage.getPoll(pollId);
       if (!poll) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "Poll not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "Poll not found" });
       }
 
       await storage.updatePollStatus(pollId, status);
       res.json({ success: true });
     } catch (error) {
       console.error("Failed to update poll status:", error);
-      res.status(500).json({ error: { code: "UPDATE_FAILED", message: "Failed to update poll status" } });
+      res.status(500).json({ ok: false, code: "UPDATE_FAILED", message: "Failed to update poll status" });
     }
   });
 
@@ -7036,7 +7014,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const league = await storage.getLeague(leagueId);
       if (!league) {
-        return res.status(404).json({ error: { code: "NOT_FOUND", message: "League not found" } });
+        return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "League not found" });
       }
 
       await storage.updateLeague(leagueId, updateData);
@@ -7054,7 +7032,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true, league: updatedLeague });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Invalid settings data", details: error.errors } });
+        return res.status(400).json({ ok: false, code: "VALIDATION_ERROR", message: "Invalid settings data", details: error.errors  });
       }
       console.error("Failed to update league settings:", error);
       const latency = Date.now() - startTime;
@@ -7064,7 +7042,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         requestId,
         latency,
       });
-      res.status(500).json({ error: { code: "UPDATE_FAILED", message: "Failed to update league settings" } });
+      res.status(500).json({ ok: false, code: "UPDATE_FAILED", message: "Failed to update league settings" });
     }
   });
 
@@ -10558,3 +10536,5 @@ async function scheduleRemindersForLeague(leagueId: string) {
     console.error(`Failed to schedule reminders for league ${leagueId}:`, error);
   }
 }
+
+

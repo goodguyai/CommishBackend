@@ -129,7 +129,7 @@ app.use((req, res, next) => {
   if (getEnv().NODE_ENV === 'production') {
     app.use((req, res, next) => {
       if (req.path.startsWith('/api/mock/')) {
-        return res.status(410).json({ error: 'GONE', message: 'Mock endpoints disabled in production' });
+        return res.status(410).json({ ok: false, code: 'GONE', message: 'Mock endpoints disabled in production' });
       }
       next();
     });
@@ -259,7 +259,7 @@ app.use((req, res, next) => {
   app.use((req, res, next) => {
     // If this is an API request, it means no route matched - return JSON 404
     if (req.path.startsWith("/api/")) {
-      return res.status(404).json({ error: "Not Found", path: req.path });
+      return res.status(404).json({ ok: false, code: "NOT_FOUND", message: "Not Found", path: req.path });
     }
     // Otherwise, continue to Vite/static
     next();
