@@ -1,0 +1,157 @@
+✅ Run This Mini-Audit (5–10 min, read-only)
+
+# 1) DEMO infra
+rg -n --hidden "(DEMO_MODE|DemoService)" server | sort
+rg -n --hidden "demoShortCircuit|demo-fixture" server | sort  # if we added our helper
+
+# 2) Routes that touch DB with :leagueId
+rg -n --hidden "router\.(get|post|put|delete)\(.*:leagueId" server | sort
+rg -n --hidden "(req\.params\.leagueId|req\.params\[\"leagueId\"\])" server | sort
+rg -n --hidden "::uuid|:: uuid|uuid\(" server | sort   # unsafe casts we should remove
+
+# 3) Doctor cron telemetry shape
+rg -n --hidden "doctor.*cron.*detail" server | sort
+
+# 4) Accounts.updated_at status
+psql "$DATABASE_URL" -c "
+  SELECT column_name, data_type
+  FROM information_schema.columns
+  WHERE table_name IN ('accounts','members') AND column_name='updated_at';
+"
+
+Expected → next step
+	•	If DEMO bits found: keep; we’ll just gate them.
+	•	If no DEMO bits: add tiny DemoService shim (below).
+	•	If any ::uuid casts: replace with validated param.
+	•	If doctor/cron/detail lacks {queued, perms, last_error}: add fields (below).
+	•	If accounts.updated_at missing: add column + trigger (below).
+
+⸻
+
+✂️ Surgical fixes (only apply the ones the audit flags)
+
+A) DEMO hard-wall (only if missing)
+
+server/services/demo.ts
+
+export const isDemo = () =>
+  String(process.env.DEMO_MODE || "").toLowerCase() === "true";
+
+export function demoReturn<T>(payload: T) {
+  return { ok: true, data: { ...payload, source: "demo-fixture" } };
+}
+
+Use in read endpoints that would have hit DB with slug (e.g. constitution read path):
+
+import { isDemo, demoReturn } from "../services/demo";
+if (isDemo() && !/^[0-9a-f-]{36}$/i.test(req.params.leagueId)) {
+  return res.json(demoReturn({ constitution: { sections: [] } }));
+}
+
+B) UUID guard (attach only to DB-touching writes/reads that require UUID)
+
+server/middleware/leagueIdGuard.ts
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const leagueIdGuard = (param="leagueId") => (req,res,next)=>{
+  const id = (req.params as any)[param];
+  if (!UUID.test(String(id))) {
+    return res.status(422).json({ ok:false, code:"NON_UUID_LEAGUE_ID", message:"leagueId must be UUID" });
+  }
+  next();
+};
+
+Attach only here (not blanket):
+	•	/api/v3/constitution/:leagueId/* (sync/apply/reject)
+	•	/api/v3/jobs/:leagueId (GET/PUT)
+	•	/api/v3/announce/:leagueId/*
+	•	/api/v2/assignments/* if they require a real league id
+
+Also remove any ::uuid SQL casts and pass the bound param as text to your SQL client; DB adapter will enforce type at the query boundary after the guard.
+
+C) Doctor cron telemetry (only if your endpoint is missing these)
+
+Ensure /api/v2/doctor/cron/detail returns for content_poster at least:
+
+{ "key":"content_poster",
+  "next":"ISO-8601",
+  "last":"ISO-8601",
+  "queued": <int>,          // e.g., rows in bot_activity with status=QUEUED for this league
+  "perms": { "channel":"ok|missing", "bot":"ok|missing" },
+  "last_error": null|string // last failure excerpt if any
+}
+
+Implementation sketch:
+	•	queued: simple COUNT(*) from bot_activity by job_key='content_post' AND status='QUEUED'.
+	•	perms: verify channelId present and bot has permission; if you can’t test live, at least surface "channel":"missing" when channelId null.
+	•	next/last: you already added cron-parser; expose both.
+
+D) accounts.updated_at (only if missing)
+
+ALTER TABLE public.accounts
+  ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
+BEGIN NEW.updated_at = now(); RETURN NEW; END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS accounts_touch_update ON public.accounts;
+CREATE TRIGGER accounts_touch_update
+BEFORE UPDATE ON public.accounts
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+⸻
+
+🧪 Run the Cypress suite (we already prepared it)
+
+Env required
+
+CYPRESS_APP_URL=https://thecommish.replit.app
+CYPRESS_API_URL=https://thecommish.replit.app
+CYPRESS_ADMIN_API_KEY=sk_admin_***
+CYPRESS_LEAGUE_UUID=<valid uuid>
+CYPRESS_DISCORD_CHANNEL_ID=<channel snowflake>
+# Optional
+CYPRESS_USERNAME=you@example.com
+CYPRESS_PASSWORD=***
+CYPRESS_DEMO_MODE=true|false
+
+Commands
+
+npm run e2e
+# or headed
+npm run cy:run
+
+Green criteria
+	•	Doctor healthy
+	•	Non-UUID path returns {ok:false, code:"NON_UUID_LEAGUE_ID"} (prod) or demo short-circuit response (demo)
+	•	Constitution sync second call is “skipped”/idempotent
+	•	/doctor/cron/detail shows {queued, perms, last_error, next, last}
+	•	Announcement: first ok → second 429 {code:"COOLDOWN"}
+	•	Moderation dialog opens (no Radix export error)
+
+⸻
+
+DO-NOT guardrails (explicit)
+	•	Do not refactor existing routes/components beyond the tiny guard/demo helpers.
+	•	Do not alter or drop schema (except adding accounts.updated_at if missing).
+	•	Do not enable jobs globally; only touch the single CYPRESS_LEAGUE_UUID.
+	•	Do not send real spam to Discord; the test uses a single test announcement then relies on 429 cooldown.
+
+⸻
+
+Why this proves/repairs the exact problems in your logs
+	•	22P02 (“invalid input syntax for type uuid: ‘lg_demo_1’”) is eliminated by route-scoped guard + demo short-circuit on read paths.
+	•	“Found 0 enabled jobs / Posted 0 queued items” becomes explainable in /doctor/cron/detail via queued and perms, and fixed by per-league seeding (already added) + ensuring channelId exists.
+	•	Dialog crash is already fixed; the spec keeps us from regressing.
+	•	Error envelope and 429 cooldown are asserted end-to-end.
+
+⸻
+
+Answer to Replit’s question
+
+“Should I run the audit now?”
+
+Yes. Run the audit block above and apply only the deltas it flags. Then run the Cypress suite with the envs listed. If the audit shows DEMO infra already present and accounts.updated_at exists, skip those steps. The result is a Phase 5.5 that strictly hardens demo/prod boundaries and makes “0 posted” diagnosable without touching core logic.
+
+If anything fails, send me the audit output and the Cypress log from the failing spec, and I’ll hand you the exact patch hunk.
