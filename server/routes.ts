@@ -42,6 +42,7 @@ import { aiAsk, aiRecap } from "./ai/agent";
 import { insertMemberSchema, insertReminderSchema, insertVoteSchema, type Member, type Document, leagues, constitutionDrafts, jobs, jobRuns, jobFailures, botActivity } from "@shared/schema";
 import { validate, schemas } from "./utils/validation";
 import { verifySupabaseToken, requireSupabaseAuth } from "./middleware/auth";
+import { leagueIdGuard } from "./middleware/leagueIdGuard";
 
 // Extend express-session types to include csrfToken and Discord OAuth
 declare module 'express-session' {
@@ -4153,7 +4154,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // GET /api/dashboard/stats/:leagueId - Dashboard stats for specific league
-  app.get("/api/dashboard/stats/:leagueId", async (req, res) => {
+  app.get("/api/dashboard/stats/:leagueId", leagueIdGuard(), async (req, res) => {
     try {
       const { leagueId } = req.params;
       
@@ -4329,7 +4330,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // POST /api/v2/constitution/:leagueId/render - Render constitution from templates
-  app.post("/api/v2/constitution/:leagueId/render", async (req, res) => {
+  app.post("/api/v2/constitution/:leagueId/render", leagueIdGuard(), async (req, res) => {
     try {
       const parsed = renderConstitutionSchema.safeParse(req.params);
       if (!parsed.success) {
@@ -4378,7 +4379,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // GET /api/v2/constitution/:leagueId/sections - Get all rendered constitution sections
-  app.get("/api/v2/constitution/:leagueId/sections", async (req, res) => {
+  app.get("/api/v2/constitution/:leagueId/sections", leagueIdGuard(), async (req, res) => {
     try {
       const parsed = getConstitutionSectionsSchema.safeParse(req.params);
       if (!parsed.success) {
@@ -4434,7 +4435,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // GET /api/v2/constitution/drafts/:leagueId - List drafts for league
-  app.get("/api/v2/constitution/drafts/:leagueId", async (req, res) => {
+  app.get("/api/v2/constitution/drafts/:leagueId", leagueIdGuard(), async (req, res) => {
     try {
       const parsed = getConstitutionDraftsSchema.safeParse(req.params);
       if (!parsed.success) {
@@ -4543,7 +4544,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // POST /api/announce/send - Send announcement with guardrails
-  app.post("/api/announce/send", async (req, res) => {
+  app.post("/api/announce/send", leagueIdGuard(), async (req, res) => {
     try {
       const parsed = announceSendSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -5050,7 +5051,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // === REAL DASHBOARD ENDPOINTS ===
 
   // GET /api/v2/dashboard/:leagueId/stats - Real league stats
-  app.get("/api/v2/dashboard/:leagueId/stats", async (req, res) => {
+  app.get("/api/v2/dashboard/:leagueId/stats", leagueIdGuard(), async (req, res) => {
     try {
       const { leagueId } = req.params;
       
@@ -6770,7 +6771,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Owner Mapping (Members) Endpoints
   
   // GET /api/leagues/:leagueId/members - Get all members for a league
-  app.get("/api/leagues/:leagueId/members", async (req, res) => {
+  app.get("/api/leagues/:leagueId/members", leagueIdGuard(), async (req, res) => {
     try {
       const { leagueId } = req.params;
       
@@ -6788,7 +6789,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // POST /api/leagues/:leagueId/members - Create/update member mapping
-  app.post("/api/leagues/:leagueId/members", async (req, res) => {
+  app.post("/api/leagues/:leagueId/members", leagueIdGuard(), async (req, res) => {
     try {
       const { leagueId } = req.params;
       
